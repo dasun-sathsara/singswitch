@@ -3,7 +3,14 @@ use std::path::PathBuf;
 
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode};
 use gpui_kit::{App, Window, WindowAppearance, rgb};
+use sbctl_core::error::{Result, SbctlError};
 use serde::{Deserialize, Serialize};
+
+pub const MIN_WINDOW_WIDTH: f32 = 820.0;
+pub const MIN_WINDOW_HEIGHT: f32 = 540.0;
+pub const DEFAULT_WINDOW_WIDTH: f32 = 1020.0;
+pub const DEFAULT_WINDOW_HEIGHT: f32 = 680.0;
+pub const WINDOW_SIZE_EPSILON: f32 = 2.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -47,8 +54,8 @@ impl Default for UiSettings {
             show_profile_in_menubar: true,
             auto_refresh_ip: true,
             sidebar_collapsed: false,
-            window_width: 1020.0,
-            window_height: 680.0,
+            window_width: DEFAULT_WINDOW_WIDTH,
+            window_height: DEFAULT_WINDOW_HEIGHT,
         }
     }
 }
@@ -68,17 +75,19 @@ impl UiSettings {
         }
     }
 
-    pub fn save(&self) -> Result<(), String> {
+    pub fn save(&self) -> Result<()> {
         let Some(path) = Self::settings_path() else {
-            return Err("could not resolve config directory".to_string());
+            return Err(SbctlError::general("could not resolve config directory"));
         };
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|e| {
+                SbctlError::general(format!("failed to create {}: {e}", parent.display()))
+            })?;
         }
         let body = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("failed to serialize UI settings: {e}"))?;
-        fs::write(&path, body).map_err(|e| format!("failed to write {}: {e}", path.display()))
+            .map_err(|e| SbctlError::general(format!("failed to serialize UI settings: {e}")))?;
+        fs::write(&path, body)
+            .map_err(|e| SbctlError::general(format!("failed to write {}: {e}", path.display())))
     }
 }
 

@@ -12,7 +12,7 @@ use gpui_kit::{
     App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
     Window, div, prelude::FluentBuilder as _, px, relative,
 };
-use sbctl_core::form_model::ProfileFormModel;
+use sbctl_core::form_model::{DEFAULT_SERVER_PORT, DEFAULT_TUN_MTU, ProfileFormModel};
 use sbctl_core::profile::placeholders_in;
 
 use crate::state::{AppStore, BannerTone};
@@ -57,26 +57,8 @@ pub struct ProfileEditorPanel {
 impl ProfileEditorPanel {
     pub fn new(store: Entity<AppStore>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let json_editor = cx.new(|cx| EditorState::new(window, cx).language("json"));
-
-        let in_outbound_type = cx.new(|cx| InputState::new(window, cx).placeholder("vless"));
-        let in_server = cx.new(|cx| InputState::new(window, cx).placeholder("vpn.example.com"));
-        let in_server_port = cx.new(|cx| InputState::new(window, cx).placeholder("443"));
-        let in_uuid = cx.new(|cx| InputState::new(window, cx).placeholder("UUID for vless/vmess"));
-        let in_password =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Password (trojan/ss)"));
-        let in_flow = cx.new(|cx| InputState::new(window, cx).placeholder("xtls-rprx-vision"));
-        let in_server_name =
-            cx.new(|cx| InputState::new(window, cx).placeholder("TLS / Reality SNI"));
-        let in_utls_fp = cx.new(|cx| InputState::new(window, cx).placeholder("chrome"));
-        let in_reality_pubkey =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Reality public key"));
-        let in_reality_short_id =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Reality short ID"));
-        let in_tun_iface =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Auto (utun / singbox_tun)"));
-        let in_tun_stack = cx.new(|cx| InputState::new(window, cx).placeholder("gvisor"));
-        let in_tun_mtu = cx.new(|cx| InputState::new(window, cx).placeholder("1350"));
-        let in_log_level = cx.new(|cx| InputState::new(window, cx).placeholder("info"));
+        let port_ph = DEFAULT_SERVER_PORT.to_string();
+        let mtu_ph = DEFAULT_TUN_MTU.to_string();
 
         let disk_rev = store.read(cx).disk_revision;
         let mut panel = Self {
@@ -89,20 +71,25 @@ impl ProfileEditorPanel {
             active_tab: EditorTab::Guided,
             json_editor,
             model: ProfileFormModel::default(),
-            in_outbound_type,
-            in_server,
-            in_server_port,
-            in_uuid,
-            in_password,
-            in_flow,
-            in_server_name,
-            in_utls_fp,
-            in_reality_pubkey,
-            in_reality_short_id,
-            in_tun_iface,
-            in_tun_stack,
-            in_tun_mtu,
-            in_log_level,
+            in_outbound_type: cx.new(|cx| InputState::new(window, cx).placeholder("vless")),
+            in_server: cx.new(|cx| InputState::new(window, cx).placeholder("vpn.example.com")),
+            in_server_port: cx.new(|cx| InputState::new(window, cx).placeholder(port_ph)),
+            in_uuid: cx.new(|cx| InputState::new(window, cx).placeholder("UUID for vless/vmess")),
+            in_password: cx
+                .new(|cx| InputState::new(window, cx).placeholder("Password (trojan/ss)")),
+            in_flow: cx.new(|cx| InputState::new(window, cx).placeholder("xtls-rprx-vision")),
+            in_server_name: cx
+                .new(|cx| InputState::new(window, cx).placeholder("TLS / Reality SNI")),
+            in_utls_fp: cx.new(|cx| InputState::new(window, cx).placeholder("chrome")),
+            in_reality_pubkey: cx
+                .new(|cx| InputState::new(window, cx).placeholder("Reality public key")),
+            in_reality_short_id: cx
+                .new(|cx| InputState::new(window, cx).placeholder("Reality short ID")),
+            in_tun_iface: cx
+                .new(|cx| InputState::new(window, cx).placeholder("Auto (utun / singbox_tun)")),
+            in_tun_stack: cx.new(|cx| InputState::new(window, cx).placeholder("gvisor")),
+            in_tun_mtu: cx.new(|cx| InputState::new(window, cx).placeholder(mtu_ph)),
+            in_log_level: cx.new(|cx| InputState::new(window, cx).placeholder("info")),
         };
         panel.sync_with_store(window, cx);
         panel
@@ -120,7 +107,7 @@ impl ProfileEditorPanel {
             self.external_change_pending = false;
             if let Some(name) = target {
                 let content = self.store.read(cx).read_profile_content(&name);
-                self.load_json_into_views(content, window, cx);
+                self.load_json_into_views(&content, window, cx);
             } else {
                 self.disk_json.clear();
                 self.disk_model = None;
@@ -135,7 +122,7 @@ impl ProfileEditorPanel {
                 if latest == self.disk_json {
                     self.external_change_pending = false;
                 } else if !self.is_dirty(cx) {
-                    self.load_json_into_views(latest, window, cx);
+                    self.load_json_into_views(&latest, window, cx);
                     self.external_change_pending = false;
                 } else {
                     self.disk_json = latest.clone();
@@ -149,21 +136,17 @@ impl ProfileEditorPanel {
     pub fn force_reload_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(name) = &self.loaded_profile {
             let content = self.store.read(cx).read_profile_content(name);
-            self.load_json_into_views(content, window, cx);
+            self.load_json_into_views(&content, window, cx);
             self.external_change_pending = false;
         }
     }
 
-    fn load_json_into_views(
-        &mut self,
-        content: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.disk_json = content.clone();
+    fn load_json_into_views(&mut self, content: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.disk_json = content.to_string();
+        let value = content.to_string();
         self.json_editor
-            .update(cx, |s, cx| s.set_value(content.clone(), window, cx));
-        if let Ok(parsed) = ProfileFormModel::from_json_str(&content) {
+            .update(cx, |s, cx| s.set_value(value, window, cx));
+        if let Ok(parsed) = ProfileFormModel::from_json_str(content) {
             self.disk_model = Some(parsed.clone());
             self.model = parsed;
             self.push_model_to_inputs(window, cx);
@@ -212,7 +195,7 @@ impl ProfileEditorPanel {
     fn build_model_from_inputs(&self, cx: &App) -> Result<ProfileFormModel, String> {
         let port_raw = self.in_server_port.read(cx).value().trim().to_string();
         let port: u16 = if port_raw.is_empty() {
-            443
+            DEFAULT_SERVER_PORT
         } else {
             port_raw
                 .parse()
@@ -220,7 +203,7 @@ impl ProfileEditorPanel {
         };
         let mtu_raw = self.in_tun_mtu.read(cx).value().trim().to_string();
         let mtu: u32 = if mtu_raw.is_empty() {
-            1350
+            DEFAULT_TUN_MTU
         } else {
             mtu_raw
                 .parse()
@@ -307,9 +290,8 @@ impl ProfileEditorPanel {
         };
 
         if and_activate {
-            self.store.update(cx, |s, cx| {
-                s.save_and_activate(name, content, cx);
-            });
+            self.store
+                .update(cx, |s, cx| s.save_and_activate(name, content, cx));
             return;
         }
 
@@ -329,9 +311,8 @@ impl ProfileEditorPanel {
         };
         match self.collect_effective_content(window, cx) {
             Ok(content) => {
-                self.store.update(cx, |s, cx| {
-                    s.validate_live_content(name, content, cx);
-                });
+                self.store
+                    .update(cx, |s, cx| s.validate_live_content(name, content, cx));
             }
             Err(err) => {
                 self.store
@@ -356,6 +337,327 @@ impl ProfileEditorPanel {
                 });
             }
         }
+    }
+
+    fn render_disk_change_banner(&self, cx: &Context<Self>) -> impl IntoElement {
+        h_flex()
+            .w_full()
+            .px_3()
+            .py_2()
+            .justify_between()
+            .items_center()
+            .gap_3()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().warning)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().warning)
+                    .child("This profile changed on disk outside the editor."),
+            )
+            .child(
+                Button::new("editor-reload-disk")
+                    .outline()
+                    .xsmall()
+                    .label("Reload from Disk")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.force_reload_selected(window, cx);
+                        cx.notify();
+                    })),
+            )
+    }
+
+    fn render_toolbar(
+        &self,
+        dirty: bool,
+        is_busy: bool,
+        is_active_running: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        h_flex()
+            .w_full()
+            .justify_between()
+            .items_center()
+            .gap_2()
+            .flex_wrap()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        TabBar::new("editor-mode-tabs")
+                            .segmented()
+                            .selected_index(match self.active_tab {
+                                EditorTab::Guided => 0,
+                                EditorTab::Json => 1,
+                            })
+                            .child(Tab::new().label("Guided Setup"))
+                            .child(Tab::new().label("JSON Editor"))
+                            .on_click(cx.listener(|this, idx, window, cx| {
+                                if *idx == 0 {
+                                    let raw = this.json_editor.read(cx).value().to_string();
+                                    if let Ok(parsed) = ProfileFormModel::from_json_str(&raw) {
+                                        this.model = parsed;
+                                        this.push_model_to_inputs(window, cx);
+                                    }
+                                    this.active_tab = EditorTab::Guided;
+                                } else {
+                                    let _ = this.apply_guided_to_json(window, cx);
+                                    this.active_tab = EditorTab::Json;
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .when(dirty, |t| t.child(Tag::info().xsmall().child("Modified"))),
+            )
+            .child(self.render_toolbar_actions(dirty, is_busy, is_active_running, cx))
+    }
+
+    fn render_toolbar_actions(
+        &self,
+        dirty: bool,
+        is_busy: bool,
+        is_active_running: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        h_flex()
+            .gap_2()
+            .when(self.active_tab == EditorTab::Json, |this| {
+                this.child(
+                    Button::new("editor-format-json")
+                        .outline()
+                        .small()
+                        .label("Format")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.format_json(window, cx);
+                        })),
+                )
+            })
+            .child(
+                Button::new("editor-revert")
+                    .outline()
+                    .small()
+                    .label("Revert")
+                    .disabled(!dirty || is_busy)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.force_reload_selected(window, cx);
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("editor-validate")
+                    .outline()
+                    .small()
+                    .icon(IconName::Check)
+                    .label("Validate")
+                    .disabled(is_busy)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.validate_live(window, cx);
+                    })),
+            )
+            .child(
+                Button::new("editor-save")
+                    .outline()
+                    .small()
+                    .label("Save")
+                    .disabled(is_busy || !dirty)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.trigger_save(false, window, cx);
+                    })),
+            )
+            .child(
+                Button::new("editor-save-activate")
+                    .primary()
+                    .small()
+                    .icon(IconName::Play)
+                    .label(if is_active_running {
+                        "Save & Reconnect"
+                    } else {
+                        "Save & Connect"
+                    })
+                    .disabled(is_busy)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.trigger_save(true, window, cx);
+                    })),
+            )
+    }
+
+    fn render_guided_form(&self, cx: &Context<Self>) -> gpui_kit::AnyElement {
+        v_flex()
+            .flex_1()
+            .w_full()
+            .overflow_y_scrollbar()
+            .gap_4()
+            .p_4()
+            .rounded(cx.theme().radius_lg)
+            .bg(surface_card_bg(cx))
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(section_heading("Proxy Server & Credentials", cx))
+            .child(form_row_2(
+                labeled_input(
+                    "Outbound Type (vless, trojan, vmess, shadowsocks)",
+                    &self.in_outbound_type,
+                    cx,
+                ),
+                labeled_input(
+                    "Log Level (info, warn, error, debug)",
+                    &self.in_log_level,
+                    cx,
+                ),
+            ))
+            .child(form_row_2(
+                labeled_input("Server Address", &self.in_server, cx),
+                labeled_input("Server Port", &self.in_server_port, cx),
+            ))
+            .child(form_row_2(
+                labeled_input("UUID", &self.in_uuid, cx),
+                labeled_input("Password", &self.in_password, cx),
+            ))
+            .child(labeled_input(
+                "Flow (for example xtls-rprx-vision)",
+                &self.in_flow,
+                cx,
+            ))
+            .child(section_heading("TLS & Reality Transport", cx))
+            .child(self.render_tls_switches(cx))
+            .child(form_row_2(
+                labeled_input("Server Name (SNI)", &self.in_server_name, cx),
+                labeled_input(
+                    "uTLS Fingerprint (chrome, firefox, safari)",
+                    &self.in_utls_fp,
+                    cx,
+                ),
+            ))
+            .child(form_row_2(
+                labeled_input("Reality Public Key", &self.in_reality_pubkey, cx),
+                labeled_input("Reality Short ID", &self.in_reality_short_id, cx),
+            ))
+            .child(section_heading("TUN & Routing", cx))
+            .child(labeled_input(
+                "TUN Interface Name (leave empty for OS default)",
+                &self.in_tun_iface,
+                cx,
+            ))
+            .child(form_row_2(
+                labeled_input("TUN Stack (gvisor, system, mixed)", &self.in_tun_stack, cx),
+                labeled_input("TUN MTU", &self.in_tun_mtu, cx),
+            ))
+            .child(self.render_tun_switches(cx))
+            .into_any_element()
+    }
+
+    fn render_tls_switches(&self, cx: &Context<Self>) -> impl IntoElement {
+        h_flex()
+            .w_full()
+            .gap_6()
+            .flex_wrap()
+            .child(
+                Switch::new("ed-tls")
+                    .checked(self.model.tls_enabled)
+                    .label("TLS enabled")
+                    .on_change(cx.listener(|this, v, _, cx| {
+                        this.model.tls_enabled = *v;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Switch::new("ed-utls")
+                    .checked(self.model.utls_enabled)
+                    .label("uTLS enabled")
+                    .on_change(cx.listener(|this, v, _, cx| {
+                        this.model.utls_enabled = *v;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Switch::new("ed-reality")
+                    .checked(self.model.reality_enabled)
+                    .label("Reality enabled")
+                    .on_change(cx.listener(|this, v, _, cx| {
+                        this.model.reality_enabled = *v;
+                        cx.notify();
+                    })),
+            )
+    }
+
+    fn render_tun_switches(&self, cx: &Context<Self>) -> impl IntoElement {
+        h_flex()
+            .w_full()
+            .gap_6()
+            .flex_wrap()
+            .child(
+                Switch::new("ed-auto-route")
+                    .checked(self.model.tun_auto_route)
+                    .label("Auto route")
+                    .on_change(cx.listener(|this, v, _, cx| {
+                        this.model.tun_auto_route = *v;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Switch::new("ed-strict-route")
+                    .checked(self.model.tun_strict_route)
+                    .label("Strict route")
+                    .on_change(cx.listener(|this, v, _, cx| {
+                        this.model.tun_strict_route = *v;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Switch::new("ed-reject-ipv6")
+                    .checked(self.model.reject_ipv6)
+                    .label("Reject IPv6 DNS/traffic")
+                    .on_change(cx.listener(|this, v, _, cx| {
+                        this.model.reject_ipv6 = *v;
+                        cx.notify();
+                    })),
+            )
+    }
+
+    fn render_json_pane(
+        &self,
+        syntax_status: Result<(), String>,
+        cx: &Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        v_flex()
+            .flex_1()
+            .w_full()
+            .min_h(px(300.0))
+            .gap_2()
+            .child(
+                div()
+                    .flex_1()
+                    .w_full()
+                    .rounded(cx.theme().radius_lg)
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(if syntax_status.is_err() {
+                        cx.theme().danger
+                    } else {
+                        cx.theme().border
+                    })
+                    .child(Editor::new(&self.json_editor).h(relative(1.0))),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .text_xs()
+                    .child(match syntax_status {
+                        Ok(()) => div()
+                            .text_color(cx.theme().success)
+                            .child("Valid JSON syntax"),
+                        Err(msg) => div().text_color(cx.theme().danger).truncate().child(msg),
+                    })
+                    .child(
+                        div()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Cmd/Ctrl+S to Save"),
+                    ),
+            )
+            .into_any_element()
     }
 }
 
@@ -382,10 +684,9 @@ impl Render for ProfileEditorPanel {
         let live_json = self.json_editor.read(cx).value().to_string();
         let live_todos = placeholders_in(&live_json);
         let syntax_status = if self.active_tab == EditorTab::Json {
-            match serde_json::from_str::<serde_json::Value>(&live_json) {
-                Ok(_) => Ok(()),
-                Err(err) => Err(format!("JSON syntax error: {err}")),
-            }
+            serde_json::from_str::<serde_json::Value>(&live_json)
+                .map(|_| ())
+                .map_err(|err| format!("JSON syntax error: {err}"))
         } else {
             Ok(())
         };
@@ -403,330 +704,38 @@ impl Render for ProfileEditorPanel {
             .size_full()
             .gap_3()
             .when(self.external_change_pending, |this| {
-                this.child(
-                    h_flex()
-                        .w_full()
-                        .px_3()
-                        .py_2()
-                        .justify_between()
-                        .items_center()
-                        .gap_3()
-                        .rounded(cx.theme().radius)
-                        .border_1()
-                        .border_color(cx.theme().warning)
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().warning)
-                                .child("This profile changed on disk outside the editor."),
-                        )
-                        .child(
-                            Button::new("editor-reload-disk")
-                                .outline()
-                                .xsmall()
-                                .label("Reload from Disk")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.force_reload_selected(window, cx);
-                                    cx.notify();
-                                })),
-                        ),
-                )
+                this.child(self.render_disk_change_banner(cx))
             })
-            // Sub-toolbar for editor mode & file actions.
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .items_center()
-                    .gap_2()
-                    .flex_wrap()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                TabBar::new("editor-mode-tabs")
-                                    .segmented()
-                                    .selected_index(match self.active_tab {
-                                        EditorTab::Guided => 0,
-                                        EditorTab::Json => 1,
-                                    })
-                                    .child(Tab::new().label("Guided Setup"))
-                                    .child(Tab::new().label("JSON Editor"))
-                                    .on_click(cx.listener(|this, idx, window, cx| {
-                                        if *idx == 0 {
-                                            let raw = this.json_editor.read(cx).value().to_string();
-                                            if let Ok(parsed) =
-                                                ProfileFormModel::from_json_str(&raw)
-                                            {
-                                                this.model = parsed;
-                                                this.push_model_to_inputs(window, cx);
-                                            }
-                                            this.active_tab = EditorTab::Guided;
-                                        } else {
-                                            let _ = this.apply_guided_to_json(window, cx);
-                                            this.active_tab = EditorTab::Json;
-                                        }
-                                        cx.notify();
-                                    })),
-                            )
-                            .when(dirty, |t| t.child(Tag::info().xsmall().child("Modified"))),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .when(self.active_tab == EditorTab::Json, |this| {
-                                this.child(
-                                    Button::new("editor-format-json")
-                                        .outline()
-                                        .small()
-                                        .label("Format")
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.format_json(window, cx);
-                                        })),
-                                )
-                            })
-                            .child(
-                                Button::new("editor-revert")
-                                    .outline()
-                                    .small()
-                                    .label("Revert")
-                                    .disabled(!dirty || is_busy)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.force_reload_selected(window, cx);
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Button::new("editor-validate")
-                                    .outline()
-                                    .small()
-                                    .icon(IconName::Check)
-                                    .label("Validate")
-                                    .disabled(is_busy)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.validate_live(window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("editor-save")
-                                    .outline()
-                                    .small()
-                                    .label("Save")
-                                    .disabled(is_busy || !dirty)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.trigger_save(false, window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("editor-save-activate")
-                                    .primary()
-                                    .small()
-                                    .icon(IconName::Play)
-                                    .label(if is_active_running {
-                                        "Save & Reconnect"
-                                    } else {
-                                        "Save & Connect"
-                                    })
-                                    .disabled(is_busy)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.trigger_save(true, window, cx);
-                                    })),
-                            ),
-                    ),
-            )
-            // Live TODO_ placeholder pills.
+            .child(self.render_toolbar(dirty, is_busy, is_active_running, cx))
             .when(!live_todos.is_empty(), |this| {
-                this.child(
-                    h_flex()
-                        .w_full()
-                        .flex_wrap()
-                        .gap_1()
-                        .items_center()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_semibold()
-                                .text_color(cx.theme().warning)
-                                .child("Remaining placeholders:"),
-                        )
-                        .children(
-                            live_todos
-                                .into_iter()
-                                .map(|tok| Tag::warning().xsmall().child(tok)),
-                        ),
-                )
+                this.child(render_placeholder_strip(live_todos, cx))
             })
-            // Body: either Guided form or full JSON code editor.
             .child(match self.active_tab {
-                EditorTab::Guided => v_flex()
-                    .flex_1()
-                    .w_full()
-                    .overflow_y_scrollbar()
-                    .gap_4()
-                    .p_4()
-                    .rounded(cx.theme().radius_lg)
-                    .bg(surface_card_bg(cx))
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .child(section_heading("Proxy Server & Credentials", cx))
-                    .child(form_row_2(
-                        labeled_input(
-                            "Outbound Type (vless, trojan, vmess, shadowsocks)",
-                            &self.in_outbound_type,
-                            cx,
-                        ),
-                        labeled_input(
-                            "Log Level (info, warn, error, debug)",
-                            &self.in_log_level,
-                            cx,
-                        ),
-                    ))
-                    .child(form_row_2(
-                        labeled_input("Server Address", &self.in_server, cx),
-                        labeled_input("Server Port", &self.in_server_port, cx),
-                    ))
-                    .child(form_row_2(
-                        labeled_input("UUID", &self.in_uuid, cx),
-                        labeled_input("Password", &self.in_password, cx),
-                    ))
-                    .child(labeled_input(
-                        "Flow (for example xtls-rprx-vision)",
-                        &self.in_flow,
-                        cx,
-                    ))
-                    .child(section_heading("TLS & Reality Transport", cx))
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_6()
-                            .flex_wrap()
-                            .child(
-                                Switch::new("ed-tls")
-                                    .checked(self.model.tls_enabled)
-                                    .label("TLS enabled")
-                                    .on_change(cx.listener(|this, v, _, cx| {
-                                        this.model.tls_enabled = *v;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Switch::new("ed-utls")
-                                    .checked(self.model.utls_enabled)
-                                    .label("uTLS enabled")
-                                    .on_change(cx.listener(|this, v, _, cx| {
-                                        this.model.utls_enabled = *v;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Switch::new("ed-reality")
-                                    .checked(self.model.reality_enabled)
-                                    .label("Reality enabled")
-                                    .on_change(cx.listener(|this, v, _, cx| {
-                                        this.model.reality_enabled = *v;
-                                        cx.notify();
-                                    })),
-                            ),
-                    )
-                    .child(form_row_2(
-                        labeled_input("Server Name (SNI)", &self.in_server_name, cx),
-                        labeled_input(
-                            "uTLS Fingerprint (chrome, firefox, safari)",
-                            &self.in_utls_fp,
-                            cx,
-                        ),
-                    ))
-                    .child(form_row_2(
-                        labeled_input("Reality Public Key", &self.in_reality_pubkey, cx),
-                        labeled_input("Reality Short ID", &self.in_reality_short_id, cx),
-                    ))
-                    .child(section_heading("TUN & Routing", cx))
-                    .child(labeled_input(
-                        "TUN Interface Name (leave empty for OS default)",
-                        &self.in_tun_iface,
-                        cx,
-                    ))
-                    .child(form_row_2(
-                        labeled_input("TUN Stack (gvisor, system, mixed)", &self.in_tun_stack, cx),
-                        labeled_input("TUN MTU", &self.in_tun_mtu, cx),
-                    ))
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_6()
-                            .flex_wrap()
-                            .child(
-                                Switch::new("ed-auto-route")
-                                    .checked(self.model.tun_auto_route)
-                                    .label("Auto route")
-                                    .on_change(cx.listener(|this, v, _, cx| {
-                                        this.model.tun_auto_route = *v;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Switch::new("ed-strict-route")
-                                    .checked(self.model.tun_strict_route)
-                                    .label("Strict route")
-                                    .on_change(cx.listener(|this, v, _, cx| {
-                                        this.model.tun_strict_route = *v;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Switch::new("ed-reject-ipv6")
-                                    .checked(self.model.reject_ipv6)
-                                    .label("Reject IPv6 DNS/traffic")
-                                    .on_change(cx.listener(|this, v, _, cx| {
-                                        this.model.reject_ipv6 = *v;
-                                        cx.notify();
-                                    })),
-                            ),
-                    )
-                    .into_any_element(),
-                EditorTab::Json => v_flex()
-                    .flex_1()
-                    .w_full()
-                    .min_h(px(300.0))
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .w_full()
-                            .rounded(cx.theme().radius_lg)
-                            .overflow_hidden()
-                            .border_1()
-                            .border_color(if syntax_status.is_err() {
-                                cx.theme().danger
-                            } else {
-                                cx.theme().border
-                            })
-                            .child(Editor::new(&self.json_editor).h(relative(1.0))),
-                    )
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .justify_between()
-                            .text_xs()
-                            .child(match syntax_status {
-                                Ok(()) => div()
-                                    .text_color(cx.theme().success)
-                                    .child("Valid JSON syntax"),
-                                Err(msg) => {
-                                    div().text_color(cx.theme().danger).truncate().child(msg)
-                                }
-                            })
-                            .child(
-                                div()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Cmd/Ctrl+S to Save"),
-                            ),
-                    )
-                    .into_any_element(),
+                EditorTab::Guided => self.render_guided_form(cx),
+                EditorTab::Json => self.render_json_pane(syntax_status, cx),
             })
             .into_any_element()
     }
+}
+
+fn render_placeholder_strip(live_todos: Vec<String>, cx: &App) -> impl IntoElement {
+    h_flex()
+        .w_full()
+        .flex_wrap()
+        .gap_1()
+        .items_center()
+        .child(
+            div()
+                .text_xs()
+                .font_semibold()
+                .text_color(cx.theme().warning)
+                .child("Remaining placeholders:"),
+        )
+        .children(
+            live_todos
+                .into_iter()
+                .map(|tok| Tag::warning().xsmall().child(tok)),
+        )
 }
 
 fn section_heading(title: &'static str, cx: &App) -> impl IntoElement {

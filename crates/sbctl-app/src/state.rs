@@ -6,6 +6,7 @@ use gpui_kit::{AsyncApp, Context, SharedString, Task, WeakEntity};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use sbctl_core::controller::{Controller, Snapshot, StatusView};
 use sbctl_core::doctor::DiagnosticCheck;
+use sbctl_core::error::{Result as CoreResult, SbctlError};
 use sbctl_core::ip::{IpInfo, fetch_ip_info};
 use sbctl_core::layout::Layout;
 use sbctl_core::logs::{LogLevel, read_appended_lines, read_tail_lines};
@@ -15,13 +16,18 @@ use sbctl_core::service::{Health, RunState};
 use crate::actions::NavTab;
 use crate::icons::TrayVisualState;
 use crate::shell::{is_launch_at_login_enabled, set_launch_at_login};
-use crate::theme::{ThemePreference, UiSettings, apply_theme};
+use crate::theme::{
+    MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, ThemePreference, UiSettings, WINDOW_SIZE_EPSILON,
+    apply_theme,
+};
 
 const MAX_LOG_ENTRIES: usize = 5_000;
 const INITIAL_LOG_TAIL: usize = 300;
 const ACTIVE_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
 const BACKGROUND_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(30);
 const POLL_LOG_INTERVAL: Duration = Duration::from_millis(800);
+const SNAPSHOT_TICK_INTERVAL: Duration = Duration::from_secs(1);
+const WATCHER_DEBOUNCE: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BannerTone {
@@ -93,7 +99,13 @@ pub struct AppStore {
     log_poll_in_flight: bool,
     snapshot_poll_in_flight: bool,
     _watcher: Option<RecommendedWatcher>,
-    _tasks: Vec<Task<()>>,
+    _daemon_tasks: Vec<Task<()>>,
+    snapshot_task: Option<Task<()>>,
+    log_poll_task: Option<Task<()>>,
+    ip_task: Option<Task<()>>,
+    doctor_task: Option<Task<()>>,
+    validation_task: Option<Task<()>>,
+    mutation_task: Option<Task<()>>,
 }
 
 fn empty_snapshot() -> Snapshot {
@@ -167,7 +179,13 @@ impl AppStore {
             log_poll_in_flight: false,
             snapshot_poll_in_flight: false,
             _watcher: None,
-            _tasks: Vec::new(),
+            _daemon_tasks: Vec::new(),
+            snapshot_task: None,
+            log_poll_task: None,
+            ip_task: None,
+            doctor_task: None,
+            validation_task: None,
+            mutation_task: None,
         };
 
         store.reload_logs();
@@ -230,15 +248,29 @@ impl AppStore {
     }
 
     pub fn update_window_size(&mut self, width: f32, height: f32) {
-        let w = width.max(820.0);
-        let h = height.max(540.0);
-        if (w - self.settings.window_width).abs() >= 2.0
-            || (h - self.settings.window_height).abs() >= 2.0
+        let w = width.max(MIN_WINDOW_WIDTH);
+        let h = height.max(MIN_WINDOW_HEIGHT);
+        if (w - self.settings.window_width).abs() >= WINDOW_SIZE_EPSILON
+            || (h - self.settings.window_height).abs() >= WINDOW_SIZE_EPSILON
         {
             self.settings.window_width = w;
             self.settings.window_height = h;
             let _ = self.settings.save();
         }
+    }
+
+    fn require_ctrl(&mut self, cx: &mut Context<Self>) -> Option<Arc<Controller>> {
+        if let Some(ctrl) = &self.ctrl {
+            return Some(ctrl.clone());
+        }
+        self.set_banner(
+            BannerTone::Warning,
+            self.init_error
+                .clone()
+                .unwrap_or_else(|| "Unsupported operating system".to_string()),
+            cx,
+        );
+        None
     }
 
     pub fn set_tab(&mut self, tab: NavTab, cx: &mut Context<Self>) {
@@ -334,7 +366,7 @@ impl AppStore {
                 );
             }
             Err(err) => {
-                self.set_banner(BannerTone::Error, err, cx);
+                self.set_banner(BannerTone::Error, err.to_string(), cx);
             }
         }
     }
@@ -387,8 +419,7 @@ impl AppStore {
                 }
             });
         });
-        self._tasks.push(task);
-        self.prune_completed_tasks();
+        self.snapshot_task = Some(task);
     }
 
     pub fn toggle_service(&mut self, cx: &mut Context<Self>) {
@@ -426,14 +457,7 @@ impl AppStore {
         if self.busy_phase.is_some() {
             return;
         }
-        let Some(ctrl) = self.ctrl.clone() else {
-            self.set_banner(
-                BannerTone::Warning,
-                self.init_error
-                    .clone()
-                    .unwrap_or_else(|| "Unsupported OS".to_string()),
-                cx,
-            );
+        let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
 
@@ -483,22 +507,14 @@ impl AppStore {
                 }
             });
         });
-        self._tasks.push(task);
-        self.prune_completed_tasks();
+        self.mutation_task = Some(task);
     }
 
     pub fn save_and_activate(&mut self, name: String, content: String, cx: &mut Context<Self>) {
         if self.busy_phase.is_some() {
             return;
         }
-        let Some(ctrl) = self.ctrl.clone() else {
-            self.set_banner(
-                BannerTone::Warning,
-                self.init_error
-                    .clone()
-                    .unwrap_or_else(|| "Unsupported OS".to_string()),
-                cx,
-            );
+        let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
 
@@ -565,22 +581,14 @@ impl AppStore {
                 }
             });
         });
-        self._tasks.push(task);
-        self.prune_completed_tasks();
+        self.mutation_task = Some(task);
     }
 
     pub fn disconnect(&mut self, cx: &mut Context<Self>) {
         if self.busy_phase.is_some() {
             return;
         }
-        let Some(ctrl) = self.ctrl.clone() else {
-            self.set_banner(
-                BannerTone::Warning,
-                self.init_error
-                    .clone()
-                    .unwrap_or_else(|| "Unsupported OS".to_string()),
-                cx,
-            );
+        let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
 
@@ -619,48 +627,37 @@ impl AppStore {
                 }
             });
         });
-        self._tasks.push(task);
-        self.prune_completed_tasks();
+        self.mutation_task = Some(task);
     }
 
-    pub fn create_profile(&mut self, name: String, cx: &mut Context<Self>) -> Result<(), String> {
+    pub fn create_profile(&mut self, name: &str, cx: &mut Context<Self>) -> CoreResult<()> {
         let Some(ctrl) = self.ctrl.clone() else {
-            return Err(self
-                .init_error
-                .clone()
-                .unwrap_or_else(|| "Unsupported OS".to_string()));
+            return Err(SbctlError::general(
+                self.init_error
+                    .clone()
+                    .unwrap_or_else(|| "Unsupported operating system".to_string()),
+            ));
         };
-        match ctrl.create_from_skeleton(&name) {
-            Ok(_) => {
-                if let Ok(snap) = ctrl.snapshot() {
-                    self.snapshot = snap;
-                }
-                self.disk_revision = self.disk_revision.wrapping_add(1);
-                self.selected_profile = Some(name.clone());
-                self.selected_tab = NavTab::Profiles;
-                self.set_banner(
-                    BannerTone::Success,
-                    format!("Created profile {name} from skeleton"),
-                    cx,
-                );
-                Ok(())
-            }
-            Err(err) => Err(err.to_string()),
+        ctrl.create_from_skeleton(name)?;
+        if let Ok(snap) = ctrl.snapshot() {
+            self.snapshot = snap;
         }
+        self.disk_revision = self.disk_revision.wrapping_add(1);
+        self.selected_profile = Some(name.to_string());
+        self.selected_tab = NavTab::Profiles;
+        self.set_banner(
+            BannerTone::Success,
+            format!("Created profile {name} from skeleton"),
+            cx,
+        );
+        Ok(())
     }
 
     pub fn pull_profile(&mut self, name: String, url: String, cx: &mut Context<Self>) {
         if self.busy_phase.is_some() {
             return;
         }
-        let Some(ctrl) = self.ctrl.clone() else {
-            self.set_banner(
-                BannerTone::Warning,
-                self.init_error
-                    .clone()
-                    .unwrap_or_else(|| "Unsupported OS".to_string()),
-                cx,
-            );
+        let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
 
@@ -697,15 +694,14 @@ impl AppStore {
                 cx.notify();
             });
         });
-        self._tasks.push(task);
-        self.prune_completed_tasks();
+        self.mutation_task = Some(task);
     }
 
     pub fn sync_profile(&mut self, name: String, cx: &mut Context<Self>) {
         if self.busy_phase.is_some() {
             return;
         }
-        let Some(ctrl) = self.ctrl.clone() else {
+        let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
 
@@ -744,15 +740,14 @@ impl AppStore {
                 cx.notify();
             });
         });
-        self._tasks.push(task);
-        self.prune_completed_tasks();
+        self.mutation_task = Some(task);
     }
 
     pub fn sync_all(&mut self, cx: &mut Context<Self>) {
         if self.busy_phase.is_some() {
             return;
         }
-        let Some(ctrl) = self.ctrl.clone() else {
+        let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
 
@@ -808,8 +803,7 @@ impl AppStore {
                 cx.notify();
             });
         });
-        self._tasks.push(task);
-        self.prune_completed_tasks();
+        self.mutation_task = Some(task);
     }
 
     pub fn save_profile_content(
@@ -822,14 +816,7 @@ impl AppStore {
         if self.busy_phase.is_some() {
             return;
         }
-        let Some(ctrl) = self.ctrl.clone() else {
-            self.set_banner(
-                BannerTone::Warning,
-                self.init_error
-                    .clone()
-                    .unwrap_or_else(|| "Unsupported OS".to_string()),
-                cx,
-            );
+        let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
 
@@ -868,12 +855,11 @@ impl AppStore {
                 cx.notify();
             });
         });
-        self._tasks.push(task);
-        self.prune_completed_tasks();
+        self.mutation_task = Some(task);
     }
 
     pub fn validate_live_content(&mut self, name: String, content: String, cx: &mut Context<Self>) {
-        let Some(ctrl) = self.ctrl.clone() else {
+        let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -896,12 +882,14 @@ impl AppStore {
                 cx.notify();
             });
         });
-        self._tasks.push(task);
-        self.prune_completed_tasks();
+        self.validation_task = Some(task);
     }
 
     pub fn delete_profile(&mut self, name: String, force: bool, cx: &mut Context<Self>) {
-        let Some(ctrl) = self.ctrl.clone() else {
+        if self.busy_phase.is_some() {
+            return;
+        }
+        let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
         self.busy_phase = Some(format!("Deleting {name}..."));
@@ -939,8 +927,7 @@ impl AppStore {
                 cx.notify();
             });
         });
-        self._tasks.push(task);
-        self.prune_completed_tasks();
+        self.mutation_task = Some(task);
     }
 
     pub fn refresh_ip(&mut self, cx: &mut Context<Self>) {
@@ -971,8 +958,7 @@ impl AppStore {
                 cx.notify();
             });
         });
-        self._tasks.push(task);
-        self.prune_completed_tasks();
+        self.ip_task = Some(task);
     }
 
     pub fn run_doctor(&mut self, cx: &mut Context<Self>) {
@@ -997,8 +983,7 @@ impl AppStore {
                 cx.notify();
             });
         });
-        self._tasks.push(task);
-        self.prune_completed_tasks();
+        self.doctor_task = Some(task);
     }
 
     pub fn reload_logs(&mut self) {
@@ -1043,37 +1028,20 @@ impl AppStore {
             let _ = this.update(cx, |store, cx| {
                 store.log_poll_in_flight = false;
                 let mut changed = false;
-
-                if let Ok((lines, new_off, truncated)) = err_res {
-                    if truncated || new_off < store.error_log_offset {
-                        store.error_logs.clear();
-                        changed = true;
-                    }
-                    store.error_log_offset = new_off;
-                    if !lines.is_empty() {
-                        changed = true;
-                        push_bounded_logs(&mut store.error_logs, lines);
-                    }
-                }
-                if let Ok((lines, new_off, truncated)) = acc_res {
-                    if truncated || new_off < store.access_log_offset {
-                        store.access_logs.clear();
-                        changed = true;
-                    }
-                    store.access_log_offset = new_off;
-                    if !lines.is_empty() {
-                        changed = true;
-                        push_bounded_logs(&mut store.access_logs, lines);
-                    }
-                }
+                changed |=
+                    apply_log_delta(&mut store.error_logs, &mut store.error_log_offset, err_res);
+                changed |= apply_log_delta(
+                    &mut store.access_logs,
+                    &mut store.access_log_offset,
+                    acc_res,
+                );
                 if changed {
                     store.log_revision = store.log_revision.wrapping_add(1);
                     cx.notify();
                 }
             });
         });
-        self._tasks.push(task);
-        self.prune_completed_tasks();
+        self.log_poll_task = Some(task);
     }
 
     pub fn active_log_records(&self) -> &[LogRecord] {
@@ -1114,16 +1082,14 @@ impl AppStore {
             self._watcher = Some(w);
             let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 while rx.recv().await.is_ok() {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(200))
-                        .await;
+                    cx.background_executor().timer(WATCHER_DEBOUNCE).await;
                     while rx.try_recv().is_ok() {}
                     let _ = this.update(cx, |store, cx| {
                         store.refresh_snapshot(true, cx);
                     });
                 }
             });
-            self._tasks.push(task);
+            self._daemon_tasks.push(task);
         }
     }
 
@@ -1146,13 +1112,13 @@ impl AppStore {
                 }
             }
         });
-        self._tasks.push(log_task);
+        self._daemon_tasks.push(log_task);
 
         if self.ctrl.is_some() {
             let snap_task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let mut last_poll = Instant::now();
                 loop {
-                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    cx.background_executor().timer(SNAPSHOT_TICK_INTERVAL).await;
                     let keep_going = this
                         .update(cx, |store, cx| {
                             let interval = if store.window_open {
@@ -1171,15 +1137,30 @@ impl AppStore {
                     }
                 }
             });
-            self._tasks.push(snap_task);
+            self._daemon_tasks.push(snap_task);
         }
     }
+}
 
-    fn prune_completed_tasks(&mut self) {
-        if self._tasks.len() > 24 {
-            self._tasks.drain(..self._tasks.len() - 16);
-        }
+fn apply_log_delta(
+    buf: &mut Vec<LogRecord>,
+    offset: &mut u64,
+    res: std::io::Result<(Vec<String>, u64, bool)>,
+) -> bool {
+    let Ok((lines, new_off, truncated)) = res else {
+        return false;
+    };
+    let mut changed = false;
+    if truncated || new_off < *offset {
+        buf.clear();
+        changed = true;
     }
+    *offset = new_off;
+    if !lines.is_empty() {
+        changed = true;
+        push_bounded_logs(buf, lines);
+    }
+    changed
 }
 
 fn into_log_record(line: String) -> LogRecord {

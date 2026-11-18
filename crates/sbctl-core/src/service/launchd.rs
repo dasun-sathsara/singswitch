@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn parses_real_launchctl_print_running_and_waiting() {
-        let running = r#"
+        let running = r"
 system/app.lexiflix.singbox = {
     active count = 1
     state = running
@@ -186,20 +186,20 @@ system/app.lexiflix.singbox = {
     runs = 3
     last exit code = (never exited)
 }
-"#;
+";
         let h = parse_launchd_print(running);
         assert_eq!(h.state, RunState::Running);
         assert_eq!(h.pid, Some(4711));
         assert_eq!(h.restarts, Some(3));
         assert_eq!(h.last_exit, None);
 
-        let waiting = r#"
+        let waiting = r"
 system/app.lexiflix.singbox = {
     state = waiting
     runs = 14
     last exit code = 1
 }
-"#;
+";
         let hw = parse_launchd_print(waiting);
         assert_eq!(hw.state, RunState::Stopped);
         assert_eq!(hw.restarts, Some(14));

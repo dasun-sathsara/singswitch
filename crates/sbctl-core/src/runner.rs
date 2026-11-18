@@ -181,6 +181,12 @@ impl Default for FakeRunner {
     }
 }
 
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 impl FakeRunner {
     pub fn new(default: FakeResult) -> Self {
         Self {
@@ -192,48 +198,41 @@ impl FakeRunner {
 
     /// Set a single canned response for a command-line prefix.
     pub fn set_response(&self, prefix: impl Into<String>, result: FakeResult) {
-        self.responses
-            .lock()
-            .unwrap()
-            .insert(prefix.into(), vec![result]);
+        lock_unpoisoned(&self.responses).insert(prefix.into(), vec![result]);
     }
 
     /// Queue multiple sequential responses for repeated calls matching `prefix`.
     /// Once exhausted, the final entry repeats.
     pub fn queue_responses(&self, prefix: impl Into<String>, results: Vec<FakeResult>) {
-        self.responses
-            .lock()
-            .unwrap()
-            .insert(prefix.into(), results);
+        lock_unpoisoned(&self.responses).insert(prefix.into(), results);
     }
 
     pub fn call_lines(&self) -> Vec<String> {
-        self.calls
-            .lock()
-            .unwrap()
+        lock_unpoisoned(&self.calls)
             .iter()
-            .map(|argv| argv.join(" "))
+            .map(|parts| parts.join(" "))
             .collect()
     }
 }
 
 impl Runner for FakeRunner {
     fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput> {
-        let mut argv = Vec::with_capacity(args.len() + 1);
-        argv.push(program.to_string());
-        argv.extend(args.iter().map(|s| (*s).to_string()));
-        let line = argv.join(" ");
-        self.calls.lock().unwrap().push(argv);
+        let mut cmd_parts = Vec::with_capacity(args.len() + 1);
+        cmd_parts.push(program.to_string());
+        cmd_parts.extend(args.iter().map(|s| (*s).to_string()));
+        let line = cmd_parts.join(" ");
+        lock_unpoisoned(&self.calls).push(cmd_parts);
 
-        let mut map = self.responses.lock().unwrap();
+        let mut map = lock_unpoisoned(&self.responses);
         let best_key = map
             .keys()
             .filter(|prefix| line.starts_with(prefix.as_str()))
             .max_by_key(|prefix| prefix.len())
             .cloned();
 
-        let chosen = if let Some(key) = best_key {
-            let queue = map.get_mut(&key).expect("key exists");
+        let chosen = if let Some(key) = best_key
+            && let Some(queue) = map.get_mut(&key)
+        {
             if queue.len() > 1 {
                 queue.remove(0)
             } else {

@@ -87,7 +87,7 @@ pub struct TrayController {
 }
 
 impl TrayController {
-    pub fn install(store: Entity<AppStore>, cx: &mut App) -> gpui_tray::Result<Self> {
+    pub fn install(store: &Entity<AppStore>, cx: &mut App) -> gpui_tray::Result<Self> {
         let icons = TrayIcons::build_all()?;
         let (initial_visual, initial_title, initial_tooltip, initial_fp) = {
             let s = store.read(cx);
@@ -118,7 +118,7 @@ impl TrayController {
         let mut prev_tooltip = initial_tooltip;
         let mut prev_fp = initial_fp;
 
-        let subscription = cx.observe(&store, move |entity, cx| {
+        let subscription = cx.observe(store, move |entity, cx| {
             let s = entity.read(cx);
             let visual = s.tray_visual_state();
             let title = menubar_title(s);
@@ -149,7 +149,6 @@ impl TrayController {
         })
     }
 
-    #[allow(dead_code)]
     pub fn close(&self, cx: &mut App) {
         let _ = self.tray.close(cx);
     }
@@ -207,7 +206,11 @@ fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
     if store.snapshot.running {
         items.push(MenuItem::action("Disconnect", DisconnectService).disabled(is_busy));
     } else {
-        let can_connect = store.snapshot.profiles.iter().any(|p| p.ready());
+        let can_connect = store
+            .snapshot
+            .profiles
+            .iter()
+            .any(sbctl_core::profile::Profile::ready);
         items.push(MenuItem::action("Connect", ConnectActive).disabled(is_busy || !can_connect));
     }
 

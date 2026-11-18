@@ -1,6 +1,9 @@
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value, json, map::Entry};
 
 use crate::error::{Result, SbctlError};
+
+pub const DEFAULT_SERVER_PORT: u16 = 443;
+pub const DEFAULT_TUN_MTU: u32 = 1350;
 
 /// Lossless form view extracted from a sing-box JSON document.
 ///
@@ -38,7 +41,7 @@ impl Default for ProfileFormModel {
             outbound_type: "vless".to_string(),
             outbound_tag: "proxy".to_string(),
             server: String::new(),
-            server_port: 443,
+            server_port: DEFAULT_SERVER_PORT,
             uuid: String::new(),
             password: String::new(),
             flow: "xtls-rprx-vision".to_string(),
@@ -51,7 +54,7 @@ impl Default for ProfileFormModel {
             reality_short_id: String::new(),
             tun_interface_name: String::new(),
             tun_stack: "gvisor".to_string(),
-            tun_mtu: 1350,
+            tun_mtu: DEFAULT_TUN_MTU,
             tun_auto_route: true,
             tun_strict_route: true,
             reject_ipv6: true,
@@ -190,12 +193,18 @@ impl ProfileFormModel {
         let Some(root_obj) = root.as_object_mut() else {
             return;
         };
+        self.apply_log_section(root_obj);
+        self.apply_tun_section(root_obj);
+        self.apply_outbound_section(root_obj);
+        self.apply_ipv6_route_section(root_obj);
+    }
 
-        // Log level
+    fn apply_log_section(&self, root_obj: &mut Map<String, Value>) {
         let log_obj = ensure_object(root_obj, "log");
         log_obj.insert("level".to_string(), Value::String(self.log_level.clone()));
+    }
 
-        // TUN inbound
+    fn apply_tun_section(&self, root_obj: &mut Map<String, Value>) {
         if let Some(tun) = find_tun_inbound_mut(root_obj) {
             tun.insert(
                 "interface_name".to_string(),
@@ -209,87 +218,77 @@ impl ProfileFormModel {
                 Value::Bool(self.tun_strict_route),
             );
         }
+    }
 
-        // Primary outbound
-        if let Some(out) = find_primary_outbound_mut(root_obj) {
-            out.insert(
-                "type".to_string(),
-                Value::String(self.outbound_type.clone()),
-            );
-            if !self.outbound_tag.is_empty() {
-                out.insert("tag".to_string(), Value::String(self.outbound_tag.clone()));
-            }
-            out.insert("server".to_string(), Value::String(self.server.clone()));
-            out.insert("server_port".to_string(), json!(self.server_port));
+    fn apply_outbound_section(&self, root_obj: &mut Map<String, Value>) {
+        let Some(out) = find_primary_outbound_mut(root_obj) else {
+            return;
+        };
+        out.insert(
+            "type".to_string(),
+            Value::String(self.outbound_type.clone()),
+        );
+        if !self.outbound_tag.is_empty() {
+            out.insert("tag".to_string(), Value::String(self.outbound_tag.clone()));
+        }
+        out.insert("server".to_string(), Value::String(self.server.clone()));
+        out.insert("server_port".to_string(), json!(self.server_port));
 
-            if !self.uuid.is_empty() || out.contains_key("uuid") {
-                if self.uuid.is_empty() {
-                    out.remove("uuid");
-                } else {
-                    out.insert("uuid".to_string(), Value::String(self.uuid.clone()));
-                }
-            }
-            if !self.password.is_empty() || out.contains_key("password") {
-                if self.password.is_empty() {
-                    out.remove("password");
-                } else {
-                    out.insert("password".to_string(), Value::String(self.password.clone()));
-                }
-            }
-            if !self.flow.is_empty() || out.contains_key("flow") {
-                if self.flow.is_empty() {
-                    out.remove("flow");
-                } else {
-                    out.insert("flow".to_string(), Value::String(self.flow.clone()));
-                }
-            }
+        set_or_remove_if_present(out, "uuid", &self.uuid);
+        set_or_remove_if_present(out, "password", &self.password);
+        set_or_remove_if_present(out, "flow", &self.flow);
+        self.apply_tls_section(out);
+    }
 
-            if self.tls_enabled {
-                let tls = ensure_object(out, "tls");
-                tls.insert("enabled".to_string(), Value::Bool(true));
-                if !self.server_name.is_empty() {
-                    tls.insert(
-                        "server_name".to_string(),
-                        Value::String(self.server_name.clone()),
-                    );
-                } else {
-                    tls.remove("server_name");
-                }
-
-                if self.utls_enabled {
-                    let utls = ensure_object(tls, "utls");
-                    utls.insert("enabled".to_string(), Value::Bool(true));
-                    if !self.utls_fingerprint.is_empty() {
-                        utls.insert(
-                            "fingerprint".to_string(),
-                            Value::String(self.utls_fingerprint.clone()),
-                        );
-                    }
-                } else if let Some(utls) = tls.get_mut("utls").and_then(Value::as_object_mut) {
-                    utls.insert("enabled".to_string(), Value::Bool(false));
-                }
-
-                if self.reality_enabled {
-                    let reality = ensure_object(tls, "reality");
-                    reality.insert("enabled".to_string(), Value::Bool(true));
-                    reality.insert(
-                        "public_key".to_string(),
-                        Value::String(self.reality_public_key.clone()),
-                    );
-                    reality.insert(
-                        "short_id".to_string(),
-                        Value::String(self.reality_short_id.clone()),
-                    );
-                } else if let Some(reality) = tls.get_mut("reality").and_then(Value::as_object_mut)
-                {
-                    reality.insert("enabled".to_string(), Value::Bool(false));
-                }
-            } else if let Some(tls) = out.get_mut("tls").and_then(Value::as_object_mut) {
+    fn apply_tls_section(&self, out: &mut Map<String, Value>) {
+        if !self.tls_enabled {
+            if let Some(tls) = out.get_mut("tls").and_then(Value::as_object_mut) {
                 tls.insert("enabled".to_string(), Value::Bool(false));
             }
+            return;
         }
 
-        // IPv6 reject rule in route.rules
+        let tls = ensure_object(out, "tls");
+        tls.insert("enabled".to_string(), Value::Bool(true));
+        if !self.server_name.is_empty() {
+            tls.insert(
+                "server_name".to_string(),
+                Value::String(self.server_name.clone()),
+            );
+        } else {
+            tls.remove("server_name");
+        }
+
+        if self.utls_enabled {
+            let utls = ensure_object(tls, "utls");
+            utls.insert("enabled".to_string(), Value::Bool(true));
+            if !self.utls_fingerprint.is_empty() {
+                utls.insert(
+                    "fingerprint".to_string(),
+                    Value::String(self.utls_fingerprint.clone()),
+                );
+            }
+        } else if let Some(utls) = tls.get_mut("utls").and_then(Value::as_object_mut) {
+            utls.insert("enabled".to_string(), Value::Bool(false));
+        }
+
+        if self.reality_enabled {
+            let reality = ensure_object(tls, "reality");
+            reality.insert("enabled".to_string(), Value::Bool(true));
+            reality.insert(
+                "public_key".to_string(),
+                Value::String(self.reality_public_key.clone()),
+            );
+            reality.insert(
+                "short_id".to_string(),
+                Value::String(self.reality_short_id.clone()),
+            );
+        } else if let Some(reality) = tls.get_mut("reality").and_then(Value::as_object_mut) {
+            reality.insert("enabled".to_string(), Value::Bool(false));
+        }
+    }
+
+    fn apply_ipv6_route_section(&self, root_obj: &mut Map<String, Value>) {
         if let Some(rules) = root_obj
             .get_mut("route")
             .and_then(Value::as_object_mut)
@@ -306,14 +305,32 @@ impl ProfileFormModel {
     }
 }
 
-fn ensure_object<'a>(parent: &'a mut Map<String, Value>, key: &str) -> &'a mut Map<String, Value> {
-    if !parent.get(key).is_some_and(Value::is_object) {
-        parent.insert(key.to_string(), Value::Object(Map::new()));
+fn set_or_remove_if_present(obj: &mut Map<String, Value>, key: &str, value: &str) {
+    if !value.is_empty() || obj.contains_key(key) {
+        if value.is_empty() {
+            obj.remove(key);
+        } else {
+            obj.insert(key.to_string(), Value::String(value.to_string()));
+        }
     }
-    parent
-        .get_mut(key)
-        .and_then(Value::as_object_mut)
-        .expect("object inserted above")
+}
+
+fn ensure_object<'a>(parent: &'a mut Map<String, Value>, key: &str) -> &'a mut Map<String, Value> {
+    match parent.entry(key.to_string()) {
+        Entry::Occupied(mut entry) => {
+            if !entry.get().is_object() {
+                entry.insert(Value::Object(Map::new()));
+            }
+            match entry.into_mut() {
+                Value::Object(map) => map,
+                _ => unreachable!("replaced non-object value above"),
+            }
+        }
+        Entry::Vacant(entry) => match entry.insert(Value::Object(Map::new())) {
+            Value::Object(map) => map,
+            _ => unreachable!("inserted object value above"),
+        },
+    }
 }
 
 fn find_tun_inbound(root: &Value) -> Option<&Map<String, Value>> {

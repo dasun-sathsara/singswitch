@@ -2,7 +2,7 @@ use std::io::Read;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use crate::checker::Checker;
+use crate::checker::{Checker, check_temp_bytes};
 use crate::error::{ExitCode, Result, SbctlError};
 
 /// Cap remote profile downloads at 8 MiB so an accidental HTML/binary URL cannot exhaust memory.
@@ -93,14 +93,7 @@ pub fn fetch_remote_profile(raw_url: &str) -> Result<Vec<u8>> {
 /// Validate downloaded profile bytes with `sing-box check` via a temp file without touching
 /// the stored profile directory.
 pub fn validate_remote_body(checker: &dyn Checker, body: &[u8]) -> Result<()> {
-    let mut tmp = tempfile::Builder::new()
-        .prefix("sbctl-remote-")
-        .suffix(".json")
-        .tempfile()?;
-    std::io::Write::write_all(&mut tmp, body)?;
-    std::io::Write::flush(&mut tmp)?;
-
-    if let Err(err) = checker.check(tmp.path()) {
+    if let Err(err) = check_temp_bytes(checker, "sbctl-remote-", body) {
         return Err(SbctlError::new(
             ExitCode::Validation,
             "the downloaded file is not a valid sing-box configuration",

@@ -6,6 +6,15 @@ use crate::service::Health;
 /// Helper service name registered on Windows so the GUI can switch profiles without UAC prompts.
 pub const HELPER_SERVICE_NAME: &str = "sbctl-agent";
 
+#[cfg(windows)]
+const PIPE_WAIT_TIMEOUT_MS: u32 = 400;
+#[cfg(windows)]
+const PIPE_MAX_INSTANCES: u32 = 4;
+#[cfg(windows)]
+const PIPE_BUFFER_BYTES: u32 = 65_536;
+#[cfg(windows)]
+const PIPE_DEFAULT_TIMEOUT_MS: u32 = 500;
+
 /// Request sent from an unprivileged Windows GUI/CLI to the local `sbctl-agent` service
 /// over `\\.\pipe\sbctl-control`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -114,7 +123,7 @@ pub fn try_send_pipe_request(pipe_name: &str, req: &PipeRequest) -> Result<Optio
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    let ready = unsafe { WaitNamedPipeW(wide.as_ptr(), 400) };
+    let ready = unsafe { WaitNamedPipeW(wide.as_ptr(), PIPE_WAIT_TIMEOUT_MS) };
     if ready == 0 {
         let err = std::io::Error::last_os_error();
         if err.raw_os_error() == Some(ERROR_FILE_NOT_FOUND as i32) {
@@ -229,10 +238,10 @@ where
                 wide_pipe.as_ptr(),
                 PIPE_ACCESS_DUPLEX,
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                4,
-                65536,
-                65536,
-                500,
+                PIPE_MAX_INSTANCES,
+                PIPE_BUFFER_BYTES,
+                PIPE_BUFFER_BYTES,
+                PIPE_DEFAULT_TIMEOUT_MS,
                 &sa,
             )
         };

@@ -5,10 +5,6 @@ members = [
     "crates/sbctl-cli",
     "crates/sbctl-app",
 ]
-default-members = [
-    "crates/sbctl-core",
-    "crates/sbctl-cli",
-]
 
 [workspace.package]
 version = "0.1.0"

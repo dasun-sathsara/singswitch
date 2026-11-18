@@ -1,5 +1,6 @@
 use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::{App, Menu, MenuItem, OsAction};
+use sbctl_core::error::{Result, SbctlError};
 
 use crate::actions::{
     CloseWindow, ConnectActive, DisconnectService, ImportUrlDialog, NavTab, NewProfileDialog,
@@ -152,24 +153,31 @@ pub fn is_launch_at_login_enabled() -> bool {
 }
 
 /// Enable or disable per-user background launch at login (`--background`).
-pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
+pub fn set_launch_at_login(enabled: bool) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        let path = launch_agent_path()
-            .ok_or_else(|| "could not locate user home directory for LaunchAgents".to_string())?;
+        let path = launch_agent_path().ok_or_else(|| {
+            SbctlError::general("could not locate user home directory for LaunchAgents")
+        })?;
         if !enabled {
             if path.exists() {
-                std::fs::remove_file(&path)
-                    .map_err(|e| format!("failed to remove LaunchAgent {}: {e}", path.display()))?;
+                std::fs::remove_file(&path).map_err(|e| {
+                    SbctlError::general(format!(
+                        "failed to remove LaunchAgent {}: {e}",
+                        path.display()
+                    ))
+                })?;
             }
             return Ok(());
         }
 
-        let exe = std::env::current_exe()
-            .map_err(|e| format!("could not locate current executable: {e}"))?;
+        let exe = std::env::current_exe().map_err(|e| {
+            SbctlError::general(format!("could not locate current executable: {e}"))
+        })?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("failed to create LaunchAgents directory: {e}"))?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                SbctlError::general(format!("failed to create LaunchAgents directory: {e}"))
+            })?;
         }
         let escaped_exe = xml_escape(&exe.display().to_string());
         let plist = format!(
@@ -191,8 +199,12 @@ pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
              </dict>\n\
              </plist>\n"
         );
-        std::fs::write(&path, plist)
-            .map_err(|e| format!("failed to write LaunchAgent {}: {e}", path.display()))?;
+        std::fs::write(&path, plist).map_err(|e| {
+            SbctlError::general(format!(
+                "failed to write LaunchAgent {}: {e}",
+                path.display()
+            ))
+        })?;
         Ok(())
     }
 
@@ -204,7 +216,9 @@ pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = enabled;
-        Err("launch-at-login is supported on macOS and Windows".to_string())
+        Err(SbctlError::general(
+            "launch-at-login is supported on macOS and Windows",
+        ))
     }
 }
 
@@ -254,7 +268,7 @@ fn windows_reg_run_exists() -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_set_reg_run(enabled: bool) -> Result<(), String> {
+fn windows_set_reg_run(enabled: bool) -> Result<()> {
     use windows_sys::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
         RegCreateKeyExW, RegDeleteValueW, RegSetValueExW,
@@ -277,9 +291,9 @@ fn windows_set_reg_run(enabled: bool) -> Result<(), String> {
             std::ptr::null_mut(),
         );
         if rc != 0 {
-            return Err(format!(
+            return Err(SbctlError::general(format!(
                 "failed to open Windows Run registry key (code {rc})"
-            ));
+            )));
         }
 
         let op_rc = if enabled {
@@ -287,7 +301,9 @@ fn windows_set_reg_run(enabled: bool) -> Result<(), String> {
                 Ok(p) => p,
                 Err(e) => {
                     RegCloseKey(hkey);
-                    return Err(format!("could not locate current executable: {e}"));
+                    return Err(SbctlError::general(format!(
+                        "could not locate current executable: {e}"
+                    )));
                 }
             };
             let cmd = format!("\"{}\" --background", exe.display());
@@ -309,9 +325,9 @@ fn windows_set_reg_run(enabled: bool) -> Result<(), String> {
 
         RegCloseKey(hkey);
         if op_rc != 0 {
-            return Err(format!(
+            return Err(SbctlError::general(format!(
                 "failed to update Windows Run registry entry (code {op_rc})"
-            ));
+            )));
         }
         Ok(())
     }

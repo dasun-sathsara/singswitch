@@ -26,14 +26,14 @@ pub type SudoProbeFn = Arc<dyn Fn(&[String]) -> std::result::Result<(), String> 
 
 /// Run `sudo -n -l <argv>` to confirm whether a command rule matches without executing it.
 pub fn real_sudo_probe(argv: &[String]) -> std::result::Result<(), String> {
-    let mut args = Vec::with_capacity(argv.len() + 2);
-    args.push("-n");
-    args.push("-l");
+    let mut probe_args = Vec::with_capacity(argv.len() + 2);
+    probe_args.push("-n");
+    probe_args.push("-l");
     for a in argv {
-        args.push(a.as_str());
+        probe_args.push(a.as_str());
     }
     let out = Command::new("sudo")
-        .args(&args)
+        .args(&probe_args)
         .output()
         .map_err(|e| e.to_string())?;
     if out.status.success() {
@@ -96,17 +96,14 @@ fn check_singbox(checker: &dyn Checker) -> DiagnosticCheck {
 }
 
 fn check_profiles_dir(layout: &Layout) -> DiagnosticCheck {
-    let meta = match std::fs::metadata(&layout.profiles_dir) {
-        Ok(m) => m,
-        Err(_) => {
-            return DiagnosticCheck {
-                name: "profiles".to_string(),
-                ok: false,
-                warning: false,
-                detail: format!("{} does not exist", layout.profiles_dir.display()),
-                hint: "create it with the platform installer".to_string(),
-            };
-        }
+    let Ok(meta) = std::fs::metadata(&layout.profiles_dir) else {
+        return DiagnosticCheck {
+            name: "profiles".to_string(),
+            ok: false,
+            warning: false,
+            detail: format!("{} does not exist", layout.profiles_dir.display()),
+            hint: "create it with the platform installer".to_string(),
+        };
     };
     if !meta.is_dir() {
         return DiagnosticCheck {

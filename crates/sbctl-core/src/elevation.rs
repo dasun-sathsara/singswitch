@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(quote_arg(""), "\"\"");
         assert_eq!(quote_arg("my profile"), "\"my profile\"");
         assert_eq!(quote_arg(r#"a"b"#), r#""a\"b""#);
-        assert_eq!(quote_arg(r#"C:\dir\"#), r#"C:\dir\"#);
+        assert_eq!(quote_arg(r"C:\dir\"), r"C:\dir\");
         assert_eq!(
             quote_arg(r"C:\Program Files\sbctl\"),
             r#""C:\Program Files\sbctl\\""#

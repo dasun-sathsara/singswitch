@@ -9,7 +9,7 @@ use crate::activator::{
     Activator, CopyActivator, Rollback, SymlinkActivator, write_file_atomic,
     write_new_file_exclusive,
 };
-use crate::checker::{Checker, ExecChecker};
+use crate::checker::{Checker, ExecChecker, check_temp_bytes};
 use crate::doctor::{DiagnosticCheck, SudoProbeFn, diagnose_active, run_doctor_checks};
 use crate::error::{ExitCode, Result, SbctlError, store_error};
 use crate::layout::{Layout, PlatformKind};
@@ -156,8 +156,8 @@ impl Controller {
                     layout.active_config_path.clone(),
                     Some(Arc::new(move |target| {
                         let argv = layout_clone.activate_argv(target);
-                        let args: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
-                        let out = sudo_link.run(&argv[0], &args)?;
+                        let cmd_args: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
+                        let out = sudo_link.run(&argv[0], &cmd_args)?;
                         if out.success {
                             Ok(())
                         } else {
@@ -209,6 +209,28 @@ impl Controller {
         }
     }
 
+    fn is_active_and_running(&self, name: &str) -> (bool, bool) {
+        let active = self.activator.active_name().ok().flatten();
+        let is_active = active.as_deref() == Some(name);
+        let running = is_active
+            && self
+                .manager
+                .probe()
+                .is_ok_and(|h| h.state == RunState::Running);
+        (is_active, running)
+    }
+
+    fn restore_previous_profile(&self, path: &std::path::Path, old_bytes: &[u8], restart: bool) {
+        let _ = write_file_atomic(path, old_bytes, 0o644);
+        if self.layout.active_name_path.is_some() {
+            let _ = self.activator.activate(path);
+        }
+        if restart {
+            let _ = self.manager.restart();
+        }
+    }
+
+    /// Acquire the file lock.
     fn acquire_lock(&self) -> Result<AdvisoryLock> {
         AdvisoryLock::acquire(&self.layout.lock_path(), self.lock_timeout)
     }
@@ -513,26 +535,11 @@ impl Controller {
 
         let path = path_for(&self.layout.profiles_dir, name);
         if !allow_invalid {
-            let mut tmp = tempfile::Builder::new()
-                .prefix("sbctl-validate-")
-                .suffix(".json")
-                .tempfile()?;
-            std::io::Write::write_all(&mut tmp, content.as_bytes())?;
-            std::io::Write::flush(&mut tmp)?;
-            self.checker.check(tmp.path())?;
+            check_temp_bytes(self.checker.as_ref(), "sbctl-validate-", content.as_bytes())?;
         }
 
         let markers = placeholders_in(content);
-        let active = self.activator.active_name().ok().flatten();
-        let is_active = active.as_deref() == Some(name);
-
-        let running = if is_active {
-            self.manager
-                .probe()
-                .is_ok_and(|h| h.state == RunState::Running)
-        } else {
-            false
-        };
+        let (is_active, running) = self.is_active_and_running(name);
 
         if is_active && running && !markers.is_empty() {
             return Err(SbctlError::placeholders(name, &markers));
@@ -567,11 +574,7 @@ impl Controller {
         self.manager.restart()?;
         if let Some(problem) = self.verify_healthy() {
             if let Some(old) = &old_bytes {
-                let _ = write_file_atomic(&path, old, 0o644);
-                if self.layout.active_name_path.is_some() {
-                    let _ = self.activator.activate(&path);
-                }
-                let _ = self.manager.restart();
+                self.restore_previous_profile(&path, old, true);
                 return Err(SbctlError::service(format!(
                     "sing-box reloaded {name} but {problem}; reverted {name} to previous contents"
                 ))
@@ -656,14 +659,10 @@ impl Controller {
             })?;
 
         self.refresh_profile_locked(name, &url)?;
-        let active = self.activator.active_name().ok().flatten();
-        if active.as_deref() != Some(name) {
+        let (is_active, running) = self.is_active_and_running(name);
+        if !is_active {
             return Ok(false);
         }
-        let running = self
-            .manager
-            .probe()
-            .is_ok_and(|h| h.state == RunState::Running);
         if !running {
             if self.layout.active_name_path.is_some() {
                 let _ = self
@@ -721,11 +720,7 @@ impl Controller {
                         if running {
                             if let Err(act_err) = self.activate_locked(&active_name, |_| {}) {
                                 if let Some(old) = &old_bytes {
-                                    let _ = write_file_atomic(&path, old, 0o644);
-                                    if self.layout.active_name_path.is_some() {
-                                        let _ = self.activator.activate(&path);
-                                    }
-                                    let _ = self.manager.restart();
+                                    self.restore_previous_profile(&path, old, true);
                                 }
                                 report.failed.push((active_name, act_err.to_string()));
                                 return Ok(report);
@@ -770,15 +765,7 @@ impl Controller {
             return Err(SbctlError::profile_not_found(name, &available));
         }
 
-        let active = self.activator.active_name().ok().flatten();
-        let is_active = active.as_deref() == Some(name);
-        let running = if is_active {
-            self.manager
-                .probe()
-                .is_ok_and(|h| h.state == RunState::Running)
-        } else {
-            false
-        };
+        let (is_active, running) = self.is_active_and_running(name);
 
         if is_active && running && !force {
             return Err(
@@ -846,13 +833,11 @@ impl Controller {
         if !markers.is_empty() {
             return Err(SbctlError::placeholders(label, &markers));
         }
-        let mut tmp = tempfile::Builder::new()
-            .prefix("sbctl-live-check-")
-            .suffix(".json")
-            .tempfile()?;
-        std::io::Write::write_all(&mut tmp, content.as_bytes())?;
-        std::io::Write::flush(&mut tmp)?;
-        self.checker.check(tmp.path())
+        check_temp_bytes(
+            self.checker.as_ref(),
+            "sbctl-live-check-",
+            content.as_bytes(),
+        )
     }
 
     /// Run all `doctor` checks against this controller's layout and services.
@@ -1048,21 +1033,9 @@ fn find_sbctl_cli_exe() -> Option<PathBuf> {
             return Some(sibling);
         }
     }
-    crate::layout::lookup_binary("sbctl.exe", &[r"C:\Program Files\sbctl\sbctl.exe"], "")
-        .into_os_string()
-        .is_empty()
-        .then_some(())
-        .map_or_else(
-            || {
-                let p = crate::layout::lookup_binary(
-                    "sbctl.exe",
-                    &[r"C:\Program Files\sbctl\sbctl.exe"],
-                    "",
-                );
-                p.is_file().then_some(p)
-            },
-            |_| None,
-        )
+    let fallback =
+        crate::layout::lookup_binary("sbctl.exe", &[r"C:\Program Files\sbctl\sbctl.exe"], "");
+    (!fallback.as_os_str().is_empty() && fallback.is_file()).then_some(fallback)
 }
 
 #[cfg(test)]

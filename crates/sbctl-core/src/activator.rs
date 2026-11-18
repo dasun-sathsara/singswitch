@@ -151,7 +151,7 @@ impl Rollback for SymlinkRollback {
     }
 }
 
-/// Copy-based activator used on Windows where LocalSystem reads `%ProgramData%\sing-box\config.json`
+/// Copy-based activator used on Windows where `LocalSystem` reads `%ProgramData%\sing-box\config.json`
 /// and `%ProgramData%\sbctl\active-profile` records the profile name.
 #[derive(Debug, Clone)]
 pub struct CopyActivator {

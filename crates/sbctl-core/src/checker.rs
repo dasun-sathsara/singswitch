@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::error::{Result, SbctlError};
@@ -122,6 +123,17 @@ impl Checker for ExecChecker {
     }
 }
 
+/// Write `bytes` to a temporary `.json` file and validate it through `checker`.
+pub(crate) fn check_temp_bytes(checker: &dyn Checker, prefix: &str, bytes: &[u8]) -> Result<()> {
+    let mut tmp = tempfile::Builder::new()
+        .prefix(prefix)
+        .suffix(".json")
+        .tempfile()?;
+    tmp.write_all(bytes)?;
+    tmp.flush()?;
+    checker.check(tmp.path())
+}
+
 fn read_pipe(pipe: Option<impl std::io::Read>) -> String {
     let Some(mut reader) = pipe else {
         return String::new();
@@ -129,6 +141,12 @@ fn read_pipe(pipe: Option<impl std::io::Read>) -> String {
     let mut buf = String::new();
     let _ = reader.read_to_string(&mut buf);
     buf
+}
+
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Test double for `Checker`.
@@ -150,26 +168,23 @@ impl FakeChecker {
     }
 
     pub fn set_invalid(&self, path: &Path, reason: &str) {
-        self.invalid
-            .lock()
-            .unwrap()
-            .insert(path.to_path_buf(), reason.to_string());
+        lock_unpoisoned(&self.invalid).insert(path.to_path_buf(), reason.to_string());
     }
 }
 
 impl Checker for FakeChecker {
     fn check(&self, path: &Path) -> Result<()> {
-        self.checked.lock().unwrap().push(path.to_path_buf());
+        lock_unpoisoned(&self.checked).push(path.to_path_buf());
         if self.missing_binary {
             return Err(SbctlError::sing_box_missing());
         }
-        if let Some(err) = self.global_error.lock().unwrap().as_ref() {
+        if let Some(err) = lock_unpoisoned(&self.global_error).as_ref() {
             return Err(SbctlError::invalid_config(
                 path.to_string_lossy(),
                 err.clone(),
             ));
         }
-        if let Some(reason) = self.invalid.lock().unwrap().get(path) {
+        if let Some(reason) = lock_unpoisoned(&self.invalid).get(path) {
             return Err(SbctlError::invalid_config(
                 path.to_string_lossy(),
                 reason.clone(),

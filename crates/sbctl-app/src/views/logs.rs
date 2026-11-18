@@ -101,11 +101,283 @@ impl LogsView {
         self.cached_severity = store.log_severity;
         self.cached_query = query.to_string();
     }
+
+    fn render_stream_tabs_and_severity(
+        &self,
+        stream: LogStreamKind,
+        severity: LogSeverityFilter,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let store_tab = self.store.clone();
+        h_flex()
+            .w_full()
+            .justify_between()
+            .items_center()
+            .gap_3()
+            .flex_wrap()
+            .child(
+                TabBar::new("logs-stream-tabs")
+                    .segmented()
+                    .selected_index(match stream {
+                        LogStreamKind::Error => 0,
+                        LogStreamKind::Access => 1,
+                    })
+                    .child(Tab::new().label("Error Log"))
+                    .child(Tab::new().label("Access Log"))
+                    .on_click(cx.listener(move |this, idx, _, cx| {
+                        let next = if *idx == 1 {
+                            LogStreamKind::Access
+                        } else {
+                            LogStreamKind::Error
+                        };
+                        this.selected_line = None;
+                        store_tab.update(cx, |s, cx| s.set_log_stream(next, cx));
+                    })),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(severity_button(
+                        "sev-all",
+                        "All",
+                        LogSeverityFilter::All,
+                        severity,
+                        &self.store,
+                    ))
+                    .child(severity_button(
+                        "sev-err",
+                        "Error",
+                        LogSeverityFilter::Error,
+                        severity,
+                        &self.store,
+                    ))
+                    .child(severity_button(
+                        "sev-warn",
+                        "Warn+",
+                        LogSeverityFilter::Warn,
+                        severity,
+                        &self.store,
+                    ))
+                    .child(severity_button(
+                        "sev-info",
+                        "Info",
+                        LogSeverityFilter::Info,
+                        severity,
+                        &self.store,
+                    )),
+            )
+    }
+
+    fn render_controls_bar(
+        &self,
+        follow: bool,
+        count: usize,
+        total_count: usize,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let store_follow = self.store.clone();
+        let store_clear = self.store.clone();
+        let store_reload = self.store.clone();
+        let store_copy = self.store.clone();
+        let filtered_for_copy = self.filtered_indices.clone();
+
+        h_flex()
+            .w_full()
+            .gap_3()
+            .items_center()
+            .child(
+                div()
+                    .flex_1()
+                    .child(Input::new(&self.search_input).cleanable(true).small()),
+            )
+            .child(
+                Switch::new("log-follow-switch")
+                    .checked(follow)
+                    .label("Follow")
+                    .on_change(move |checked, _, cx| {
+                        store_follow.update(cx, |s, cx| s.set_log_follow(*checked, cx));
+                    }),
+            )
+            .child(
+                Button::new("logs-clear")
+                    .outline()
+                    .small()
+                    .label("Clear")
+                    .disabled(total_count == 0)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.selected_line = None;
+                        store_clear.update(cx, AppStore::clear_logs);
+                    })),
+            )
+            .child(
+                Button::new("logs-reload")
+                    .outline()
+                    .small()
+                    .icon(IconName::RefreshCw)
+                    .label("Reload")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.selected_line = None;
+                        store_reload.update(cx, |s, cx| {
+                            s.reload_logs();
+                            cx.notify();
+                        });
+                    })),
+            )
+            .child(
+                Button::new("logs-copy")
+                    .outline()
+                    .small()
+                    .icon(IconName::Copy)
+                    .label("Copy")
+                    .disabled(count == 0)
+                    .on_click(move |_, _, cx| {
+                        let joined = {
+                            let s = store_copy.read(cx);
+                            let recs = s.active_log_records();
+                            filtered_for_copy
+                                .iter()
+                                .filter_map(|&idx| recs.get(idx))
+                                .map(|r| r.line.as_ref())
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        };
+                        cx.write_to_clipboard(ClipboardItem::new_string(joined));
+                        store_copy.update(cx, |s, cx| {
+                            s.set_banner(
+                                BannerTone::Success,
+                                "Copied visible log lines to clipboard",
+                                cx,
+                            );
+                        });
+                    }),
+            )
+    }
+
+    fn render_virtual_log_box(
+        &self,
+        count: usize,
+        log_path: &std::path::Path,
+        platform_str: &'static str,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let mono_font = cx.theme().mono_font_family.clone();
+        div()
+            .flex_1()
+            .w_full()
+            .min_h(px(220.0))
+            .rounded(cx.theme().radius_lg)
+            .bg(surface_card_bg(cx))
+            .border_1()
+            .border_color(cx.theme().border)
+            .p_2()
+            .when(count == 0, |this| {
+                this.child(
+                    v_flex()
+                        .size_full()
+                        .items_center()
+                        .justify_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_semibold()
+                                .text_color(cx.theme().foreground)
+                                .child("No log lines to display"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_family(mono_font)
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!(
+                                    "Watched log file: {} (platform: {})",
+                                    log_path.display(),
+                                    platform_str
+                                )),
+                        ),
+                )
+            })
+            .when(count > 0, |this| {
+                this.child(
+                    v_virtual_list(
+                        cx.entity(),
+                        "logs-virtual-list",
+                        self.item_sizes.clone(),
+                        move |this, range, _, cx| render_log_rows(this, range, cx),
+                    )
+                    .track_scroll(&self.scroll_handle)
+                    .size_full(),
+                )
+            })
+    }
+
+    fn render_selected_line_panel(
+        &self,
+        line: SharedString,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let line_copy = line.clone();
+        let store_banner = self.store.clone();
+        let mono_font = cx.theme().mono_font_family.clone();
+
+        h_flex()
+            .w_full()
+            .p_3()
+            .gap_3()
+            .items_start()
+            .justify_between()
+            .rounded(cx.theme().radius)
+            .bg(surface_card_bg(cx))
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(
+                div()
+                    .flex_1()
+                    .text_xs()
+                    .font_family(mono_font)
+                    .text_color(cx.theme().foreground)
+                    .child(line),
+            )
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("log-copy-line")
+                            .outline()
+                            .xsmall()
+                            .icon(IconName::Copy)
+                            .label("Copy Line")
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    line_copy.to_string(),
+                                ));
+                                store_banner.update(cx, |s, cx| {
+                                    s.set_banner(
+                                        BannerTone::Success,
+                                        "Copied selected log line",
+                                        cx,
+                                    );
+                                });
+                            }),
+                    )
+                    .child(
+                        Button::new("log-dismiss-line")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Close)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.selected_line = None;
+                                cx.notify();
+                            })),
+                    ),
+            )
+    }
 }
 
 impl Render for LogsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (stream, follow, severity, layout, empty_path, total_count) = {
+        let (stream, follow, severity, layout, log_path, total_count) = {
             let s = self.store.read(cx);
             self.ensure_filter_cache(s);
             let layout = s.layout();
@@ -130,350 +402,15 @@ impl Render for LogsView {
         }
         self.last_count = count;
 
-        let store_tab = self.store.clone();
-        let store_all = self.store.clone();
-        let store_err = self.store.clone();
-        let store_warn = self.store.clone();
-        let store_info = self.store.clone();
-        let store_follow = self.store.clone();
-        let store_reload = self.store.clone();
-        let store_clear = self.store.clone();
-        let store_copy = self.store.clone();
-        let filtered_for_copy = self.filtered_indices.clone();
-
-        let mono_font = cx.theme().mono_font_family.clone();
-
         v_flex()
             .size_full()
             .p_5()
             .gap_4()
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .items_center()
-                    .gap_3()
-                    .flex_wrap()
-                    .child(
-                        TabBar::new("logs-stream-tabs")
-                            .segmented()
-                            .selected_index(match stream {
-                                LogStreamKind::Error => 0,
-                                LogStreamKind::Access => 1,
-                            })
-                            .child(Tab::new().label("Error Log"))
-                            .child(Tab::new().label("Access Log"))
-                            .on_click(cx.listener(move |this, idx, _, cx| {
-                                let next = if *idx == 1 {
-                                    LogStreamKind::Access
-                                } else {
-                                    LogStreamKind::Error
-                                };
-                                this.selected_line = None;
-                                store_tab.update(cx, |s, cx| s.set_log_stream(next, cx));
-                            })),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                Button::new("sev-all")
-                                    .small()
-                                    .when(severity == LogSeverityFilter::All, |b| b.primary())
-                                    .when(severity != LogSeverityFilter::All, |b| b.outline())
-                                    .label("All")
-                                    .on_click(move |_, _, cx| {
-                                        store_all.update(cx, |s, cx| {
-                                            s.log_severity = LogSeverityFilter::All;
-                                            cx.notify();
-                                        });
-                                    }),
-                            )
-                            .child(
-                                Button::new("sev-err")
-                                    .small()
-                                    .when(severity == LogSeverityFilter::Error, |b| b.primary())
-                                    .when(severity != LogSeverityFilter::Error, |b| b.outline())
-                                    .label("Error")
-                                    .on_click(move |_, _, cx| {
-                                        store_err.update(cx, |s, cx| {
-                                            s.log_severity = LogSeverityFilter::Error;
-                                            cx.notify();
-                                        });
-                                    }),
-                            )
-                            .child(
-                                Button::new("sev-warn")
-                                    .small()
-                                    .when(severity == LogSeverityFilter::Warn, |b| b.primary())
-                                    .when(severity != LogSeverityFilter::Warn, |b| b.outline())
-                                    .label("Warn+")
-                                    .on_click(move |_, _, cx| {
-                                        store_warn.update(cx, |s, cx| {
-                                            s.log_severity = LogSeverityFilter::Warn;
-                                            cx.notify();
-                                        });
-                                    }),
-                            )
-                            .child(
-                                Button::new("sev-info")
-                                    .small()
-                                    .when(severity == LogSeverityFilter::Info, |b| b.primary())
-                                    .when(severity != LogSeverityFilter::Info, |b| b.outline())
-                                    .label("Info")
-                                    .on_click(move |_, _, cx| {
-                                        store_info.update(cx, |s, cx| {
-                                            s.log_severity = LogSeverityFilter::Info;
-                                            cx.notify();
-                                        });
-                                    }),
-                            ),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap_3()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(Input::new(&self.search_input).cleanable(true).small()),
-                    )
-                    .child(
-                        Switch::new("log-follow-switch")
-                            .checked(follow)
-                            .label("Follow")
-                            .on_change(move |checked, _, cx| {
-                                store_follow.update(cx, |s, cx| s.set_log_follow(*checked, cx));
-                            }),
-                    )
-                    .child(
-                        Button::new("logs-clear")
-                            .outline()
-                            .small()
-                            .label("Clear")
-                            .disabled(total_count == 0)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.selected_line = None;
-                                store_clear.update(cx, |s, cx| s.clear_logs(cx));
-                            })),
-                    )
-                    .child(
-                        Button::new("logs-reload")
-                            .outline()
-                            .small()
-                            .icon(IconName::RefreshCw)
-                            .label("Reload")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.selected_line = None;
-                                store_reload.update(cx, |s, cx| {
-                                    s.reload_logs();
-                                    cx.notify();
-                                });
-                            })),
-                    )
-                    .child(
-                        Button::new("logs-copy")
-                            .outline()
-                            .small()
-                            .icon(IconName::Copy)
-                            .label("Copy")
-                            .disabled(count == 0)
-                            .on_click(move |_, _, cx| {
-                                let joined = {
-                                    let s = store_copy.read(cx);
-                                    let recs = s.active_log_records();
-                                    filtered_for_copy
-                                        .iter()
-                                        .filter_map(|&idx| recs.get(idx))
-                                        .map(|r| r.line.as_ref())
-                                        .collect::<Vec<_>>()
-                                        .join("\n")
-                                };
-                                cx.write_to_clipboard(ClipboardItem::new_string(joined));
-                                store_copy.update(cx, |s, cx| {
-                                    s.set_banner(
-                                        BannerTone::Success,
-                                        "Copied visible log lines to clipboard",
-                                        cx,
-                                    );
-                                });
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .w_full()
-                    .min_h(px(220.0))
-                    .rounded(cx.theme().radius_lg)
-                    .bg(surface_card_bg(cx))
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .p_2()
-                    .when(count == 0, |this| {
-                        this.child(
-                            v_flex()
-                                .size_full()
-                                .items_center()
-                                .justify_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_semibold()
-                                        .text_color(cx.theme().foreground)
-                                        .child("No log lines to display"),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_family(mono_font.clone())
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(format!(
-                                            "Watched log file: {} (platform: {})",
-                                            empty_path.display(),
-                                            layout.platform.as_str()
-                                        )),
-                                ),
-                        )
-                    })
-                    .when(count > 0, |this| {
-                        this.child(
-                            v_virtual_list(
-                                cx.entity(),
-                                "logs-virtual-list",
-                                self.item_sizes.clone(),
-                                move |this, range, _, cx| {
-                                    let indices = this.filtered_indices.clone();
-                                    let s = this.store.read(cx);
-                                    let records = s.active_log_records();
-                                    let mono = cx.theme().mono_font_family.clone();
-                                    let fg = cx.theme().foreground;
-                                    let muted = cx.theme().muted_foreground;
-                                    let hover_bg = subtle_pill_bg(cx);
-                                    let selected_ref = this.selected_line.clone();
-
-                                    range
-                                        .filter_map(|vis_idx| {
-                                            let rec_idx = *indices.get(vis_idx)?;
-                                            let rec = records.get(rec_idx)?;
-                                            let (lvl_text, lvl_tag) = match rec.level {
-                                                LogLevel::Error => ("ERR", Tag::danger()),
-                                                LogLevel::Warn => ("WRN", Tag::warning()),
-                                                LogLevel::Info => ("INF", Tag::info()),
-                                                LogLevel::Debug => ("DBG", Tag::secondary()),
-                                                LogLevel::Other => ("LOG", Tag::secondary()),
-                                            };
-                                            let is_selected =
-                                                selected_ref.as_ref() == Some(&rec.line);
-                                            let line_for_click = rec.line.clone();
-
-                                            Some(
-                                                h_flex()
-                                                    .id(SharedString::from(format!(
-                                                        "log-row-{rec_idx}"
-                                                    )))
-                                                    .w_full()
-                                                    .h(px(26.0))
-                                                    .px_2()
-                                                    .gap_2()
-                                                    .items_center()
-                                                    .rounded(cx.theme().radius)
-                                                    .cursor_pointer()
-                                                    .when(is_selected, |d| d.bg(hover_bg))
-                                                    .hover(|d| d.bg(hover_bg))
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.selected_line =
-                                                            Some(line_for_click.clone());
-                                                        cx.notify();
-                                                    }))
-                                                    .child(
-                                                        div()
-                                                            .w(px(42.0))
-                                                            .text_xs()
-                                                            .font_family(mono.clone())
-                                                            .text_color(muted)
-                                                            .child(format!("{:>4}", vis_idx + 1)),
-                                                    )
-                                                    .child(lvl_tag.xsmall().child(lvl_text))
-                                                    .child(
-                                                        div()
-                                                            .flex_1()
-                                                            .text_xs()
-                                                            .font_family(mono.clone())
-                                                            .text_color(fg)
-                                                            .truncate()
-                                                            .child(rec.line.clone()),
-                                                    ),
-                                            )
-                                        })
-                                        .collect()
-                                },
-                            )
-                            .track_scroll(&self.scroll_handle)
-                            .size_full(),
-                        )
-                    }),
-            )
+            .child(self.render_stream_tabs_and_severity(stream, severity, cx))
+            .child(self.render_controls_bar(follow, count, total_count, cx))
+            .child(self.render_virtual_log_box(count, &log_path, layout.platform.as_str(), cx))
             .when_some(self.selected_line.clone(), |this, line| {
-                let line_copy = line.clone();
-                let store_banner = self.store.clone();
-                this.child(
-                    h_flex()
-                        .w_full()
-                        .p_3()
-                        .gap_3()
-                        .items_start()
-                        .justify_between()
-                        .rounded(cx.theme().radius)
-                        .bg(surface_card_bg(cx))
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .font_family(mono_font.clone())
-                                .text_color(cx.theme().foreground)
-                                .child(line),
-                        )
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .child(
-                                    Button::new("log-copy-line")
-                                        .outline()
-                                        .xsmall()
-                                        .icon(IconName::Copy)
-                                        .label("Copy Line")
-                                        .on_click(move |_, _, cx| {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                                line_copy.to_string(),
-                                            ));
-                                            store_banner.update(cx, |s, cx| {
-                                                s.set_banner(
-                                                    BannerTone::Success,
-                                                    "Copied selected log line",
-                                                    cx,
-                                                );
-                                            });
-                                        }),
-                                )
-                                .child(
-                                    Button::new("log-dismiss-line")
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::Close)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.selected_line = None;
-                                            cx.notify();
-                                        })),
-                                ),
-                        ),
-                )
+                this.child(self.render_selected_line_panel(line, cx))
             })
             .child(
                 h_flex()
@@ -484,7 +421,95 @@ impl Render for LogsView {
                     .child(SharedString::from(format!(
                         "Showing {count} of {total_count} buffered line(s)"
                     )))
-                    .child(SharedString::from(empty_path.display().to_string())),
+                    .child(SharedString::from(log_path.display().to_string())),
             )
     }
+}
+
+fn severity_button(
+    id: &'static str,
+    label: &'static str,
+    target: LogSeverityFilter,
+    current: LogSeverityFilter,
+    store: &Entity<AppStore>,
+) -> Button {
+    let st = store.clone();
+    Button::new(id)
+        .small()
+        .when(current == target, Button::primary)
+        .when(current != target, Button::outline)
+        .label(label)
+        .on_click(move |_, _, cx| {
+            st.update(cx, |s, cx| {
+                s.log_severity = target;
+                cx.notify();
+            });
+        })
+}
+
+fn render_log_rows(
+    this: &LogsView,
+    range: std::ops::Range<usize>,
+    cx: &Context<LogsView>,
+) -> Vec<gpui_kit::Stateful<gpui_kit::Div>> {
+    let indices = this.filtered_indices.clone();
+    let s = this.store.read(cx);
+    let records = s.active_log_records();
+    let mono = cx.theme().mono_font_family.clone();
+    let fg = cx.theme().foreground;
+    let muted = cx.theme().muted_foreground;
+    let hover_bg = subtle_pill_bg(cx);
+    let selected_ref = this.selected_line.clone();
+
+    range
+        .filter_map(|vis_idx| {
+            let rec_idx = *indices.get(vis_idx)?;
+            let rec = records.get(rec_idx)?;
+            let (lvl_text, lvl_tag) = match rec.level {
+                LogLevel::Error => ("ERR", Tag::danger()),
+                LogLevel::Warn => ("WRN", Tag::warning()),
+                LogLevel::Info => ("INF", Tag::info()),
+                LogLevel::Debug => ("DBG", Tag::secondary()),
+                LogLevel::Other => ("LOG", Tag::secondary()),
+            };
+            let is_selected = selected_ref.as_ref() == Some(&rec.line);
+            let line_for_click = rec.line.clone();
+
+            Some(
+                h_flex()
+                    .id(SharedString::from(format!("log-row-{rec_idx}")))
+                    .w_full()
+                    .h(px(26.0))
+                    .px_2()
+                    .gap_2()
+                    .items_center()
+                    .rounded(cx.theme().radius)
+                    .cursor_pointer()
+                    .when(is_selected, |d| d.bg(hover_bg))
+                    .hover(|d| d.bg(hover_bg))
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.selected_line = Some(line_for_click.clone());
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .w(px(42.0))
+                            .text_xs()
+                            .font_family(mono.clone())
+                            .text_color(muted)
+                            .child(format!("{:>4}", vis_idx + 1)),
+                    )
+                    .child(lvl_tag.xsmall().child(lvl_text))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_xs()
+                            .font_family(mono.clone())
+                            .text_color(fg)
+                            .truncate()
+                            .child(rec.line.clone()),
+                    ),
+            )
+        })
+        .collect()
 }
