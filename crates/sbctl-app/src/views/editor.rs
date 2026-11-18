@@ -76,9 +76,8 @@ impl ProfileEditorPanel {
             in_outbound_type: cx.new(|cx| InputState::new(window, cx).placeholder("vless")),
             in_server: cx.new(|cx| InputState::new(window, cx).placeholder("vpn.example.com")),
             in_server_port: cx.new(|cx| InputState::new(window, cx).placeholder(port_ph)),
-            in_uuid: cx.new(|cx| InputState::new(window, cx).placeholder("UUID for vless/vmess")),
-            in_password: cx
-                .new(|cx| InputState::new(window, cx).placeholder("Password (trojan/ss)")),
+            in_uuid: cx.new(|cx| InputState::new(window, cx).placeholder("UUID")),
+            in_password: cx.new(|cx| InputState::new(window, cx).placeholder("Password")),
             in_flow: cx.new(|cx| InputState::new(window, cx).placeholder("xtls-rprx-vision")),
             in_server_name: cx
                 .new(|cx| InputState::new(window, cx).placeholder("TLS / Reality SNI")),
@@ -87,8 +86,7 @@ impl ProfileEditorPanel {
                 .new(|cx| InputState::new(window, cx).placeholder("Reality public key")),
             in_reality_short_id: cx
                 .new(|cx| InputState::new(window, cx).placeholder("Reality short ID")),
-            in_tun_iface: cx
-                .new(|cx| InputState::new(window, cx).placeholder("Auto (utun / singbox_tun)")),
+            in_tun_iface: cx.new(|cx| InputState::new(window, cx).placeholder("OS default")),
             in_tun_stack: cx.new(|cx| InputState::new(window, cx).placeholder("gvisor")),
             in_tun_mtu: cx.new(|cx| InputState::new(window, cx).placeholder(mtu_ph)),
             in_log_level: cx.new(|cx| InputState::new(window, cx).placeholder("info")),
@@ -379,13 +377,13 @@ impl ProfileEditorPanel {
                 div()
                     .text_xs()
                     .text_color(cx.theme().warning)
-                    .child("This profile changed on disk outside the editor."),
+                    .child("Modified on disk outside sbctl."),
             )
             .child(
                 Button::new("editor-reload-disk")
                     .outline()
                     .xsmall()
-                    .label("Reload from Disk")
+                    .label("Reload")
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.force_reload_selected(window, cx);
                         cx.notify();
@@ -408,12 +406,12 @@ impl ProfileEditorPanel {
             EditorValidationState::Validating => (
                 cx.theme().border,
                 cx.theme().muted_foreground,
-                "Running sing-box check...".to_string(),
+                "Checking config...".to_string(),
             ),
             EditorValidationState::Valid => (
                 cx.theme().success,
                 cx.theme().success,
-                "sing-box check passed".to_string(),
+                "Config valid.".to_string(),
             ),
             EditorValidationState::Invalid(msg) => {
                 (cx.theme().danger, cx.theme().danger, msg.clone())
@@ -440,7 +438,7 @@ impl ProfileEditorPanel {
                     Button::new("editor-save-draft-anyway")
                         .outline()
                         .xsmall()
-                        .label("Save Draft Anyway...")
+                        .label("Save Draft...")
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let name = profile_for_draft.clone();
                             let Ok(content) = this.collect_effective_content(window, cx) else {
@@ -477,8 +475,8 @@ impl ProfileEditorPanel {
                                 EditorTab::Guided => 0,
                                 EditorTab::Json => 1,
                             })
-                            .child(Tab::new().label("Guided Setup"))
-                            .child(Tab::new().label("JSON Editor"))
+                            .child(Tab::new().label("Form"))
+                            .child(Tab::new().label("JSON"))
                             .on_click(cx.listener(|this, idx, window, cx| {
                                 if *idx == 0 {
                                     let raw = this.json_editor.read(cx).value().to_string();
@@ -579,55 +577,35 @@ impl ProfileEditorPanel {
             .bg(surface_card_bg(cx))
             .border_1()
             .border_color(cx.theme().border)
-            .child(section_heading("Proxy Server & Credentials", cx))
+            .child(section_heading("Outbound", cx))
             .child(form_row_2(
-                labeled_input(
-                    "Outbound Type (vless, trojan, vmess, shadowsocks)",
-                    &self.in_outbound_type,
-                    cx,
-                ),
-                labeled_input(
-                    "Log Level (info, warn, error, debug)",
-                    &self.in_log_level,
-                    cx,
-                ),
+                labeled_input("Protocol", &self.in_outbound_type, cx),
+                labeled_input("Log level", &self.in_log_level, cx),
             ))
             .child(form_row_2(
-                labeled_input("Server Address", &self.in_server, cx),
-                labeled_input("Server Port", &self.in_server_port, cx),
+                labeled_input("Server", &self.in_server, cx),
+                labeled_input("Port", &self.in_server_port, cx),
             ))
             .child(form_row_2(
                 labeled_input("UUID", &self.in_uuid, cx),
                 labeled_input("Password", &self.in_password, cx),
             ))
-            .child(labeled_input(
-                "Flow (for example xtls-rprx-vision)",
-                &self.in_flow,
-                cx,
-            ))
-            .child(section_heading("TLS & Reality Transport", cx))
+            .child(labeled_input("Flow", &self.in_flow, cx))
+            .child(section_heading("TLS and Reality", cx))
             .child(self.render_tls_switches(cx))
             .child(form_row_2(
-                labeled_input("Server Name (SNI)", &self.in_server_name, cx),
-                labeled_input(
-                    "uTLS Fingerprint (chrome, firefox, safari)",
-                    &self.in_utls_fp,
-                    cx,
-                ),
+                labeled_input("Server name", &self.in_server_name, cx),
+                labeled_input("uTLS fingerprint", &self.in_utls_fp, cx),
             ))
             .child(form_row_2(
-                labeled_input("Reality Public Key", &self.in_reality_pubkey, cx),
-                labeled_input("Reality Short ID", &self.in_reality_short_id, cx),
+                labeled_input("Reality public key", &self.in_reality_pubkey, cx),
+                labeled_input("Reality short ID", &self.in_reality_short_id, cx),
             ))
-            .child(section_heading("TUN & Routing", cx))
-            .child(labeled_input(
-                "TUN Interface Name (leave empty for OS default)",
-                &self.in_tun_iface,
-                cx,
-            ))
+            .child(section_heading("TUN and routing", cx))
+            .child(labeled_input("Interface", &self.in_tun_iface, cx))
             .child(form_row_2(
-                labeled_input("TUN Stack (gvisor, system, mixed)", &self.in_tun_stack, cx),
-                labeled_input("TUN MTU", &self.in_tun_mtu, cx),
+                labeled_input("Stack", &self.in_tun_stack, cx),
+                labeled_input("MTU", &self.in_tun_mtu, cx),
             ))
             .child(self.render_tun_switches(cx))
             .into_any_element()
@@ -641,7 +619,7 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-tls")
                     .checked(self.model.tls_enabled)
-                    .label("TLS enabled")
+                    .label("TLS")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.tls_enabled = *v;
                         cx.notify();
@@ -650,7 +628,7 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-utls")
                     .checked(self.model.utls_enabled)
-                    .label("uTLS enabled")
+                    .label("uTLS")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.utls_enabled = *v;
                         cx.notify();
@@ -659,7 +637,7 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-reality")
                     .checked(self.model.reality_enabled)
-                    .label("Reality enabled")
+                    .label("Reality")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.reality_enabled = *v;
                         cx.notify();
@@ -693,7 +671,7 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-reject-ipv6")
                     .checked(self.model.reject_ipv6)
-                    .label("Reject IPv6 DNS/traffic")
+                    .label("Block IPv6")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.reject_ipv6 = *v;
                         cx.notify();
@@ -731,15 +709,13 @@ impl ProfileEditorPanel {
                     .justify_between()
                     .text_xs()
                     .child(match syntax_status {
-                        Ok(()) => div()
-                            .text_color(cx.theme().success)
-                            .child("Valid JSON syntax"),
+                        Ok(()) => div().text_color(cx.theme().success).child("Valid JSON"),
                         Err(msg) => div().text_color(cx.theme().danger).truncate().child(msg),
                     })
                     .child(
                         div()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Cmd/Ctrl+S to Save"),
+                            .child("Cmd/Ctrl+S to save"),
                     ),
             )
             .into_any_element()
@@ -761,7 +737,7 @@ impl Render for ProfileEditorPanel {
                         .text_sm()
                         .font_semibold()
                         .text_color(cx.theme().foreground)
-                        .child("Select or create a profile to inspect and edit"),
+                        .child("Select or create a profile."),
                 )
                 .into_any_element();
         };
@@ -844,11 +820,15 @@ fn open_save_draft_dialog(
         let st = store.clone();
         alert
             .confirm()
-            .title(format!("Save draft {n}?"))
-            .description("sing-box check did not pass for this inactive profile. Save it as a draft anyway so you can finish editing or installing sing-box later?")
+            .title(format!("Save {n} as draft?"))
+            .description(
+                "Validation failed. Inactive drafts can be saved now and fixed before connecting.",
+            )
             .ok_text("Save Draft")
             .on_ok(move |_, _, cx| {
-                st.update(cx, |s, cx| s.save_profile_content(n.clone(), body.clone(), true, cx));
+                st.update(cx, |s, cx| {
+                    s.save_profile_content(n.clone(), body.clone(), true, cx)
+                });
                 true
             })
     });
@@ -865,7 +845,7 @@ fn render_placeholder_strip(live_todos: Vec<String>, cx: &App) -> impl IntoEleme
                 .text_xs()
                 .font_semibold()
                 .text_color(cx.theme().warning)
-                .child("Remaining placeholders:"),
+                .child("Placeholders:"),
         )
         .children(
             live_todos

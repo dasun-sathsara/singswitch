@@ -52,11 +52,11 @@ pub enum ActivationPhase {
 impl ActivationPhase {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Validating => "Validating profile...",
-            Self::UpdatingConfig => "Updating active configuration...",
-            Self::RestartingService => "Restarting sing-box service...",
-            Self::VerifyingHealth => "Confirming tunnel stays up...",
-            Self::RollingBack => "Tunnel failed health check; rolling back...",
+            Self::Validating => "Validating...",
+            Self::UpdatingConfig => "Updating config...",
+            Self::RestartingService => "Restarting service...",
+            Self::VerifyingHealth => "Checking tunnel...",
+            Self::RollingBack => "Rolling back...",
         }
     }
 }

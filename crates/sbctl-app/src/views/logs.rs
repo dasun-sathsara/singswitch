@@ -43,7 +43,7 @@ impl LogsView {
     pub fn new(store: Entity<AppStore>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Filter log lines...")
+                .placeholder("Filter logs...")
                 .default_value(store.read(cx).log_search_query.clone())
         });
 
@@ -129,8 +129,8 @@ impl LogsView {
                                 LogStreamKind::Error => 0,
                                 LogStreamKind::Access => 1,
                             })
-                            .child(Tab::new().label("Error Log"))
-                            .child(Tab::new().label("Access Log"))
+                            .child(Tab::new().label("Error"))
+                            .child(Tab::new().label("Access"))
                             .on_click(cx.listener(move |this, idx, _, cx| {
                                 let next = if *idx == 1 {
                                     LogStreamKind::Access
@@ -142,7 +142,7 @@ impl LogsView {
                             })),
                     )
                     .child(if follow {
-                        Tag::success().xsmall().child("Streaming")
+                        Tag::success().xsmall().child("Live")
                     } else {
                         Tag::secondary().xsmall().child("Paused")
                     })
@@ -263,11 +263,7 @@ impl LogsView {
                         };
                         cx.write_to_clipboard(ClipboardItem::new_string(joined));
                         store_copy.update(cx, |s, cx| {
-                            s.set_banner(
-                                BannerTone::Success,
-                                "Copied visible log lines to clipboard",
-                                cx,
-                            );
+                            s.set_banner(BannerTone::Success, "Copied logs", cx);
                         });
                     }),
             )
@@ -277,10 +273,12 @@ impl LogsView {
         &self,
         count: usize,
         log_path: &std::path::Path,
-        platform_str: &'static str,
+        log_error: Option<String>,
+        is_busy: bool,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let mono_font = cx.theme().mono_font_family.clone();
+        let store_perms = self.store.clone();
         div()
             .flex_1()
             .w_full()
@@ -302,19 +300,35 @@ impl LogsView {
                                 .text_sm()
                                 .font_semibold()
                                 .text_color(cx.theme().foreground)
-                                .child("No log lines to display"),
+                                .child(if log_error.is_some() {
+                                    "Cannot read log file"
+                                } else {
+                                    "No log entries"
+                                }),
                         )
                         .child(
                             div()
                                 .text_xs()
                                 .font_family(mono_font)
                                 .text_color(cx.theme().muted_foreground)
-                                .child(format!(
-                                    "Watched log file: {} (platform: {})",
-                                    log_path.display(),
-                                    platform_str
-                                )),
-                        ),
+                                .child(
+                                    log_error
+                                        .clone()
+                                        .unwrap_or_else(|| log_path.display().to_string()),
+                                ),
+                        )
+                        .when(log_error.is_some() && cfg!(target_os = "macos"), |v| {
+                            v.child(
+                                Button::new("logs-fix-perms")
+                                    .outline()
+                                    .small()
+                                    .label("Fix Permissions...")
+                                    .disabled(is_busy)
+                                    .on_click(move |_, _, cx| {
+                                        store_perms.update(cx, AppStore::repair_macos_logs);
+                                    }),
+                            )
+                        }),
                 )
             })
             .when(count > 0, |this| {
@@ -366,17 +380,13 @@ impl LogsView {
                             .outline()
                             .xsmall()
                             .icon(IconName::Copy)
-                            .label("Copy Line")
+                            .label("Copy")
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(
                                     line_copy.to_string(),
                                 ));
                                 store_banner.update(cx, |s, cx| {
-                                    s.set_banner(
-                                        BannerTone::Success,
-                                        "Copied selected log line",
-                                        cx,
-                                    );
+                                    s.set_banner(BannerTone::Success, "Copied line", cx);
                                 });
                             }),
                     )
@@ -396,7 +406,16 @@ impl LogsView {
 
 impl Render for LogsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (stream, follow, severity, layout, log_path, total_count, (errors, warnings)) = {
+        let (
+            stream,
+            follow,
+            severity,
+            log_path,
+            log_error,
+            is_busy,
+            total_count,
+            (errors, warnings),
+        ) = {
             let s = self.store.read(cx);
             self.ensure_filter_cache(s);
             let layout = s.layout();
@@ -408,8 +427,9 @@ impl Render for LogsView {
                 s.log_stream,
                 s.log_follow,
                 s.log_severity,
-                layout,
                 path,
+                s.active_log_error().map(str::to_owned),
+                s.busy_phase.is_some(),
                 s.active_log_records().len(),
                 s.log_counts(),
             )
@@ -432,7 +452,7 @@ impl Render for LogsView {
                 ),
             )
             .child(self.render_controls_bar(follow, count, total_count, cx))
-            .child(self.render_virtual_log_box(count, &log_path, layout.platform.as_str(), cx))
+            .child(self.render_virtual_log_box(count, &log_path, log_error, is_busy, cx))
             .when_some(self.selected_line.clone(), |this, line| {
                 this.child(self.render_selected_line_panel(line, cx))
             })
@@ -443,7 +463,8 @@ impl Render for LogsView {
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(SharedString::from(format!(
-                        "Showing {count} of {total_count} buffered line(s)"
+                        "{count} of {}",
+                        crate::state::count_noun(total_count, "line", "lines")
                     )))
                     .child(SharedString::from(log_path.display().to_string())),
             )

@@ -18,6 +18,7 @@ use crate::service::{Manager, RunState, is_sudo_refusal};
 pub enum FixAction {
     CreateProfilesDir,
     RepairMacosSudoers,
+    RepairMacosLogs,
     RepairWindowsHelper,
     OpenProfiles,
 }
@@ -83,6 +84,7 @@ pub fn run_doctor_checks(
 
     checks.push(check_service(layout, manager));
     checks.push(check_active_config(layout, activator));
+    checks.push(check_logs(layout));
     checks.push(check_concurrency());
     checks
 }
@@ -102,8 +104,7 @@ fn check_singbox(checker: &dyn Checker) -> DiagnosticCheck {
             ok: false,
             warning: false,
             detail: "not found on PATH or standard install directories".to_string(),
-            hint: "install sing-box (Homebrew on macOS, WinGet on Windows) or run the installer"
-                .to_string(),
+            hint: "install sing-box via Homebrew or WinGet, or run the installer".to_string(),
             fix: None,
         },
     }
@@ -152,7 +153,7 @@ fn check_profiles_dir(layout: &Layout) -> DiagnosticCheck {
             name: "profiles".to_string(),
             ok: true,
             warning: true,
-            detail: format!("{detail} ({incomplete} still have placeholders)"),
+            detail: format!("{detail}, {incomplete} incomplete"),
             hint: "replace all TODO_ placeholders before activating".to_string(),
             fix: Some(FixAction::OpenProfiles),
         }
@@ -218,7 +219,7 @@ fn check_windows_helper_service(layout: &Layout, runner: &dyn Runner) -> Diagnos
             name: "helper service".to_string(),
             ok: true,
             warning: false,
-            detail: format!("{HELPER_SERVICE_NAME} pipe ready (no UAC needed for switches)"),
+            detail: format!("{HELPER_SERVICE_NAME} pipe ready"),
             hint: String::new(),
             fix: None,
         };
@@ -239,7 +240,7 @@ fn check_windows_helper_service(layout: &Layout, runner: &dyn Runner) -> Diagnos
             name: "helper service".to_string(),
             ok: true,
             warning: true,
-            detail: format!("{HELPER_SERVICE_NAME} is not running; UAC prompt will be used"),
+            detail: format!("{HELPER_SERVICE_NAME} is stopped; switches prompt for UAC"),
             hint: "run scripts\\install.ps1 as Administrator for passwordless tray switches"
                 .to_string(),
             fix: Some(FixAction::RepairWindowsHelper),
@@ -261,7 +262,7 @@ fn check_service(layout: &Layout, manager: &dyn Manager) -> DiagnosticCheck {
             if let Some(pid) = health.pid
                 && pid > 0
             {
-                detail.push_str(&format!(" (pid {pid})"));
+                detail.push_str(&format!(", pid {pid}"));
             }
             DiagnosticCheck {
                 name: "service".to_string(),
@@ -335,12 +336,54 @@ fn check_active_config(layout: &Layout, activator: &dyn Activator) -> Diagnostic
     }
 }
 
+fn check_logs(layout: &Layout) -> DiagnosticCheck {
+    match std::fs::File::open(&layout.error_log_path) {
+        Ok(_) => DiagnosticCheck {
+            name: "logs".to_string(),
+            ok: true,
+            warning: false,
+            detail: layout.error_log_path.display().to_string(),
+            hint: String::new(),
+            fix: None,
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => DiagnosticCheck {
+            name: "logs".to_string(),
+            ok: true,
+            warning: false,
+            detail: format!("{} not created yet", layout.error_log_path.display()),
+            hint: String::new(),
+            fix: None,
+        },
+        Err(err)
+            if err.kind() == std::io::ErrorKind::PermissionDenied
+                && layout.platform == PlatformKind::Darwin =>
+        {
+            DiagnosticCheck {
+                name: "logs".to_string(),
+                ok: true,
+                warning: true,
+                detail: format!("cannot read {}", layout.error_log_path.display()),
+                hint: "grant read access with: sudo chmod 755 /var/log/sing-box && sudo chmod 644 /var/log/sing-box/*.log".to_string(),
+                fix: Some(FixAction::RepairMacosLogs),
+            }
+        }
+        Err(err) => DiagnosticCheck {
+            name: "logs".to_string(),
+            ok: true,
+            warning: true,
+            detail: format!("cannot read {}: {err}", layout.error_log_path.display()),
+            hint: String::new(),
+            fix: None,
+        },
+    }
+}
+
 fn check_concurrency() -> DiagnosticCheck {
     DiagnosticCheck {
         name: "concurrency lock".to_string(),
         ok: true,
         warning: false,
-        detail: "advisory file lock serializes switches across GUI, tray, and CLI".to_string(),
+        detail: "sbctl.lock serializes profile switches".to_string(),
         hint: String::new(),
         fix: None,
     }
@@ -377,6 +420,32 @@ pub fn diagnose_active(
 pub fn macos_sudoers_install_command(layout: &Layout, user: &str) -> crate::error::Result<String> {
     let body = macos_sudoers_root_script(layout, user)?;
     Ok(format!("sudo sh -c '{}'", body.replace('\'', "'\"'\"'")))
+}
+
+/// Generate a shell command granting console read access to `/var/log/sing-box` on macOS.
+pub fn macos_logs_root_script(layout: &Layout) -> Option<String> {
+    if layout.platform != PlatformKind::Darwin {
+        return None;
+    }
+    let dir = layout
+        .error_log_path
+        .parent()?
+        .display()
+        .to_string()
+        .replace('\'', "'\"'\"'");
+    let err = layout
+        .error_log_path
+        .display()
+        .to_string()
+        .replace('\'', "'\"'\"'");
+    let acc = layout
+        .access_log_path
+        .display()
+        .to_string()
+        .replace('\'', "'\"'\"'");
+    Some(format!(
+        "/bin/chmod 0755 '{dir}' && /bin/chmod 0644 '{err}' '{acc}' 2>/dev/null || /bin/chmod 0755 '{dir}'"
+    ))
 }
 
 /// Generate a self-contained root shell script suitable for `osascript ... with administrator privileges`

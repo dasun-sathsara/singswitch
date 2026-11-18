@@ -81,9 +81,7 @@ fn render_appearance_card(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(
-                                    "Choose restrained light, dark, or match system appearance.",
-                                ),
+                                .child("Light, dark, or system theme."),
                         ),
                 )
                 .child(
@@ -161,12 +159,12 @@ fn render_behavior_card(
                 .text_base()
                 .font_semibold()
                 .text_color(cx.theme().foreground)
-                .child("Desktop & Tray"),
+                .child("Desktop and tray"),
         )
         .child(setting_switch_row(
             "set-launch-login",
             "Launch at login",
-            "Start sbctl in the background at user login using --background.",
+            "Start sbctl in the tray when you sign in.",
             settings.launch_at_login,
             false,
             move |checked, _, cx| {
@@ -176,8 +174,8 @@ fn render_behavior_card(
         ))
         .child(setting_switch_row(
             "set-menubar-title",
-            "Show active profile in macOS menu bar",
-            "Display the running profile name beside the menu bar icon on macOS.",
+            "Profile name in menu bar",
+            "Show the active profile next to the macOS menu bar icon.",
             settings.show_profile_in_menubar,
             !cfg!(target_os = "macos"),
             move |checked, _, cx| {
@@ -187,8 +185,8 @@ fn render_behavior_card(
         ))
         .child(setting_switch_row(
             "set-auto-ip",
-            "Auto-refresh public IP",
-            "Query ipinfo.io after connecting or disconnecting.",
+            "Refresh IP on switch",
+            "Fetch public IP from ipinfo.io after connecting or disconnecting.",
             settings.auto_refresh_ip,
             false,
             move |checked, _, cx| {
@@ -198,8 +196,8 @@ fn render_behavior_card(
         ))
         .child(setting_switch_row(
             "set-notifications",
-            "Desktop notifications",
-            "Show native macOS or Windows alerts on profile switches and failures.",
+            "Notifications",
+            "Show system alerts when profiles switch or fail.",
             settings.desktop_notifications,
             false,
             move |checked, _, cx| {
@@ -220,13 +218,13 @@ fn render_behavior_card(
                                 .text_sm()
                                 .font_medium()
                                 .text_color(cx.theme().foreground)
-                                .child("First-run setup guide"),
+                                .child("Setup guide"),
                         )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Re-open the setup checklist card on the Dashboard."),
+                                .child("Show the first-run setup card on the dashboard."),
                         ),
                 )
                 .child(
@@ -323,7 +321,7 @@ fn render_paths_card(
                 .text_base()
                 .font_semibold()
                 .text_color(cx.theme().foreground)
-                .child("Resolved System Paths"),
+                .child("System paths"),
         )
         .children(paths.into_iter().enumerate().map(|(ix, (label, value))| {
             let val_copy = value.clone();
@@ -357,7 +355,7 @@ fn render_paths_card(
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(val_copy.clone()));
                             store_copy.update(cx, |s, cx| {
-                                s.set_banner(BannerTone::Success, "Copied path to clipboard", cx);
+                                s.set_banner(BannerTone::Success, "Copied path", cx);
                             });
                         }),
                 )

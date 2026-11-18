@@ -32,7 +32,7 @@ impl ProfilesView {
         let editor = cx.new(|cx| ProfileEditorPanel::new(store.clone(), window, cx));
         let search_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Search name or server...")
+                .placeholder("Filter profiles...")
                 .default_value(store.read(cx).profile_search_query.clone())
         });
 
@@ -78,7 +78,7 @@ impl ProfilesView {
             let store_for_ok = store.clone();
 
             dialog
-                .title("New Profile")
+                .title("New profile")
                 .width(px(420.0))
                 .child(
                     v_flex()
@@ -87,7 +87,7 @@ impl ProfilesView {
                             div()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Create a new sing-box profile from the embedded VLESS+Reality skeleton."),
+                                .child("Create a profile from the VLESS + Reality template."),
                         )
                         .child(Input::new(&name_input).cleanable(true)),
                 )
@@ -143,7 +143,7 @@ impl ProfilesView {
             let s_ok = store.clone();
 
             dialog
-                .title("Import Remote Profile")
+                .title("Import profile")
                 .width(px(480.0))
                 .child(
                     v_flex()
@@ -152,7 +152,9 @@ impl ProfilesView {
                             div()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Download raw sing-box JSON from an HTTP(S) URL and validate before saving."),
+                                .child(
+                                    "Fetch a sing-box JSON config over HTTP(S) and validate it.",
+                                ),
                         )
                         .child(Input::new(&name_input).cleanable(true))
                         .child(Input::new(&url_input).cleanable(true)),
@@ -171,7 +173,7 @@ impl ProfilesView {
                         .child(
                             Button::new("import-submit")
                                 .primary()
-                                .label("Download & Import")
+                                .label("Import")
                                 .on_click(move |_, window, cx| {
                                     let name = n_ok.read(cx).value().trim().to_string();
                                     let url = u_ok.read(cx).value().trim().to_string();
@@ -179,7 +181,7 @@ impl ProfilesView {
                                         s_ok.update(cx, |s, cx| {
                                             s.set_banner(
                                                 BannerTone::Warning,
-                                                "Enter both a profile name and URL",
+                                                "Enter a profile name and URL.",
                                                 cx,
                                             );
                                         });
@@ -246,7 +248,7 @@ impl ProfilesView {
                             .outline()
                             .small()
                             .icon(IconName::ExternalLink)
-                            .label("Import URL")
+                            .label("Import")
                             .disabled(is_busy || init_err)
                             .on_click(move |_, window, cx| {
                                 Self::open_import_url_dialog(store_pull.clone(), window, cx);
@@ -441,7 +443,7 @@ fn render_profile_detail_header(
                             t.child(Tag::success().small().child("Connected"))
                         })
                         .when(!ready, |t| {
-                            t.child(Tag::warning().small().child("Setup required"))
+                            t.child(Tag::warning().small().child("Needs setup"))
                         }),
                 )
                 .when_some(prof.source_url.clone(), |t, url| {
@@ -518,13 +520,9 @@ fn open_delete_dialog(
         let n_ok = name.clone();
         let s_ok = store.clone();
         let desc = if is_connected {
-            format!(
-                "Profile {name} is currently active and running. Deleting it will stop sing-box first."
-            )
+            format!("{name} is running. Deleting it stops sing-box first.")
         } else {
-            format!(
-                "Delete profile {name}? This removes its JSON file and any .url sidecar permanently."
-            )
+            format!("Delete {name}.json and any saved source URL?")
         };
         alert
             .confirm()

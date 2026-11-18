@@ -67,9 +67,10 @@ impl Health {
         if let (Some(base_r), Some(curr_r)) = (baseline.restarts, self.restarts)
             && curr_r > base_r
         {
+            let count = curr_r - base_r;
+            let noun = if count == 1 { "time" } else { "times" };
             return Some(format!(
-                "service restarted {} time(s) while starting up",
-                curr_r - base_r
+                "service restarted {count} {noun} while starting up"
             ));
         }
         if let (Some(base_pid), Some(curr_pid)) = (baseline.pid, self.pid)

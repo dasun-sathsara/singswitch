@@ -114,6 +114,8 @@ pub struct AppStore {
     pub profile_search_query: String,
     pub error_logs: Vec<LogRecord>,
     pub access_logs: Vec<LogRecord>,
+    pub error_log_err: Option<String>,
+    pub access_log_err: Option<String>,
     error_log_offset: u64,
     access_log_offset: u64,
     was_running_expected: bool,
@@ -198,6 +200,8 @@ impl AppStore {
             profile_search_query: String::new(),
             error_logs: Vec::new(),
             access_logs: Vec::new(),
+            error_log_err: None,
+            access_log_err: None,
             error_log_offset: 0,
             access_log_offset: 0,
             was_running_expected: initially_running,
@@ -236,16 +240,16 @@ impl AppStore {
 
     pub fn tray_tooltip(&self) -> String {
         if let Some(phase) = &self.busy_phase {
-            return format!("sbctl - {phase}");
+            return format!("sbctl: {phase}");
         }
         if let Some(broken) = &self.snapshot.broken {
-            return format!("sbctl - {broken}");
+            return format!("sbctl: {broken}");
         }
         match (&self.snapshot.running, &self.snapshot.active) {
-            (true, Some(name)) => format!("sbctl - Connected ({name})"),
-            (true, None) => "sbctl - Connected".to_string(),
-            (false, Some(name)) => format!("sbctl - Disconnected (selected: {name})"),
-            (false, None) => "sbctl - Disconnected".to_string(),
+            (true, Some(name)) => format!("sbctl: Connected to {name}"),
+            (true, None) => "sbctl: Connected".to_string(),
+            (false, Some(name)) => format!("sbctl: {name} selected"),
+            (false, None) => "sbctl: Disconnected".to_string(),
         }
     }
 
@@ -522,11 +526,11 @@ impl AppStore {
                         store.was_running_expected = false;
                         ctrl.notify_error(
                             "sing-box disconnected",
-                            "The sing-box service stopped unexpectedly. Check Logs or Doctor.",
+                            "sing-box stopped unexpectedly. Check Logs or Doctor.",
                         );
                         store.banner = Some((
                             BannerTone::Error,
-                            "sing-box stopped unexpectedly. Inspect Logs or Doctor.".to_string(),
+                            "sing-box stopped unexpectedly. Check Logs or Doctor.".to_string(),
                         ));
                     }
                     cx.notify();
@@ -559,7 +563,7 @@ impl AppStore {
             self.selected_tab = NavTab::Profiles;
             self.set_banner(
                 BannerTone::Warning,
-                "No ready profile available. Create or finish setting up a profile first.",
+                "No ready profile. Create or finish configuring a profile first.",
                 cx,
             );
             return;
@@ -728,7 +732,7 @@ impl AppStore {
         };
 
         self.was_running_expected = false;
-        self.busy_phase = Some("Stopping sing-box service...".to_string());
+        self.busy_phase = Some("Stopping sing-box...".to_string());
         self.banner = None;
         cx.notify();
 
@@ -783,11 +787,7 @@ impl AppStore {
         self.selected_tab = NavTab::Profiles;
         self.editor_validation = None;
         self.restart_file_watcher(cx);
-        self.set_banner(
-            BannerTone::Success,
-            format!("Created profile {name} from skeleton"),
-            cx,
-        );
+        self.set_banner(BannerTone::Success, format!("Created {name}"), cx);
         Ok(())
     }
 
@@ -823,8 +823,7 @@ impl AppStore {
                         store.selected_tab = NavTab::Profiles;
                         store.editor_validation = None;
                         store.restart_file_watcher(cx);
-                        store.banner =
-                            Some((BannerTone::Success, format!("Imported profile {name}")));
+                        store.banner = Some((BannerTone::Success, format!("Imported {name}")));
                     }
                     Err(err) => {
                         store.banner = Some((BannerTone::Error, format!("{err}")));
@@ -865,7 +864,7 @@ impl AppStore {
                 match res {
                     Ok(reloaded) => {
                         let note = if reloaded {
-                            format!("Synced {name} and reloaded active service")
+                            format!("Synced and reloaded {name}")
                         } else {
                             format!("Synced {name}")
                         };
@@ -916,21 +915,17 @@ impl AppStore {
                                 .map(|(n, e)| format!("{n}: {e}"))
                                 .collect::<Vec<_>>()
                                 .join("; ");
+                            let synced = count_noun(report.synced.len(), "profile", "profiles");
                             store.banner = Some((
                                 BannerTone::Warning,
-                                format!(
-                                    "Synced {} profile(s); failed: {details}",
-                                    report.synced.len()
-                                ),
+                                format!("Synced {synced}; failed: {details}"),
                             ));
                         } else if report.synced.is_empty() {
                             store.banner =
                                 Some((BannerTone::Info, "No remote profiles to sync".to_string()));
                         } else {
-                            store.banner = Some((
-                                BannerTone::Success,
-                                format!("Synced {} remote profile(s)", report.synced.len()),
-                            ));
+                            let synced = count_noun(report.synced.len(), "profile", "profiles");
+                            store.banner = Some((BannerTone::Success, format!("Synced {synced}")));
                         }
                     }
                     Err(err) => {
@@ -1023,10 +1018,8 @@ impl AppStore {
                 match res {
                     Ok(()) => {
                         store.editor_validation = Some((name, EditorValidationState::Valid));
-                        store.banner = Some((
-                            BannerTone::Success,
-                            "Current buffer is valid under sing-box check".to_string(),
-                        ));
+                        store.banner =
+                            Some((BannerTone::Success, "Configuration valid".to_string()));
                     }
                     Err(err) => {
                         let msg = format!("{err}");
@@ -1117,10 +1110,7 @@ impl AppStore {
                         store.restart_file_watcher(cx);
                         store.banner = Some((
                             BannerTone::Success,
-                            format!(
-                                "Profiles directory ready at {}",
-                                store.layout().profiles_dir.display()
-                            ),
+                            format!("Created {}", store.layout().profiles_dir.display()),
                         ));
                     }
                     Err(err) => {
@@ -1134,13 +1124,43 @@ impl AppStore {
     }
 
     pub fn repair_macos_sudoers(&mut self, root_script: String, cx: &mut Context<Self>) {
+        self.run_macos_admin_script(
+            "Authorizing sudoers install...",
+            root_script,
+            "Installed /etc/sudoers.d/sbctl",
+            false,
+            cx,
+        );
+    }
+
+    pub fn repair_macos_logs(&mut self, cx: &mut Context<Self>) {
+        let Some(root_script) = sbctl_core::doctor::macos_logs_root_script(&self.layout()) else {
+            return;
+        };
+        self.run_macos_admin_script(
+            "Authorizing log permissions...",
+            root_script,
+            "Updated /var/log/sing-box permissions",
+            true,
+            cx,
+        );
+    }
+
+    fn run_macos_admin_script(
+        &mut self,
+        phase: &'static str,
+        root_script: String,
+        success_msg: &'static str,
+        reload_logs_after: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.busy_phase.is_some() {
             return;
         }
         let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
-        self.busy_phase = Some("Authorizing macOS sudoers install...".to_string());
+        self.busy_phase = Some(phase.to_string());
         cx.notify();
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -1168,10 +1188,10 @@ impl AppStore {
                 }
                 match res {
                     Ok(out) if out.status.success() => {
-                        store.banner = Some((
-                            BannerTone::Success,
-                            "Installed /etc/sudoers.d/sbctl via visudo".to_string(),
-                        ));
+                        if reload_logs_after {
+                            store.reload_logs();
+                        }
+                        store.banner = Some((BannerTone::Success, success_msg.to_string()));
                     }
                     Ok(out) => {
                         let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -1199,7 +1219,7 @@ impl AppStore {
         let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
-        self.busy_phase = Some("Starting Windows helper service...".to_string());
+        self.busy_phase = Some("Starting sbctl-agent...".to_string());
         cx.notify();
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -1224,8 +1244,7 @@ impl AppStore {
                         store.restart_file_watcher(cx);
                         store.banner = Some((
                             BannerTone::Success,
-                            "sbctl-agent helper service and profiles directory are ready"
-                                .to_string(),
+                            "sbctl-agent and profiles directory ready".to_string(),
                         ));
                     }
                     Err(err) => {
@@ -1301,14 +1320,18 @@ impl AppStore {
         self.error_log_offset = 0;
         self.access_log_offset = 0;
 
-        if let Ok((lines, off)) = read_tail_lines(&layout.error_log_path, INITIAL_LOG_TAIL) {
-            self.error_log_offset = off;
-            self.error_logs = lines.into_iter().map(into_log_record).collect();
-        }
-        if let Ok((lines, off)) = read_tail_lines(&layout.access_log_path, INITIAL_LOG_TAIL) {
-            self.access_log_offset = off;
-            self.access_logs = lines.into_iter().map(into_log_record).collect();
-        }
+        load_tail_stream(
+            &layout.error_log_path,
+            &mut self.error_logs,
+            &mut self.error_log_offset,
+            &mut self.error_log_err,
+        );
+        load_tail_stream(
+            &layout.access_log_path,
+            &mut self.access_logs,
+            &mut self.access_log_offset,
+            &mut self.access_log_err,
+        );
         self.log_revision = self.log_revision.wrapping_add(1);
     }
 
@@ -1319,28 +1342,41 @@ impl AppStore {
         self.log_poll_in_flight = true;
 
         let layout = self.layout();
+        let err_path = layout.error_log_path.clone();
+        let acc_path = layout.access_log_path.clone();
         let err_off = self.error_log_offset;
         let acc_off = self.access_log_offset;
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let (err_res, acc_res) = cx
                 .background_executor()
-                .spawn(async move {
-                    (
-                        read_appended_lines(&layout.error_log_path, err_off),
-                        read_appended_lines(&layout.access_log_path, acc_off),
-                    )
+                .spawn({
+                    let err_path = err_path.clone();
+                    let acc_path = acc_path.clone();
+                    async move {
+                        (
+                            read_appended_lines(&err_path, err_off),
+                            read_appended_lines(&acc_path, acc_off),
+                        )
+                    }
                 })
                 .await;
 
             let _ = this.update(cx, |store, cx| {
                 store.log_poll_in_flight = false;
                 let mut changed = false;
-                changed |=
-                    apply_log_delta(&mut store.error_logs, &mut store.error_log_offset, err_res);
+                changed |= apply_log_delta(
+                    &mut store.error_logs,
+                    &mut store.error_log_offset,
+                    &mut store.error_log_err,
+                    &err_path,
+                    err_res,
+                );
                 changed |= apply_log_delta(
                     &mut store.access_logs,
                     &mut store.access_log_offset,
+                    &mut store.access_log_err,
+                    &acc_path,
                     acc_res,
                 );
                 if changed {
@@ -1356,6 +1392,13 @@ impl AppStore {
         match self.log_stream {
             LogStreamKind::Error => &self.error_logs,
             LogStreamKind::Access => &self.access_logs,
+        }
+    }
+
+    pub fn active_log_error(&self) -> Option<&str> {
+        match self.log_stream {
+            LogStreamKind::Error => self.error_log_err.as_deref(),
+            LogStreamKind::Access => self.access_log_err.as_deref(),
         }
     }
 
@@ -1516,15 +1559,51 @@ fn merge_watch_kinds(a: WatchEventKind, b: WatchEventKind) -> WatchEventKind {
     if a == b { a } else { WatchEventKind::Both }
 }
 
+fn format_log_err(path: &Path, err: &std::io::Error) -> Option<String> {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        None
+    } else {
+        Some(format!("{}: {err}", path.display()))
+    }
+}
+
+fn load_tail_stream(
+    path: &Path,
+    buf: &mut Vec<LogRecord>,
+    offset: &mut u64,
+    err_slot: &mut Option<String>,
+) {
+    match read_tail_lines(path, INITIAL_LOG_TAIL) {
+        Ok((lines, off)) => {
+            *offset = off;
+            *buf = lines.into_iter().map(into_log_record).collect();
+            *err_slot = None;
+        }
+        Err(err) => {
+            *err_slot = format_log_err(path, &err);
+        }
+    }
+}
+
 fn apply_log_delta(
     buf: &mut Vec<LogRecord>,
     offset: &mut u64,
+    err_slot: &mut Option<String>,
+    path: &Path,
     res: std::io::Result<(Vec<String>, u64, bool)>,
 ) -> bool {
-    let Ok((lines, new_off, truncated)) = res else {
-        return false;
+    let (lines, new_off, truncated) = match res {
+        Ok(tuple) => tuple,
+        Err(err) => {
+            let next_err = format_log_err(path, &err);
+            if *err_slot != next_err {
+                *err_slot = next_err;
+                return true;
+            }
+            return false;
+        }
     };
-    let mut changed = false;
+    let mut changed = err_slot.take().is_some();
     if truncated || new_off < *offset {
         buf.clear();
         changed = true;
@@ -1553,4 +1632,8 @@ fn push_bounded_logs(buf: &mut Vec<LogRecord>, lines: Vec<String>) {
         let overflow = buf.len() - MAX_LOG_ENTRIES;
         buf.drain(..overflow);
     }
+}
+
+pub(crate) fn count_noun(n: usize, singular: &str, plural: &str) -> String {
+    format!("{n} {}", if n == 1 { singular } else { plural })
 }

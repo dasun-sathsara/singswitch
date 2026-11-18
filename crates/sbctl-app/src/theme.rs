@@ -95,7 +95,7 @@ impl UiSettings {
     }
 }
 
-/// Apply the selected theme preference with restrained porcelain-light or slate-dark accents.
+/// Apply the selected light, dark, or system theme.
 pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut App) {
     let appearance = window
         .as_ref()

@@ -693,11 +693,12 @@ fn cmd_sync(
         }
     }
     if !report.failed.is_empty() {
-        return Err(SbctlError::general(format!(
-            "{} profile(s) failed to sync",
-            report.failed.len()
-        ))
-        .with_hint("inspect the service output with: sbctl logs"));
+        let count = report.failed.len();
+        let noun = if count == 1 { "profile" } else { "profiles" };
+        return Err(
+            SbctlError::general(format!("{count} {noun} failed to sync"))
+                .with_hint("inspect the service output with: sbctl logs"),
+        );
     }
     Ok(())
 }

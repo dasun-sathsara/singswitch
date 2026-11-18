@@ -141,7 +141,7 @@ impl DashboardView {
                     .text_color(cx.theme().muted_foreground)
                     .child(
                         snap.status_view.server.clone().unwrap_or_else(|| {
-                            "Select a ready profile below to connect".to_string()
+                            "Pick a ready profile below to connect.".to_string()
                         }),
                     ),
             )
@@ -180,7 +180,7 @@ impl DashboardView {
                         .outline()
                         .small()
                         .icon(IconName::RefreshCw)
-                        .label("Sync Remote")
+                        .label("Sync")
                         .disabled(is_busy)
                         .on_click(move |_, _, cx| {
                             store_sync.update(cx, AppStore::sync_all);
@@ -250,7 +250,7 @@ impl DashboardView {
                                     store_copy_ip.update(cx, |s, cx| {
                                         s.set_banner(
                                             BannerTone::Success,
-                                            format!("Copied {ip_str} to clipboard"),
+                                            format!("Copied {ip_str}"),
                                             cx,
                                         );
                                     });
@@ -262,7 +262,7 @@ impl DashboardView {
                             .outline()
                             .small()
                             .icon(IconName::RefreshCw)
-                            .label("Refresh IP")
+                            .label("Refresh")
                             .disabled(ip_loading)
                             .on_click(move |_, _, cx| {
                                 store_ip.update(cx, AppStore::refresh_ip);
@@ -299,7 +299,7 @@ impl DashboardView {
                         Button::new("dash-manage-profiles")
                             .ghost()
                             .small()
-                            .label("Open Profiles")
+                            .label("Manage")
                             .icon(IconName::ChevronRight)
                             .on_click(move |_, _, cx| {
                                 store_profiles_btn
@@ -382,7 +382,7 @@ fn render_ip_details(
                         .text_xs()
                         .font_semibold()
                         .text_color(cx.theme().muted_foreground)
-                        .child("PUBLIC EGRESS IP"),
+                        .child("PUBLIC IP"),
                 ),
         )
         .child(
@@ -391,11 +391,11 @@ fn render_ip_details(
                 .font_semibold()
                 .text_color(cx.theme().foreground)
                 .child(if ip_loading {
-                    "Checking egress IP...".to_string()
+                    "Checking...".to_string()
                 } else if let Some(ip) = ip_info {
                     ip.ip.clone()
                 } else if let Some(err) = ip_error {
-                    format!("Unavailable ({err})")
+                    format!("Unavailable: {err}")
                 } else {
                     "Unknown".to_string()
                 }),
@@ -463,7 +463,7 @@ fn render_broken_strip(
             Button::new("dash-broken-doctor")
                 .outline()
                 .small()
-                .label("Open Doctor")
+                .label("Doctor")
                 .on_click(move |_, _, cx| {
                     store_doctor.update(cx, |s, cx| {
                         s.set_tab(NavTab::Doctor, cx);
@@ -492,7 +492,7 @@ fn render_empty_profiles_card(
             div()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("No sing-box profiles found in the profiles directory."),
+                .child("No profiles yet."),
         )
         .child(
             h_flex()
@@ -513,7 +513,7 @@ fn render_empty_profiles_card(
                         .outline()
                         .small()
                         .icon(IconName::ExternalLink)
-                        .label("Import URL")
+                        .label("Import")
                         .disabled(init_err)
                         .on_click(move |_, window, cx| {
                             ProfilesView::open_import_url_dialog(store_pull.clone(), window, cx);
@@ -567,7 +567,7 @@ fn render_profile_card(
                     s.set_tab(NavTab::Profiles, cx);
                     s.set_banner(
                         BannerTone::Info,
-                        format!("Complete guided setup or edit placeholders for {target} before connecting"),
+                        format!("Replace placeholders in {target} before connecting."),
                         cx,
                     );
                 }
@@ -589,7 +589,9 @@ fn render_profile_card(
                                 .truncate()
                                 .child(prof.name.clone()),
                         )
-                        .when(is_connected, |t| t.child(Tag::success().small().child("Live")))
+                        .when(is_connected, |t| {
+                            t.child(Tag::success().small().child("Live"))
+                        })
                         .when(is_active && !is_connected, |t| {
                             t.child(Tag::secondary().small().child("Active"))
                         }),
@@ -599,17 +601,17 @@ fn render_profile_card(
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .truncate()
-                        .child(
-                            prof.server
-                                .clone()
-                                .unwrap_or_else(|| "direct / unconfigured".to_string()),
-                        ),
+                        .child(prof.server.clone().unwrap_or_else(|| "direct".to_string())),
                 )
                 .child(
                     h_flex()
                         .gap_1()
                         .when(!ready, |t| {
-                            t.child(Tag::warning().small().child(format!("{placeholder_count} TODO")))
+                            t.child(
+                                Tag::warning()
+                                    .small()
+                                    .child(format!("{placeholder_count} TODO")),
+                            )
                         })
                         .when(prof.source_url.is_some(), |t| {
                             t.child(Tag::info().small().child("Remote"))

@@ -194,7 +194,7 @@ fn format_status_header(store: &AppStore) -> String {
             None => "Connected".to_string(),
         }
     } else if let Some(name) = &store.snapshot.active {
-        format!("Disconnected (Selected: {name})")
+        format!("Disconnected, {name} selected")
     } else {
         "Disconnected".to_string()
     }
@@ -221,7 +221,7 @@ fn push_connection_telemetry(items: &mut Vec<MenuItem>, store: &AppStore) {
         let line = if loc.is_empty() {
             format!("IP: {}", ip.ip)
         } else {
-            format!("IP: {} ({loc})", ip.ip)
+            format!("IP: {}, {loc}", ip.ip)
         };
         items.push(MenuItem::action(line, Noop).disabled(true));
     }
@@ -253,16 +253,12 @@ fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
         for profile in &store.snapshot.profiles {
             let is_active = store.snapshot.active.as_deref() == Some(profile.name.as_str());
             let mut label = if profile.ready() {
-                if let Some(srv) = &profile.server {
-                    format!("{} ({srv})", profile.name)
-                } else {
-                    profile.name.clone()
-                }
+                profile.name.clone()
             } else {
-                format!("{} (setup required)", profile.name)
+                format!("{}: needs setup", profile.name)
             };
             if is_active && !store.snapshot.running {
-                label.push_str(" (selected)");
+                label.push_str(", selected");
             }
             items.push(
                 MenuItem::action(
@@ -291,13 +287,13 @@ fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
 
     items.push(MenuItem::separator());
     items.push(MenuItem::submenu(Menu {
-        name: "Network & Profiles".into(),
+        name: "Tools".into(),
         items: tools_items,
         disabled: false,
     }));
 
     items.push(MenuItem::separator());
-    items.push(MenuItem::action("Open Control Center...", OpenMainWindow));
+    items.push(MenuItem::action("Open sbctl", OpenMainWindow));
     items.push(MenuItem::action("View Logs", OpenLogsView));
     items.push(MenuItem::action("Settings...", OpenSettingsView));
     items.push(MenuItem::separator());

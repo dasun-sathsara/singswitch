@@ -369,6 +369,6 @@ fn main() {
 
 #[cfg(not(any(target_os = "macos", windows)))]
 fn main() {
-    eprintln!("sbctl-app desktop GUI requires macOS or Windows; use the sbctl CLI on this host.");
+    eprintln!("sbctl-app requires macOS or Windows. Run sbctl instead.");
     std::process::exit(1);
 }

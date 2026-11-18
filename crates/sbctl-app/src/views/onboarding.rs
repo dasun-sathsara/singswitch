@@ -68,20 +68,20 @@ pub fn render_onboarding_card(store: &Entity<AppStore>, cx: &App) -> impl IntoEl
                             h_flex()
                                 .gap_2()
                                 .items_center()
-                                .child(Tag::info().small().child("Setup Guide"))
+                                .child(Tag::info().small().child("Setup"))
                                 .child(
                                     div()
                                         .text_base()
                                         .font_semibold()
                                         .text_color(cx.theme().foreground)
-                                        .child("First-Run Checklist"),
+                                        .child("First-run setup"),
                                 ),
                         )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Complete these steps once to manage sing-box cleanly on this machine."),
+                                .child("Finish these four steps before connecting."),
                         ),
                 )
                 .child(
@@ -97,9 +97,13 @@ pub fn render_onboarding_card(store: &Entity<AppStore>, cx: &App) -> impl IntoEl
         .child(step_install_singbox(singbox_ok, layout.platform, store, cx))
         .child(step_privileges(priv_ok, is_busy, &layout, store, cx))
         .child(step_profile(has_any_profile, profile_ready, store, cx))
-        .child(
-            step_connect(ready_to_connect, s.snapshot.running, is_busy, store_connect, cx),
-        )
+        .child(step_connect(
+            ready_to_connect,
+            s.snapshot.running,
+            is_busy,
+            store_connect,
+            cx,
+        ))
 }
 
 fn step_row(
@@ -170,12 +174,12 @@ fn step_install_singbox(
     let store_recheck = store.clone();
     step_row(
         "1",
-        "Install sing-box binary",
+        "Install sing-box",
         done,
         if done {
-            "sing-box binary detected".to_string()
+            "Installed".to_string()
         } else {
-            format!("Required for validation and TUN mode ({install_cmd})")
+            format!("Install with `{install_cmd}`.")
         },
         h_flex()
             .gap_2()
@@ -185,7 +189,7 @@ fn step_install_singbox(
                         .outline()
                         .xsmall()
                         .icon(IconName::Copy)
-                        .label("Copy Command")
+                        .label("Copy")
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(
                                 install_cmd.to_string(),
@@ -193,7 +197,7 @@ fn step_install_singbox(
                             store_copy.update(cx, |s, cx| {
                                 s.set_banner(
                                     BannerTone::Success,
-                                    format!("Copied `{install_cmd}` to clipboard"),
+                                    format!("Copied `{install_cmd}`"),
                                     cx,
                                 );
                             });
@@ -204,7 +208,7 @@ fn step_install_singbox(
                 Button::new("onboard-recheck-sb")
                     .ghost()
                     .xsmall()
-                    .label("Re-check")
+                    .label("Recheck")
                     .on_click(move |_, _, cx| store_recheck.update(cx, AppStore::run_doctor)),
             ),
         cx,
@@ -221,17 +225,16 @@ fn step_privileges(
     let detail = match layout.platform {
         PlatformKind::Darwin => {
             if done {
-                "Scoped /etc/sudoers.d/sbctl rules active".to_string()
+                "/etc/sudoers.d/sbctl is active.".to_string()
             } else {
-                "Install scoped sudoers rules for passwordless ln and launchctl switches"
-                    .to_string()
+                "Install scoped sudoers rules for ln and launchctl.".to_string()
             }
         }
         PlatformKind::Windows => {
             if done {
-                "sbctl-agent helper service pipe ready (no UAC needed)".to_string()
+                "sbctl-agent pipe is running.".to_string()
             } else {
-                "Start or install sbctl-agent helper service for passwordless switches (optional; UAC fallback works too)".to_string()
+                "Start sbctl-agent to switch profiles without UAC prompts.".to_string()
             }
         }
     };
@@ -243,7 +246,7 @@ fn step_privileges(
 
     step_row(
         "2",
-        "Authorize TUN service control",
+        "Grant service permissions",
         done,
         detail,
         h_flex()
@@ -256,7 +259,7 @@ fn step_privileges(
                         .disabled(is_busy)
                         .label(match platform {
                             PlatformKind::Darwin => "Install Sudoers...",
-                            PlatformKind::Windows => "Start Helper (UAC)",
+                            PlatformKind::Windows => "Start Helper",
                         })
                         .on_click(move |_, window, cx| match platform {
                             PlatformKind::Darwin => open_sudoers_prompt(
@@ -297,16 +300,16 @@ fn step_profile(
     let store_pull = store.clone();
     let store_edit = store.clone();
     let detail = if ready {
-        "At least one ready profile is configured".to_string()
+        "Ready profile available.".to_string()
     } else if has_any {
-        "Profile created; fill in remaining TODO_ placeholders in Guided Setup".to_string()
+        "Replace remaining TODO_ placeholders.".to_string()
     } else {
-        "Create a profile from skeleton or import one from an HTTP(S) URL".to_string()
+        "Create a profile or import a JSON URL.".to_string()
     };
 
     step_row(
         "3",
-        "Add and configure a profile",
+        "Configure a profile",
         ready,
         detail,
         h_flex()
@@ -316,7 +319,7 @@ fn step_profile(
                     Button::new("onboard-finish-edit")
                         .primary()
                         .xsmall()
-                        .label("Finish Setup")
+                        .label("Edit")
                         .on_click(move |_, _, cx| {
                             store_edit.update(cx, |s, cx| s.set_tab(NavTab::Profiles, cx));
                         }),
@@ -335,7 +338,7 @@ fn step_profile(
                 Button::new("onboard-pull-prof")
                     .outline()
                     .xsmall()
-                    .label("Import URL")
+                    .label("Import")
                     .on_click(move |_, window, cx| {
                         ProfilesView::open_import_url_dialog(store_pull.clone(), window, cx);
                     }),
@@ -353,12 +356,12 @@ fn step_connect(
 ) -> impl IntoElement {
     step_row(
         "4",
-        "Start sing-box tunnel",
+        "Connect",
         running,
         if running {
-            "sing-box tunnel is live".to_string()
+            "Tunnel is up.".to_string()
         } else {
-            "Connect once a ready profile is available".to_string()
+            "Start sing-box with a ready profile.".to_string()
         },
         Button::new("onboard-connect")
             .primary()
@@ -386,8 +389,8 @@ fn open_sudoers_prompt(
         alert
             .confirm()
             .title("Install /etc/sudoers.d/sbctl")
-            .description("Prompt for administrator authorization, stage rules to a temp file, validate via visudo -cf, and install atomically as 0440 root:wheel.")
-            .ok_text("Authorize & Install")
+            .description("Prompts for an administrator password, validates the rules with visudo -cf, and writes /etc/sudoers.d/sbctl.")
+            .ok_text("Install")
             .on_ok(move |_, _, cx| {
                 st.update(cx, |s, cx| s.repair_macos_sudoers(script.clone(), cx));
                 true

@@ -16,7 +16,7 @@ use sbctl_core::doctor::{
 use sbctl_core::layout::{Layout, PlatformKind};
 
 use crate::actions::NavTab;
-use crate::state::{AppStore, BannerTone};
+use crate::state::{AppStore, BannerTone, count_noun};
 use crate::theme::{subtle_pill_bg, surface_card_bg};
 
 pub struct DoctorView {
@@ -55,7 +55,7 @@ impl DoctorView {
                             .text_base()
                             .font_semibold()
                             .text_color(cx.theme().foreground)
-                            .child("System Diagnostics"),
+                            .child("Diagnostics"),
                     )
                     .child(
                         div()
@@ -64,16 +64,16 @@ impl DoctorView {
                             .child(if let Some(err) = init_error {
                                 err.clone()
                             } else if running {
-                                "Running checks...".to_string()
+                                "Checking...".to_string()
                             } else if checks.is_empty() {
-                                "Click Run Doctor to inspect binaries, profiles, privileges, and service health.".to_string()
+                                "Check sing-box, profiles, permissions, and service state."
+                                    .to_string()
                             } else if failed_count == 0 && warn_count == 0 {
-                                format!("All {} diagnostic checks passed.", checks.len())
+                                format!("All {} checks passed.", checks.len())
                             } else {
-                                format!(
-                                    "{failed_count} error(s) and {warn_count} warning(s) across {} checks.",
-                                    checks.len()
-                                )
+                                let errs = count_noun(failed_count, "error", "errors");
+                                let warns = count_noun(warn_count, "warning", "warnings");
+                                format!("{errs}, {warns} across {} checks.", checks.len())
                             }),
                     ),
             )
@@ -110,7 +110,7 @@ impl Render for DoctorView {
                         .gap_2()
                         .items_center()
                         .child(Spinner::new().small())
-                        .child(div().text_sm().child("Inspecting environment...")),
+                        .child(div().text_sm().child("Checking system...")),
                 )
             })
             .child(
@@ -230,11 +230,7 @@ fn render_check_card(
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(hint_copy.clone()));
                                 store_hint.update(cx, |s, cx| {
-                                    s.set_banner(
-                                        BannerTone::Success,
-                                        "Copied remediation hint to clipboard",
-                                        cx,
-                                    );
+                                    s.set_banner(BannerTone::Success, "Copied hint", cx);
                                 });
                             }),
                     ),
@@ -253,18 +249,24 @@ fn render_fix_button(
     let label = match action {
         FixAction::CreateProfilesDir => "Create Folder",
         FixAction::RepairMacosSudoers => "Repair Sudoers...",
-        FixAction::RepairWindowsHelper => "Start Helper (UAC)",
+        FixAction::RepairMacosLogs => "Fix Permissions...",
+        FixAction::RepairWindowsHelper => "Start Helper",
         FixAction::OpenProfiles => "Open Profiles",
     };
 
     let current_user = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
     let root_script = macos_sudoers_root_script(layout, &current_user).unwrap_or_default();
     let preview_cmd = macos_sudoers_install_command(layout, &current_user).unwrap_or_default();
+    let has_logs_script = sbctl_core::doctor::macos_logs_root_script(layout).is_some();
 
     let disabled = is_busy
         || matches!(
             action,
             FixAction::RepairMacosSudoers if !cfg!(target_os = "macos") || root_script.is_empty()
+        )
+        || matches!(
+            action,
+            FixAction::RepairMacosLogs if !cfg!(target_os = "macos") || !has_logs_script
         );
 
     Button::new(SharedString::from(format!("doctor-fix-{ix}")))
@@ -281,6 +283,7 @@ fn render_fix_button(
                 window,
                 cx,
             ),
+            FixAction::RepairMacosLogs => st.update(cx, AppStore::repair_macos_logs),
             FixAction::RepairWindowsHelper => st.update(cx, AppStore::repair_windows_helper),
             FixAction::OpenProfiles => {
                 st.update(cx, |s, cx| s.set_tab(NavTab::Profiles, cx));
@@ -326,13 +329,13 @@ fn render_macos_sudoers_card(
                                 .text_sm()
                                 .font_semibold()
                                 .text_color(cx.theme().foreground)
-                                .child("macOS Sudoers Rules (/etc/sudoers.d/sbctl)"),
+                                .child("macOS sudoers"),
                         )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Five scoped rules for ln and launchctl; staged and validated with visudo -cf before atomic install."),
+                                .child("Scoped /etc/sudoers.d/sbctl rules for ln and launchctl, checked with visudo -cf before install."),
                         ),
                 )
                 .child(
@@ -343,7 +346,7 @@ fn render_macos_sudoers_card(
                                 .outline()
                                 .small()
                                 .icon(IconName::Copy)
-                                .label("Copy Install Command")
+                                .label("Copy Command")
                                 .disabled(sudoers_cmd.is_empty())
                                 .on_click(move |_, _, cx| {
                                     cx.write_to_clipboard(ClipboardItem::new_string(
@@ -352,7 +355,7 @@ fn render_macos_sudoers_card(
                                     store_copy.update(cx, |s, cx| {
                                         s.set_banner(
                                             BannerTone::Success,
-                                            "Copied staged visudo install command to clipboard",
+                                            "Copied sudoers command",
                                             cx,
                                         );
                                     });
@@ -424,14 +427,14 @@ fn render_windows_helper_card(
                                 .text_sm()
                                 .font_semibold()
                                 .text_color(cx.theme().foreground)
-                                .child("Windows Privileged Helper (sbctl-agent)"),
+                                .child("Windows helper service"),
                         )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(format!(
-                                    "Named Pipe {} grants interactive desktop switches without repeated UAC prompts.",
+                                    "sbctl-agent listens on {} so profile switches do not prompt for UAC.",
                                     layout.pipe_name
                                 )),
                         ),
@@ -444,7 +447,7 @@ fn render_windows_helper_card(
                                 .outline()
                                 .small()
                                 .icon(IconName::Copy)
-                                .label("Copy Installer Command")
+                                .label("Copy Command")
                                 .on_click(move |_, _, cx| {
                                     cx.write_to_clipboard(ClipboardItem::new_string(
                                         install_cmd.to_string(),
@@ -452,7 +455,7 @@ fn render_windows_helper_card(
                                     store_copy.update(cx, |s, cx| {
                                         s.set_banner(
                                             BannerTone::Success,
-                                            "Copied Windows installer command to clipboard",
+                                            "Copied installer command",
                                             cx,
                                         );
                                     });
@@ -462,7 +465,7 @@ fn render_windows_helper_card(
                             Button::new("doctor-repair-win-helper")
                                 .primary()
                                 .small()
-                                .label("Repair Helper (UAC)...")
+                                .label("Repair Helper")
                                 .disabled(is_busy)
                                 .on_click(move |_, _, cx| {
                                     store_repair.update(cx, AppStore::repair_windows_helper);
@@ -497,9 +500,9 @@ fn open_sudoers_confirm_dialog(
             .confirm()
             .title("Install /etc/sudoers.d/sbctl")
             .description(format!(
-                "This will prompt for an administrator password via macOS Authorization, stage to a temp file, validate via visudo -cf, and install 0440 root:wheel:\n\n{display_cmd}"
+                "Prompts for an administrator password, validates with visudo -cf, and writes /etc/sudoers.d/sbctl:\n\n{display_cmd}"
             ))
-            .ok_text("Authorize & Install")
+            .ok_text("Install")
             .on_ok(move |_, _, cx| {
                 store_done.update(cx, |s, cx| s.repair_macos_sudoers(script_run.clone(), cx));
                 true

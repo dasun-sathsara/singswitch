@@ -44,7 +44,7 @@ pub fn install_app_menus(cx: &mut App) {
         Menu {
             name: "sbctl".into(),
             items: vec![
-                MenuItem::action("Open Control Center", OpenMainWindow),
+                MenuItem::action("Open sbctl", OpenMainWindow),
                 MenuItem::action("Settings...", OpenSettingsView),
                 MenuItem::separator(),
                 MenuItem::action("Run Doctor", RunDoctor),
