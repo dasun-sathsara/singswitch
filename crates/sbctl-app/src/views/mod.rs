@@ -2,6 +2,7 @@ pub mod dashboard;
 pub mod doctor;
 pub mod editor;
 pub mod logs;
+pub mod onboarding;
 pub mod profiles;
 pub mod settings;
 
@@ -12,6 +13,7 @@ use gpui_kit::component::sidebar::{
     Sidebar, SidebarCollapsible, SidebarFooter, SidebarGroup, SidebarMenu, SidebarMenuItem,
     SidebarToggleButton,
 };
+use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{
     ActiveTheme as _, IconName, Sizable as _, StyledExt as _, TitleBar, h_flex, v_flex,
 };
@@ -230,6 +232,18 @@ impl WorkspaceShell {
         let tab = s.selected_tab;
         let collapsed = s.settings.sidebar_collapsed;
         let state_str = s.snapshot.health.state.as_str();
+        let (log_errors, _) = s.log_counts();
+
+        let logs_item = nav_item(
+            "Logs",
+            IconName::SquareTerminal,
+            NavTab::Logs,
+            tab,
+            &self.store,
+        )
+        .when(log_errors > 0 && !collapsed, |item| {
+            item.suffix(move |_, _| Tag::danger().xsmall().child(format!("{log_errors}")))
+        });
 
         Sidebar::new("app-sidebar")
             .collapsible(SidebarCollapsible::Icon)
@@ -251,13 +265,7 @@ impl WorkspaceShell {
                             tab,
                             &self.store,
                         ))
-                        .child(nav_item(
-                            "Logs",
-                            IconName::SquareTerminal,
-                            NavTab::Logs,
-                            tab,
-                            &self.store,
-                        ))
+                        .child(logs_item)
                         .child(nav_item(
                             "Doctor",
                             IconName::CircleCheck,

@@ -35,24 +35,25 @@ sbctl-rs/
 
 - **macOS menu bar (`NSStatusItem`) & Windows system tray (`Shell_NotifyIconW`)**:
   - Dynamic `ActivationPolicy` on macOS: starts with `LSUIElement` / `Accessory` mode when launched with `--background`, switches to `Regular` (Dock icon visible) when windows are open, and returns to `Accessory` when closed.
-  - Native menus with live tunnel status, public egress IP, one-click Connect / Disconnect, checkmarked ready profiles, disabled `(setup required)` profiles, and remote sync.
-- **Dashboard**: connection hero card with live phase progress spinner, public IP check (`ipinfo.io/json`), and quick-switch profile cards.
+  - Native menus reflecting live tunnel state, selected standby or active profile, TUN/PID telemetry, public egress IP, one-click Connect / Disconnect / Run Doctor, checkmarked ready profiles, disabled `(setup required)` profiles, and remote sync.
+- **Dashboard & Onboarding**: first-run 4-step checklist (sing-box detection, macOS sudoers or Windows helper authorization, profile setup, and tunnel activation), live service state (`Running`, PID, TUN interface, uptime, restart count, last exit code), manual Restart/Refresh controls, public IP check (`ipinfo.io/json`), and quick-switch profile cards.
 - **Guided setup & JSON editor**:
   - **Guided setup**: lossless `ProfileFormModel` editing server, port, UUID/password, flow, SNI, uTLS fingerprint, Reality keys, TUN interface/MTU/stack, and IPv6/route toggles without dropping custom DNS, route rules, or `endpoints` (such as Tailscale `tsnet`).
-  - **JSON editor**: multi-line syntax-highlighted editor (`syntect`), JSON formatting, live syntax status bar, external disk-change warning without clobbering unsaved edits, inline `TODO_` placeholder badges, `sing-box check` validation on the live buffer (`Validate`), `Save` (`Cmd/Ctrl+S`), and one-click `Save & Connect` (`Cmd/Ctrl+Shift+S`).
-- **Logs viewer**: virtualized scrolling (`v_virtual_list`) with zero-copy cached filtering over `/var/log/sing-box/{error,access}.log` (or `%ProgramData%\sing-box\logs`), incremental background tailing, severity filters, text search, full-line detail inspector, `Clear`, and clipboard copy.
-- **Doctor & settings**: full diagnostic checklist, copyable remediation hints, macOS sudoers repair staged to a temp file and checked via `visudo -cf` before installation, restrained light/dark/system theme switcher with automatic OS appearance sync, persisted window geometry, adaptive idle background polling (`5s` open / `30s` tray-only), keyboard shortcuts (`Cmd/Ctrl+1..5`, `N`, `I`, `S`, `R`, `W`, `Q`), and per-user launch-at-login registration (`~/Library/LaunchAgents/app.lexiflix.sbctl.plist` or `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
+  - **JSON editor**: multi-line syntax-highlighted editor (`syntect`), JSON formatting, live syntax status bar, external disk-change warning without clobbering unsaved edits, inline `TODO_` placeholder badges, inline `sing-box check` validation before save (with explicit draft confirmation on inactive profiles), `Save` (`Cmd/Ctrl+S`), and `Save & Connect` (`Cmd/Ctrl+Shift+S`).
+- **Logs viewer**: virtualized scrolling (`v_virtual_list`) with zero-copy cached filtering over `/var/log/sing-box/{error,access}.log` (or `%ProgramData%\sing-box\logs`), event-driven filesystem streaming + fallback tailing, live Streaming/Paused status and error/warn count badges, severity filters, text search, full-line detail inspector, `Clear`, and clipboard copy.
+- **Doctor, Notifications & Settings**: diagnostic checklist with one-click fixes (`Create Folder`, async macOS sudoers installation validated via `visudo -cf`, and Windows `sbctl-agent` UAC helper start), macOS AppleScript and Windows WinRT toast notifications for switches, activation failures, and unexpected stops, restrained light/dark/system theme switcher, persisted window geometry, keyboard shortcuts (`Cmd/Ctrl+1..5`, `N`, `I`, `S`, `R`, `W`, `Q`), and per-user launch-at-login registration (`~/Library/LaunchAgents/app.lexiflix.sbctl.plist` or `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
 
 ## Building and verifying
 
-### Host tests and lints (`sbctl-core` and `sbctl-cli`)
+### Host workspace checks
 
 ```bash
-cargo test --workspace --exclude sbctl-app
-cargo clippy --workspace --exclude sbctl-app --all-targets -- -D warnings
+cargo build
+cargo test
+cargo clippy --all-targets -- -D warnings
 ```
 
-Note: `gpui-kit` targets Apple Silicon / macOS AppKit and Windows Win32/DirectX inside this project, so full `sbctl-app` compilation and linting are checked against `x86_64-pc-windows-msvc` and `aarch64-apple-darwin`.
+Note: `gpui-kit` and `gpui-tray` target Apple Silicon / macOS AppKit and Windows Win32/DirectX, so `sbctl-app` builds its desktop UI when targeting `x86_64-pc-windows-msvc` or `aarch64-apple-darwin` and compiles cleanly as a CLI-redirect stub on Linux.
 
 ### Cross-checking on Linux
 

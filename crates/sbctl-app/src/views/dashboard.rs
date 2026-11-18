@@ -7,16 +7,18 @@ use gpui_kit::component::{
     ActiveTheme as _, IconName, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    App, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px,
+    App, ClipboardItem, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    div, prelude::FluentBuilder as _, px,
 };
+use sbctl_core::ip::IpInfo;
 use sbctl_core::profile::Profile;
 use sbctl_core::service::RunState;
 
 use crate::actions::NavTab;
 use crate::state::{AppStore, BannerTone};
 use crate::theme::{subtle_pill_bg, surface_card_bg};
+use crate::views::onboarding::render_onboarding_card;
 use crate::views::profiles::ProfilesView;
 
 pub struct DashboardView {
@@ -77,15 +79,25 @@ impl DashboardView {
     fn render_hero_summary(
         &self,
         state_label: &'static str,
-        status_color: gpui_kit::Hsla,
+        status_color: Hsla,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let snap = &self.store.read(cx).snapshot;
+        let s = self.store.read(cx);
+        let snap = &s.snapshot;
+        let uptime = snap
+            .running
+            .then_some(s.connected_since)
+            .flatten()
+            .map(|t| format_duration(t.elapsed().as_secs()));
+        let restarts = snap.health.restarts.filter(|&r| r > 0);
+        let last_exit = snap.health.last_exit.clone();
+
         v_flex()
             .gap_1()
             .child(
                 h_flex()
                     .items_center()
+                    .flex_wrap()
                     .gap_2()
                     .child(div().size(px(10.0)).rounded_full().bg(status_color))
                     .child(
@@ -95,11 +107,21 @@ impl DashboardView {
                             .text_color(status_color)
                             .child(state_label),
                     )
+                    .child(Tag::secondary().small().child(snap.health.state.as_str()))
                     .when_some(snap.status_view.tun.clone(), |this, tun| {
                         this.child(Tag::secondary().small().child(tun))
                     })
                     .when_some(snap.status_view.pid, |this, pid| {
                         this.child(Tag::secondary().small().child(format!("PID {pid}")))
+                    })
+                    .when_some(uptime, |this, up| {
+                        this.child(Tag::info().small().child(format!("Uptime {up}")))
+                    })
+                    .when_some(restarts, |this, count| {
+                        this.child(Tag::secondary().small().child(format!("Runs: {count}")))
+                    })
+                    .when_some(last_exit, |this, code| {
+                        this.child(Tag::warning().small().child(format!("Last exit: {code}")))
                     }),
             )
             .child(
@@ -134,21 +156,46 @@ impl DashboardView {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let running = self.store.read(cx).snapshot.running;
+        let store_refresh = self.store.clone();
+        let store_restart = self.store.clone();
         let store_toggle = self.store.clone();
         let store_sync = self.store.clone();
 
         h_flex()
             .gap_2()
             .items_center()
+            .child(
+                Button::new("dash-refresh-status")
+                    .ghost()
+                    .small()
+                    .icon(IconName::RefreshCw)
+                    .disabled(is_busy || init_err)
+                    .on_click(move |_, _, cx| {
+                        store_refresh.update(cx, |s, cx| s.refresh_snapshot(false, cx));
+                    }),
+            )
             .when(has_remote, |this| {
                 this.child(
                     Button::new("dash-sync-all")
                         .outline()
+                        .small()
                         .icon(IconName::RefreshCw)
                         .label("Sync Remote")
                         .disabled(is_busy)
                         .on_click(move |_, _, cx| {
                             store_sync.update(cx, AppStore::sync_all);
+                        }),
+                )
+            })
+            .when(running, |this| {
+                this.child(
+                    Button::new("dash-restart")
+                        .outline()
+                        .small()
+                        .label("Restart")
+                        .disabled(is_busy || init_err)
+                        .on_click(move |_, _, cx| {
+                            store_restart.update(cx, AppStore::restart_active);
                         }),
                 )
             })
@@ -285,19 +332,40 @@ impl DashboardView {
 
 impl Render for DashboardView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let show_onboarding = {
+            let s = self.store.read(cx);
+            !s.settings.onboarding_dismissed && s.needs_onboarding()
+        };
+
         v_flex()
             .size_full()
             .overflow_y_scrollbar()
             .p_6()
             .gap_5()
+            .when(show_onboarding, |this| {
+                this.child(render_onboarding_card(&self.store, cx))
+            })
             .child(self.render_hero_card(cx))
             .child(self.render_ip_card(cx))
             .child(self.render_profiles_section(cx))
     }
 }
 
+fn format_duration(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if h > 0 {
+        format!("{h}h {m:02}m")
+    } else if m > 0 {
+        format!("{m}m {s:02}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
 fn render_ip_details(
-    ip_info: &Option<sbctl_core::ip::IpInfo>,
+    ip_info: &Option<IpInfo>,
     ip_loading: bool,
     ip_error: &Option<String>,
     cx: &App,

@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,7 @@ use crate::doctor::{DiagnosticCheck, SudoProbeFn, diagnose_active, run_doctor_ch
 use crate::error::{ExitCode, Result, SbctlError, store_error};
 use crate::layout::{Layout, PlatformKind};
 use crate::lock::AdvisoryLock;
-use crate::notify::{Notifier, default_notifier};
+use crate::notify::{Notifier, ToggleableNotifier, default_notifier};
 use crate::profile::{
     Profile, SKELETON_JSON, list_profiles, path_for, placeholders_in, placeholders_in_file,
     validate_name,
@@ -22,7 +23,9 @@ use crate::profile::{
 use crate::remote::{fetch_remote_profile, normalise_profile_url, validate_remote_body};
 use crate::runner::{ExecRunner, Runner, SudoRunner, TraceHook};
 use crate::service::launchd::LaunchdManager;
-use crate::service::win_rpc::{PipeRequest, PipeResponse, try_send_pipe_request};
+use crate::service::win_rpc::{
+    HELPER_SERVICE_NAME, PipeRequest, PipeResponse, try_send_pipe_request,
+};
 use crate::service::winsw::WinSwManager;
 use crate::service::{Health, Manager, RunState};
 use crate::source::{read_source, remove_source, sourced_profiles, write_source};
@@ -103,6 +106,7 @@ pub struct Controller {
     pub checker: Arc<dyn Checker>,
     pub runner: Arc<dyn Runner>,
     pub notifier: Arc<dyn Notifier>,
+    pub notifications_enabled: Arc<AtomicBool>,
     pub sudo_probe: Option<SudoProbeFn>,
     pub skeleton: String,
     pub settle_delay: Duration,
@@ -125,13 +129,19 @@ impl Controller {
             trace,
             ..Default::default()
         });
-        let notifier: Arc<dyn Notifier> = Arc::from(default_notifier(layout.platform));
-        Self::with_runner(
+        let enabled = Arc::new(AtomicBool::new(true));
+        let notifier: Arc<dyn Notifier> = Arc::new(ToggleableNotifier::new(
+            default_notifier(layout.platform),
+            enabled.clone(),
+        ));
+        let mut ctrl = Self::with_runner(
             layout,
             exec_runner,
             Arc::new(ExecChecker::default()),
             notifier,
-        )
+        );
+        ctrl.notifications_enabled = enabled;
+        ctrl
     }
 
     /// Construct a `Controller` with an injected `Runner`, `Checker`, and `Notifier`.
@@ -193,6 +203,7 @@ impl Controller {
             checker,
             runner,
             notifier,
+            notifications_enabled: Arc::new(AtomicBool::new(true)),
             sudo_probe: None,
             skeleton: SKELETON_JSON.to_string(),
             settle_delay: DEFAULT_SETTLE_DELAY,
@@ -201,6 +212,14 @@ impl Controller {
             sleep_fn: Arc::new(std::thread::sleep),
             debug_hook: None,
         }
+    }
+
+    pub fn set_notifications_enabled(&self, enabled: bool) {
+        self.notifications_enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn notify_error(&self, title: &str, message: &str) {
+        self.notifier.notify_error(title, message);
     }
 
     fn debug(&self, msg: impl AsRef<str>) {
@@ -459,6 +478,19 @@ impl Controller {
         cause: Option<SbctlError>,
         summary: &str,
     ) -> SbctlError {
+        let err = self.recover_inner(rollback, was_running, cause, summary);
+        self.notifier
+            .notify_error("sing-box activation failed", &err.message);
+        err
+    }
+
+    fn recover_inner(
+        &self,
+        rollback: &dyn Rollback,
+        was_running: bool,
+        cause: Option<SbctlError>,
+        summary: &str,
+    ) -> SbctlError {
         let mut failure = SbctlError::service(summary);
         if let Some(c) = cause {
             failure = failure.with_cause(c);
@@ -573,6 +605,8 @@ impl Controller {
         self.debug(format!("reloading running service after editing {name}"));
         self.manager.restart()?;
         if let Some(problem) = self.verify_healthy() {
+            self.notifier
+                .notify_error("sing-box reload failed", &problem);
             if let Some(old) = &old_bytes {
                 self.restore_previous_profile(&path, old, true);
                 return Err(SbctlError::service(format!(
@@ -852,6 +886,32 @@ impl Controller {
         )
     }
 
+    /// Ensure the configured profiles directory exists.
+    pub fn ensure_profiles_dir(&self) -> Result<()> {
+        fs::create_dir_all(&self.layout.profiles_dir)
+            .map_err(|e| store_error(e, &self.layout.profiles_dir, "create"))
+    }
+
+    /// Ensure profiles directory exists and attempt to start the Windows helper service.
+    pub fn repair_windows_helper(&self) -> Result<()> {
+        self.ensure_profiles_dir()?;
+        if self.layout.platform != PlatformKind::Windows {
+            return Ok(());
+        }
+        let out = self.runner.run("sc.exe", &["start", HELPER_SERVICE_NAME])?;
+        let lower = out.combined.to_ascii_lowercase();
+        if out.success || lower.contains("already running") || lower.contains("1056") {
+            return Ok(());
+        }
+        Err(SbctlError::service(format!(
+            "could not start {HELPER_SERVICE_NAME}: {}",
+            crate::error::first_line(out.combined.trim())
+        ))
+        .with_hint(
+            "run powershell -ExecutionPolicy Bypass -File scripts\\install.ps1 as Administrator",
+        ))
+    }
+
     /// Execute a narrow Windows Named Pipe request directly inside an elevated `sbctl-agent` host.
     pub fn handle_pipe_request(&self, req: PipeRequest) -> PipeResponse {
         match req {
@@ -865,6 +925,22 @@ impl Controller {
             },
             PipeRequest::Stop => match self.stop() {
                 Ok(()) => PipeResponse::success(),
+                Err(e) => PipeResponse::from_error(&e),
+            },
+            PipeRequest::CreateProfile { name } => match self.create_from_skeleton(&name) {
+                Ok(_) => PipeResponse::success(),
+                Err(e) => PipeResponse::from_error(&e),
+            },
+            PipeRequest::PullProfile { name, url } => match self.pull_profile(&name, &url) {
+                Ok(_) => PipeResponse::success(),
+                Err(e) => PipeResponse::from_error(&e),
+            },
+            PipeRequest::SyncOne { name } => match self.sync_one(&name) {
+                Ok(reloaded) => PipeResponse::with_reloaded(reloaded),
+                Err(e) => PipeResponse::from_error(&e),
+            },
+            PipeRequest::SyncAll => match self.sync_all() {
+                Ok(report) => PipeResponse::with_sync_report(report.synced, report.failed),
                 Err(e) => PipeResponse::from_error(&e),
             },
             PipeRequest::SaveProfile {
@@ -883,6 +959,14 @@ impl Controller {
             },
             PipeRequest::DeleteProfile { name, force } => match self.delete_profile(&name, force) {
                 Ok(_) => PipeResponse::success(),
+                Err(e) => PipeResponse::from_error(&e),
+            },
+            PipeRequest::EnsureProfilesDir => match self.ensure_profiles_dir() {
+                Ok(()) => PipeResponse::success(),
+                Err(e) => PipeResponse::from_error(&e),
+            },
+            PipeRequest::RepairWindowsHelper => match self.repair_windows_helper() {
+                Ok(()) => PipeResponse::success(),
                 Err(e) => PipeResponse::from_error(&e),
             },
         }
@@ -911,25 +995,59 @@ impl Controller {
         self.stop()
     }
 
+    pub fn gui_create_profile(&self, name: &str) -> Result<PathBuf> {
+        self.try_local_or_windows_rpc(
+            || self.create_from_skeleton(name),
+            || PipeRequest::CreateProfile {
+                name: name.to_string(),
+            },
+            |_| path_for(&self.layout.profiles_dir, name),
+        )
+    }
+
+    pub fn gui_pull_profile(&self, name: &str, url: &str) -> Result<()> {
+        self.try_local_or_windows_rpc(
+            || self.pull_profile(name, url).map(|_| ()),
+            || PipeRequest::PullProfile {
+                name: name.to_string(),
+                url: url.to_string(),
+            },
+            |_| (),
+        )
+    }
+
+    pub fn gui_sync_one(&self, name: &str) -> Result<bool> {
+        self.try_local_or_windows_rpc(
+            || self.sync_one(name),
+            || PipeRequest::SyncOne {
+                name: name.to_string(),
+            },
+            |resp| resp.reloaded,
+        )
+    }
+
+    pub fn gui_sync_all(&self) -> Result<SyncReport> {
+        self.try_local_or_windows_rpc(
+            || self.sync_all(),
+            || PipeRequest::SyncAll,
+            |resp| SyncReport {
+                synced: resp.synced,
+                failed: resp.failed,
+            },
+        )
+    }
+
     pub fn gui_save_profile(&self, name: &str, content: &str, allow_invalid: bool) -> Result<bool> {
-        if self.layout.platform == PlatformKind::Windows && !crate::elevation::is_elevated() {
-            // Try direct write first if the user has directory permissions; fall back to pipe/UAC on AccessDenied.
-            match self.save_profile(name, content, allow_invalid) {
-                Ok(reloaded) => return Ok(reloaded),
-                Err(err) if err.code == ExitCode::Permission => {
-                    let req = PipeRequest::SaveProfile {
-                        name: name.to_string(),
-                        content: content.to_string(),
-                        source_url: None,
-                        allow_invalid,
-                    };
-                    let resp = self.dispatch_windows_privileged_raw(&req)?;
-                    return Ok(resp.reloaded);
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        self.save_profile(name, content, allow_invalid)
+        self.try_local_or_windows_rpc(
+            || self.save_profile(name, content, allow_invalid),
+            || PipeRequest::SaveProfile {
+                name: name.to_string(),
+                content: content.to_string(),
+                source_url: None,
+                allow_invalid,
+            },
+            |resp| resp.reloaded,
+        )
     }
 
     pub fn gui_delete_profile(&self, name: &str, force: bool) -> Result<bool> {
@@ -942,6 +1060,41 @@ impl Controller {
             return Ok(false);
         }
         self.delete_profile(name, force)
+    }
+
+    pub fn gui_ensure_profiles_dir(&self) -> Result<()> {
+        self.try_local_or_windows_rpc(
+            || self.ensure_profiles_dir(),
+            || PipeRequest::EnsureProfilesDir,
+            |_| (),
+        )
+    }
+
+    pub fn gui_repair_windows_helper(&self) -> Result<()> {
+        if self.layout.platform == PlatformKind::Windows && !crate::elevation::is_elevated() {
+            self.dispatch_windows_privileged_raw(&PipeRequest::RepairWindowsHelper)?;
+            return Ok(());
+        }
+        self.repair_windows_helper()
+    }
+
+    fn try_local_or_windows_rpc<T>(
+        &self,
+        local: impl FnOnce() -> Result<T>,
+        make_req: impl FnOnce() -> PipeRequest,
+        map_resp: impl FnOnce(PipeResponse) -> T,
+    ) -> Result<T> {
+        if self.layout.platform == PlatformKind::Windows && !crate::elevation::is_elevated() {
+            match local() {
+                Ok(val) => return Ok(val),
+                Err(err) if err.code == ExitCode::Permission => {
+                    let resp = self.dispatch_windows_privileged_raw(&make_req())?;
+                    return Ok(map_resp(resp));
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        local()
     }
 
     fn dispatch_windows_privileged(&self, req: &PipeRequest) -> Result<Option<Health>> {
@@ -1376,6 +1529,43 @@ mod tests {
         assert!(
             ctrl.check_json_content("work", r#"{"log":{"level":"info"}}"#)
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn handle_pipe_ensure_dir_and_failure_notification_work() {
+        let (_dir, mut ctrl, runner, _checker) = test_controller(PlatformKind::Darwin);
+        let notify_msgs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        struct Rec(Arc<std::sync::Mutex<Vec<String>>>);
+        impl Notifier for Rec {
+            fn notify(&self, msg: &str) {
+                self.0.lock().unwrap().push(msg.to_string());
+            }
+        }
+        ctrl.notifier = Arc::new(Rec(notify_msgs.clone()));
+
+        let resp = ctrl.handle_pipe_request(PipeRequest::EnsureProfilesDir);
+        assert!(resp.ok);
+        assert!(ctrl.layout.profiles_dir.is_dir());
+
+        let bad = path_for(&ctrl.layout.profiles_dir, "bad");
+        fs::write(&bad, r#"{"tag":"bad"}"#).unwrap();
+        runner.set_response(
+            "sudo -n /bin/launchctl print",
+            FakeResult::err(113, "not loaded"),
+        );
+        runner.set_response(
+            "sudo -n /bin/launchctl bootstrap",
+            FakeResult::err(1, "boom"),
+        );
+
+        assert!(ctrl.activate("bad").is_err());
+        let recorded = notify_msgs.lock().unwrap();
+        assert!(
+            recorded
+                .iter()
+                .any(|m| m.contains("sing-box activation failed")),
+            "expected failure notification, got {recorded:?}"
         );
     }
 }

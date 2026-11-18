@@ -6,7 +6,7 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{
-    ActiveTheme as _, IconName, Sizable as _, StyledExt as _, h_flex, v_flex,
+    ActiveTheme as _, IconName, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
     App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
@@ -15,7 +15,7 @@ use gpui_kit::{
 use sbctl_core::form_model::{DEFAULT_SERVER_PORT, DEFAULT_TUN_MTU, ProfileFormModel};
 use sbctl_core::profile::placeholders_in;
 
-use crate::state::{AppStore, BannerTone};
+use crate::state::{AppStore, BannerTone, EditorValidationState};
 use crate::theme::surface_card_bg;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -32,6 +32,7 @@ pub struct ProfileEditorPanel {
     disk_json: String,
     disk_model: Option<ProfileFormModel>,
     external_change_pending: bool,
+    validated_snapshot: Option<String>,
     active_tab: EditorTab,
 
     json_editor: Entity<EditorState>,
@@ -68,6 +69,7 @@ impl ProfileEditorPanel {
             disk_json: String::new(),
             disk_model: None,
             external_change_pending: false,
+            validated_snapshot: None,
             active_tab: EditorTab::Guided,
             json_editor,
             model: ProfileFormModel::default(),
@@ -105,6 +107,7 @@ impl ProfileEditorPanel {
             self.loaded_profile = target.clone();
             self.seen_disk_revision = disk_rev;
             self.external_change_pending = false;
+            self.validated_snapshot = None;
             if let Some(name) = target {
                 let content = self.store.read(cx).read_profile_content(&name);
                 self.load_json_into_views(&content, window, cx);
@@ -134,10 +137,13 @@ impl ProfileEditorPanel {
     }
 
     pub fn force_reload_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(name) = &self.loaded_profile {
-            let content = self.store.read(cx).read_profile_content(name);
+        if let Some(name) = self.loaded_profile.clone() {
+            let content = self.store.read(cx).read_profile_content(&name);
             self.load_json_into_views(&content, window, cx);
             self.external_change_pending = false;
+            self.validated_snapshot = None;
+            self.store
+                .update(cx, |s, cx| s.clear_editor_validation(&name, cx));
         }
     }
 
@@ -243,6 +249,13 @@ impl ProfileEditorPanel {
         false
     }
 
+    fn current_validation_key(&self, cx: &App) -> String {
+        match self.active_tab {
+            EditorTab::Json => self.json_editor.read(cx).value().to_string(),
+            EditorTab::Guided => format!("{:?}", self.build_model_from_inputs(cx)),
+        }
+    }
+
     fn apply_guided_to_json(
         &mut self,
         window: &mut Window,
@@ -265,10 +278,14 @@ impl ProfileEditorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<String, String> {
-        match self.active_tab {
-            EditorTab::Guided => self.apply_guided_to_json(window, cx),
-            EditorTab::Json => Ok(self.json_editor.read(cx).value().to_string()),
+        let content = match self.active_tab {
+            EditorTab::Guided => self.apply_guided_to_json(window, cx)?,
+            EditorTab::Json => self.json_editor.read(cx).value().to_string(),
+        };
+        if let Err(err) = serde_json::from_str::<serde_json::Value>(&content) {
+            return Err(format!("JSON syntax error: {err}"));
         }
+        Ok(content)
     }
 
     pub fn trigger_save(
@@ -283,12 +300,16 @@ impl ProfileEditorPanel {
         let content = match self.collect_effective_content(window, cx) {
             Ok(c) => c,
             Err(err) => {
-                self.store
-                    .update(cx, |s, cx| s.set_banner(BannerTone::Error, err, cx));
+                self.validated_snapshot = Some(self.current_validation_key(cx));
+                self.store.update(cx, |s, cx| {
+                    s.editor_validation = Some((name, EditorValidationState::Invalid(err.clone())));
+                    s.set_banner(BannerTone::Error, err, cx);
+                });
                 return;
             }
         };
 
+        self.validated_snapshot = Some(self.current_validation_key(cx));
         if and_activate {
             self.store
                 .update(cx, |s, cx| s.save_and_activate(name, content, cx));
@@ -311,12 +332,16 @@ impl ProfileEditorPanel {
         };
         match self.collect_effective_content(window, cx) {
             Ok(content) => {
+                self.validated_snapshot = Some(self.current_validation_key(cx));
                 self.store
                     .update(cx, |s, cx| s.validate_live_content(name, content, cx));
             }
             Err(err) => {
-                self.store
-                    .update(cx, |s, cx| s.set_banner(BannerTone::Error, err, cx));
+                self.validated_snapshot = Some(self.current_validation_key(cx));
+                self.store.update(cx, |s, cx| {
+                    s.editor_validation = Some((name, EditorValidationState::Invalid(err.clone())));
+                    s.set_banner(BannerTone::Error, err, cx);
+                });
             }
         }
     }
@@ -366,6 +391,66 @@ impl ProfileEditorPanel {
                         cx.notify();
                     })),
             )
+    }
+
+    fn render_validation_banner(
+        &self,
+        profile_name: &str,
+        validation: &EditorValidationState,
+        is_active: bool,
+        is_busy: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let (border, text_col, label) = match validation {
+            EditorValidationState::Idle => {
+                (cx.theme().border, cx.theme().foreground, String::new())
+            }
+            EditorValidationState::Validating => (
+                cx.theme().border,
+                cx.theme().muted_foreground,
+                "Running sing-box check...".to_string(),
+            ),
+            EditorValidationState::Valid => (
+                cx.theme().success,
+                cx.theme().success,
+                "sing-box check passed".to_string(),
+            ),
+            EditorValidationState::Invalid(msg) => {
+                (cx.theme().danger, cx.theme().danger, msg.clone())
+            }
+        };
+
+        let can_force_draft =
+            matches!(validation, EditorValidationState::Invalid(_)) && !is_active && !is_busy;
+        let profile_for_draft = profile_name.to_string();
+
+        h_flex()
+            .w_full()
+            .px_3()
+            .py_2()
+            .justify_between()
+            .items_center()
+            .gap_3()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(border)
+            .child(div().flex_1().text_xs().text_color(text_col).child(label))
+            .when(can_force_draft, |row| {
+                row.child(
+                    Button::new("editor-save-draft-anyway")
+                        .outline()
+                        .xsmall()
+                        .label("Save Draft Anyway...")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let name = profile_for_draft.clone();
+                            let Ok(content) = this.collect_effective_content(window, cx) else {
+                                return;
+                            };
+                            let store = this.store.clone();
+                            open_save_draft_dialog(name, content, store, window, cx);
+                        })),
+                )
+            })
     }
 
     fn render_toolbar(
@@ -691,13 +776,12 @@ impl Render for ProfileEditorPanel {
             Ok(())
         };
         let dirty = self.is_dirty(cx);
+        let validation = self.active_validation_state(&profile_name, cx);
 
-        let (is_busy, is_active_running) = {
+        let (is_busy, is_active, is_active_running) = {
             let s = self.store.read(cx);
-            (
-                s.busy_phase.is_some(),
-                s.snapshot.running && s.snapshot.active.as_deref() == Some(profile_name.as_str()),
-            )
+            let is_act = s.snapshot.active.as_deref() == Some(profile_name.as_str());
+            (s.busy_phase.is_some(), is_act, is_act && s.snapshot.running)
         };
 
         v_flex()
@@ -707,6 +791,15 @@ impl Render for ProfileEditorPanel {
                 this.child(self.render_disk_change_banner(cx))
             })
             .child(self.render_toolbar(dirty, is_busy, is_active_running, cx))
+            .when_some(validation, |this, val| {
+                this.child(self.render_validation_banner(
+                    &profile_name,
+                    &val,
+                    is_active,
+                    is_busy,
+                    cx,
+                ))
+            })
             .when(!live_todos.is_empty(), |this| {
                 this.child(render_placeholder_strip(live_todos, cx))
             })
@@ -716,6 +809,49 @@ impl Render for ProfileEditorPanel {
             })
             .into_any_element()
     }
+}
+
+impl ProfileEditorPanel {
+    fn active_validation_state(
+        &self,
+        profile_name: &str,
+        cx: &Context<Self>,
+    ) -> Option<EditorValidationState> {
+        let s = self.store.read(cx);
+        let (target, state) = s.editor_validation.as_ref()?;
+        if target != profile_name || *state == EditorValidationState::Idle {
+            return None;
+        }
+        if *state != EditorValidationState::Validating
+            && self.validated_snapshot.as_ref() != Some(&self.current_validation_key(cx))
+        {
+            return None;
+        }
+        Some(state.clone())
+    }
+}
+
+fn open_save_draft_dialog(
+    name: String,
+    content: String,
+    store: Entity<AppStore>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        let n = name.clone();
+        let body = content.clone();
+        let st = store.clone();
+        alert
+            .confirm()
+            .title(format!("Save draft {n}?"))
+            .description("sing-box check did not pass for this inactive profile. Save it as a draft anyway so you can finish editing or installing sing-box later?")
+            .ok_text("Save Draft")
+            .on_ok(move |_, _, cx| {
+                st.update(cx, |s, cx| s.save_profile_content(n.clone(), body.clone(), true, cx));
+                true
+            })
+    });
 }
 
 fn render_placeholder_strip(live_todos: Vec<String>, cx: &App) -> impl IntoElement {

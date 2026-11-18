@@ -1,9 +1,11 @@
 use gpui_kit::{App, Entity, Menu, MenuItem, Subscription};
 use gpui_tray::{Icon, Tray};
+use sbctl_core::profile::Profile;
+use sbctl_core::service::RunState;
 
 use crate::actions::{
     ConnectActive, DisconnectService, Noop, OpenLogsView, OpenMainWindow, OpenSettingsView,
-    QuitApp, RefreshIp, SwitchProfile, SyncAll,
+    QuitApp, RefreshIp, RunDoctor, SwitchProfile, SyncAll,
 };
 use crate::icons::{TrayVisualState, build_tray_icon};
 use crate::state::AppStore;
@@ -38,9 +40,12 @@ impl TrayIcons {
 #[derive(Clone, PartialEq, Eq)]
 struct MenuFingerprint {
     running: bool,
+    health_state: RunState,
     busy_phase: Option<String>,
     broken: Option<String>,
     active: Option<String>,
+    tun: Option<String>,
+    pid: Option<u32>,
     ip_line: Option<String>,
     ip_loading: bool,
     profiles: Vec<(String, bool, Option<String>, Option<String>)>,
@@ -71,9 +76,12 @@ impl MenuFingerprint {
             .collect();
         Self {
             running: store.snapshot.running,
+            health_state: store.snapshot.health.state,
             busy_phase: store.busy_phase.clone(),
             broken: store.snapshot.broken.clone(),
             active: store.snapshot.active.clone(),
+            tun: store.snapshot.status_view.tun.clone(),
+            pid: store.snapshot.status_view.pid,
             ip_line,
             ip_loading: store.ip_loading,
             profiles,
@@ -173,22 +181,40 @@ fn menubar_title(store: &AppStore) -> Option<String> {
     }
 }
 
-fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
-    let mut items = Vec::new();
-
-    let status_label = if let Some(phase) = &store.busy_phase {
-        format!("Status: {phase}")
-    } else if let Some(broken) = &store.snapshot.broken {
-        format!("Status: {broken}")
-    } else if store.snapshot.running {
+fn format_status_header(store: &AppStore) -> String {
+    if let Some(phase) = &store.busy_phase {
+        return format!("Switching: {phase}");
+    }
+    if let Some(broken) = &store.snapshot.broken {
+        return format!("Attention needed: {broken}");
+    }
+    if store.snapshot.running {
         match &store.snapshot.active {
-            Some(name) => format!("Connected - {name}"),
+            Some(name) => format!("Connected: {name}"),
             None => "Connected".to_string(),
         }
+    } else if let Some(name) = &store.snapshot.active {
+        format!("Disconnected (Selected: {name})")
     } else {
         "Disconnected".to_string()
-    };
-    items.push(MenuItem::action(status_label, Noop).disabled(true));
+    }
+}
+
+fn push_connection_telemetry(items: &mut Vec<MenuItem>, store: &AppStore) {
+    if store.snapshot.running {
+        let mut parts = Vec::new();
+        if let Some(tun) = &store.snapshot.status_view.tun {
+            parts.push(tun.clone());
+        }
+        if let Some(pid) = store.snapshot.status_view.pid {
+            parts.push(format!("PID {pid}"));
+        }
+        if !parts.is_empty() {
+            items.push(
+                MenuItem::action(format!("Tunnel: {}", parts.join(" | ")), Noop).disabled(true),
+            );
+        }
+    }
 
     if let Some(ip) = &store.ip_info {
         let loc = ip.formatted_location();
@@ -199,6 +225,18 @@ fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
         };
         items.push(MenuItem::action(line, Noop).disabled(true));
     }
+}
+
+fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
+    let mut items = Vec::new();
+    items.push(MenuItem::action(format_status_header(store), Noop).disabled(true));
+    push_connection_telemetry(&mut items, store);
+
+    let needs_doctor =
+        store.snapshot.broken.is_some() || store.snapshot.health.state == RunState::Error;
+    if needs_doctor {
+        items.push(MenuItem::action("Run Doctor...", RunDoctor));
+    }
 
     items.push(MenuItem::separator());
 
@@ -206,11 +244,7 @@ fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
     if store.snapshot.running {
         items.push(MenuItem::action("Disconnect", DisconnectService).disabled(is_busy));
     } else {
-        let can_connect = store
-            .snapshot
-            .profiles
-            .iter()
-            .any(sbctl_core::profile::Profile::ready);
+        let can_connect = store.snapshot.profiles.iter().any(Profile::ready);
         items.push(MenuItem::action("Connect", ConnectActive).disabled(is_busy || !can_connect));
     }
 
@@ -218,7 +252,7 @@ fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
         items.push(MenuItem::separator());
         for profile in &store.snapshot.profiles {
             let is_active = store.snapshot.active.as_deref() == Some(profile.name.as_str());
-            let label = if profile.ready() {
+            let mut label = if profile.ready() {
                 if let Some(srv) = &profile.server {
                     format!("{} ({srv})", profile.name)
                 } else {
@@ -227,6 +261,9 @@ fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
             } else {
                 format!("{} (setup required)", profile.name)
             };
+            if is_active && !store.snapshot.running {
+                label.push_str(" (selected)");
+            }
             items.push(
                 MenuItem::action(
                     label,
@@ -248,6 +285,8 @@ fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
     let tools_items = vec![
         MenuItem::action("Sync Remote Profiles", SyncAll).disabled(is_busy || !has_remote),
         MenuItem::action("Refresh Public IP", RefreshIp).disabled(store.ip_loading),
+        MenuItem::separator(),
+        MenuItem::action("Run Doctor...", RunDoctor),
     ];
 
     items.push(MenuItem::separator());

@@ -12,6 +12,16 @@ use crate::runner::Runner;
 use crate::service::win_rpc::{HELPER_SERVICE_NAME, PipeRequest, try_send_pipe_request};
 use crate::service::{Manager, RunState, is_sudo_refusal};
 
+/// One-click remediation action offered by the desktop Doctor view for a diagnostic check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FixAction {
+    CreateProfilesDir,
+    RepairMacosSudoers,
+    RepairWindowsHelper,
+    OpenProfiles,
+}
+
 /// Outcome of a single diagnostic check reported by `sbctl doctor` and the Doctor GUI view.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiagnosticCheck {
@@ -20,6 +30,8 @@ pub struct DiagnosticCheck {
     pub warning: bool,
     pub detail: String,
     pub hint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<FixAction>,
 }
 
 pub type SudoProbeFn = Arc<dyn Fn(&[String]) -> std::result::Result<(), String> + Send + Sync>;
@@ -83,6 +95,7 @@ fn check_singbox(checker: &dyn Checker) -> DiagnosticCheck {
             warning: false,
             detail: format!("version {version}"),
             hint: String::new(),
+            fix: None,
         },
         Err(_) => DiagnosticCheck {
             name: "sing-box".to_string(),
@@ -91,6 +104,7 @@ fn check_singbox(checker: &dyn Checker) -> DiagnosticCheck {
             detail: "not found on PATH or standard install directories".to_string(),
             hint: "install sing-box (Homebrew on macOS, WinGet on Windows) or run the installer"
                 .to_string(),
+            fix: None,
         },
     }
 }
@@ -103,6 +117,7 @@ fn check_profiles_dir(layout: &Layout) -> DiagnosticCheck {
             warning: false,
             detail: format!("{} does not exist", layout.profiles_dir.display()),
             hint: "create it with the platform installer".to_string(),
+            fix: Some(FixAction::CreateProfilesDir),
         };
     };
     if !meta.is_dir() {
@@ -112,6 +127,7 @@ fn check_profiles_dir(layout: &Layout) -> DiagnosticCheck {
             warning: false,
             detail: format!("{} is not a directory", layout.profiles_dir.display()),
             hint: "move it aside and re-run the platform installer".to_string(),
+            fix: None,
         };
     }
 
@@ -124,6 +140,7 @@ fn check_profiles_dir(layout: &Layout) -> DiagnosticCheck {
                 warning: false,
                 detail: err.to_string(),
                 hint: "repair directory ownership with the platform installer".to_string(),
+                fix: None,
             };
         }
     };
@@ -137,6 +154,7 @@ fn check_profiles_dir(layout: &Layout) -> DiagnosticCheck {
             warning: true,
             detail: format!("{detail} ({incomplete} still have placeholders)"),
             hint: "replace all TODO_ placeholders before activating".to_string(),
+            fix: Some(FixAction::OpenProfiles),
         }
     } else {
         DiagnosticCheck {
@@ -145,6 +163,7 @@ fn check_profiles_dir(layout: &Layout) -> DiagnosticCheck {
             warning: false,
             detail,
             hint: String::new(),
+            fix: None,
         }
     }
 }
@@ -166,6 +185,7 @@ fn check_sudo_rules(layout: &Layout, custom_probe: Option<&SudoProbeFn>) -> Vec<
                 warning: false,
                 detail: "permitted".to_string(),
                 hint: String::new(),
+                fix: None,
             }),
             Err(err) => checks.push(DiagnosticCheck {
                 name: format!("sudo: {}", cmd.name),
@@ -174,6 +194,7 @@ fn check_sudo_rules(layout: &Layout, custom_probe: Option<&SudoProbeFn>) -> Vec<
                 detail: summarise_sudo(&err),
                 hint: "reinstall scoped sudo rules with: sudo bash scripts/install-macos.sh"
                     .to_string(),
+                fix: Some(FixAction::RepairMacosSudoers),
             }),
         }
     }
@@ -199,6 +220,7 @@ fn check_windows_helper_service(layout: &Layout, runner: &dyn Runner) -> Diagnos
             warning: false,
             detail: format!("{HELPER_SERVICE_NAME} pipe ready (no UAC needed for switches)"),
             hint: String::new(),
+            fix: None,
         };
     }
 
@@ -210,6 +232,7 @@ fn check_windows_helper_service(layout: &Layout, runner: &dyn Runner) -> Diagnos
                 warning: true,
                 detail: format!("{HELPER_SERVICE_NAME} is running, pipe not reachable"),
                 hint: "restart the sbctl-agent service or check permissions".to_string(),
+                fix: Some(FixAction::RepairWindowsHelper),
             }
         }
         _ => DiagnosticCheck {
@@ -219,6 +242,7 @@ fn check_windows_helper_service(layout: &Layout, runner: &dyn Runner) -> Diagnos
             detail: format!("{HELPER_SERVICE_NAME} is not running; UAC prompt will be used"),
             hint: "run scripts\\install.ps1 as Administrator for passwordless tray switches"
                 .to_string(),
+            fix: Some(FixAction::RepairWindowsHelper),
         },
     }
 }
@@ -249,6 +273,7 @@ fn check_service(layout: &Layout, manager: &dyn Manager) -> DiagnosticCheck {
                 } else {
                     String::new()
                 },
+                fix: None,
             }
         }
         Err(err) => DiagnosticCheck {
@@ -257,6 +282,7 @@ fn check_service(layout: &Layout, manager: &dyn Manager) -> DiagnosticCheck {
             warning: false,
             detail: err.to_string(),
             hint: install_hint.to_string(),
+            fix: None,
         },
     }
 }
@@ -271,6 +297,7 @@ fn check_active_config(layout: &Layout, activator: &dyn Activator) -> Diagnostic
                 warning: false,
                 detail: err.to_string(),
                 hint: "select a valid profile with: sbctl use <name>".to_string(),
+                fix: Some(FixAction::OpenProfiles),
             };
         }
     };
@@ -282,6 +309,7 @@ fn check_active_config(layout: &Layout, activator: &dyn Activator) -> Diagnostic
             warning: true,
             detail: "no profile selected".to_string(),
             hint: "choose a profile with: sbctl use <name>".to_string(),
+            fix: Some(FixAction::OpenProfiles),
         };
     };
 
@@ -293,6 +321,7 @@ fn check_active_config(layout: &Layout, activator: &dyn Activator) -> Diagnostic
             warning: false,
             detail: problem,
             hint: "point it at a valid profile with: sbctl use <name>".to_string(),
+            fix: Some(FixAction::OpenProfiles),
         };
     }
 
@@ -302,6 +331,7 @@ fn check_active_config(layout: &Layout, activator: &dyn Activator) -> Diagnostic
         warning: false,
         detail: active_name,
         hint: String::new(),
+        fix: None,
     }
 }
 
@@ -312,6 +342,7 @@ fn check_concurrency() -> DiagnosticCheck {
         warning: false,
         detail: "advisory file lock serializes switches across GUI, tray, and CLI".to_string(),
         hint: String::new(),
+        fix: None,
     }
 }
 
@@ -364,6 +395,23 @@ pub fn macos_sudoers_root_script(layout: &Layout, user: &str) -> crate::error::R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activator::CopyActivator;
+    use crate::checker::FakeChecker;
+    use crate::runner::{FakeResult, FakeRunner};
+    use crate::service::Health;
+
+    struct StaticManager;
+    impl Manager for StaticManager {
+        fn probe(&self) -> crate::error::Result<Health> {
+            Ok(Health::unknown(RunState::Stopped))
+        }
+        fn restart(&self) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn stop(&self) -> crate::error::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn sudoers_commands_stage_and_validate_with_visudo_before_install() {
@@ -377,5 +425,33 @@ mod tests {
         let user_cmd = macos_sudoers_install_command(&layout, "alice").unwrap();
         assert!(user_cmd.starts_with("sudo sh -c "));
         assert!(user_cmd.contains("visudo -cf"));
+    }
+
+    #[test]
+    fn doctor_assigns_expected_fix_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut layout = Layout::windows();
+        layout.profiles_dir = dir.path().join("missing-profiles");
+        layout.active_config_path = dir.path().join("missing-active.json");
+        layout.active_name_path = Some(dir.path().join("active-name"));
+        layout.pipe_name = r"\\.\pipe\sbctl-test-nonexistent".to_string();
+
+        let checker = FakeChecker::default();
+        let runner = FakeRunner::new(FakeResult::err(1060, "service does not exist"));
+        let activator = CopyActivator::new(
+            layout.active_config_path.clone(),
+            layout.active_name_path.clone().unwrap(),
+        );
+
+        let checks =
+            run_doctor_checks(&layout, &checker, &StaticManager, &activator, &runner, None);
+        let prof_chk = checks.iter().find(|c| c.name == "profiles").unwrap();
+        assert_eq!(prof_chk.fix, Some(FixAction::CreateProfilesDir));
+
+        let helper_chk = checks.iter().find(|c| c.name == "helper service").unwrap();
+        assert_eq!(helper_chk.fix, Some(FixAction::RepairWindowsHelper));
+
+        let active_chk = checks.iter().find(|c| c.name == "active config").unwrap();
+        assert_eq!(active_chk.fix, Some(FixAction::OpenProfiles));
     }
 }

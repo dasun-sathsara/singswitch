@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -6,11 +7,11 @@ use gpui_kit::{AsyncApp, Context, SharedString, Task, WeakEntity};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use sbctl_core::controller::{Controller, Snapshot, StatusView};
 use sbctl_core::doctor::DiagnosticCheck;
-use sbctl_core::error::{Result as CoreResult, SbctlError};
+use sbctl_core::error::{ExitCode, Result as CoreResult, SbctlError};
 use sbctl_core::ip::{IpInfo, fetch_ip_info};
 use sbctl_core::layout::Layout;
 use sbctl_core::logs::{LogLevel, read_appended_lines, read_tail_lines};
-use sbctl_core::profile::SKELETON_JSON;
+use sbctl_core::profile::{Profile, SKELETON_JSON};
 use sbctl_core::service::{Health, RunState};
 
 use crate::actions::NavTab;
@@ -64,10 +65,26 @@ impl LogSeverityFilter {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum EditorValidationState {
+    #[default]
+    Idle,
+    Validating,
+    Valid,
+    Invalid(String),
+}
+
 #[derive(Clone, Debug)]
 pub struct LogRecord {
     pub line: SharedString,
     pub level: LogLevel,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WatchEventKind {
+    Config,
+    Logs,
+    Both,
 }
 
 pub struct AppStore {
@@ -78,11 +95,14 @@ pub struct AppStore {
     pub window_open: bool,
     pub log_revision: u64,
     pub disk_revision: u64,
+    pub connected_since: Option<Instant>,
+    pub last_checked: Option<Instant>,
     pub ip_info: Option<IpInfo>,
     pub ip_loading: bool,
     pub ip_error: Option<String>,
     pub busy_phase: Option<String>,
     pub banner: Option<(BannerTone, String)>,
+    pub editor_validation: Option<(String, EditorValidationState)>,
     pub doctor_checks: Vec<DiagnosticCheck>,
     pub doctor_running: bool,
     pub selected_tab: NavTab,
@@ -96,9 +116,11 @@ pub struct AppStore {
     pub access_logs: Vec<LogRecord>,
     error_log_offset: u64,
     access_log_offset: u64,
+    was_running_expected: bool,
     log_poll_in_flight: bool,
     snapshot_poll_in_flight: bool,
     _watcher: Option<RecommendedWatcher>,
+    watcher_task: Option<Task<()>>,
     _daemon_tasks: Vec<Task<()>>,
     snapshot_task: Option<Task<()>>,
     log_poll_task: Option<Task<()>>,
@@ -135,16 +157,15 @@ impl AppStore {
 
         let (ctrl, init_error, snapshot) = match Controller::from_system(None) {
             Ok(c) => {
+                c.set_notifications_enabled(settings.desktop_notifications);
                 let c = Arc::new(c);
                 let snap = c.snapshot().unwrap_or_else(|_| empty_snapshot());
                 (Some(c), None, snap)
             }
-            Err(err) => {
-                let msg = err.message.clone();
-                (None, Some(msg), empty_snapshot())
-            }
+            Err(err) => (None, Some(err.message.clone()), empty_snapshot()),
         };
 
+        let initially_running = snapshot.running;
         let selected_profile = snapshot
             .active
             .clone()
@@ -158,11 +179,14 @@ impl AppStore {
             window_open: false,
             log_revision: 0,
             disk_revision: 0,
+            connected_since: initially_running.then(Instant::now),
+            last_checked: Some(Instant::now()),
             ip_info: None,
             ip_loading: false,
             ip_error: None,
             busy_phase: None,
             banner: init_error.map(|m| (BannerTone::Warning, m)),
+            editor_validation: None,
             doctor_checks: Vec::new(),
             doctor_running: false,
             selected_tab: NavTab::Dashboard,
@@ -176,9 +200,11 @@ impl AppStore {
             access_logs: Vec::new(),
             error_log_offset: 0,
             access_log_offset: 0,
+            was_running_expected: initially_running,
             log_poll_in_flight: false,
             snapshot_poll_in_flight: false,
             _watcher: None,
+            watcher_task: None,
             _daemon_tasks: Vec::new(),
             snapshot_task: None,
             log_poll_task: None,
@@ -189,7 +215,7 @@ impl AppStore {
         };
 
         store.reload_logs();
-        store.start_file_watcher(cx);
+        store.restart_file_watcher(cx);
         store.start_background_pollers(cx);
         store.refresh_ip(cx);
         store.run_doctor(cx);
@@ -218,7 +244,7 @@ impl AppStore {
         match (&self.snapshot.running, &self.snapshot.active) {
             (true, Some(name)) => format!("sbctl - Connected ({name})"),
             (true, None) => "sbctl - Connected".to_string(),
-            (false, Some(name)) => format!("sbctl - Disconnected (active: {name})"),
+            (false, Some(name)) => format!("sbctl - Disconnected (selected: {name})"),
             (false, None) => "sbctl - Disconnected".to_string(),
         }
     }
@@ -234,6 +260,32 @@ impl AppStore {
                     Layout::darwin()
                 }
             })
+    }
+
+    pub fn log_counts(&self) -> (usize, usize) {
+        let mut errors = 0usize;
+        let mut warnings = 0usize;
+        for rec in &self.error_logs {
+            match rec.level {
+                LogLevel::Error => errors += 1,
+                LogLevel::Warn => warnings += 1,
+                _ => {}
+            }
+        }
+        (errors, warnings)
+    }
+
+    pub fn needs_onboarding(&self) -> bool {
+        if self.init_error.is_some() {
+            return false;
+        }
+        let no_ready_profile =
+            self.snapshot.profiles.is_empty() || !self.snapshot.profiles.iter().any(Profile::ready);
+        let blocking_check = self
+            .doctor_checks
+            .iter()
+            .any(|c| (!c.ok && !c.warning) || c.name == "helper service" && !c.ok);
+        no_ready_profile || blocking_check
     }
 
     pub fn set_window_open(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -312,7 +364,19 @@ impl AppStore {
 
     pub fn select_profile(&mut self, name: Option<String>, cx: &mut Context<Self>) {
         self.selected_profile = name;
+        self.editor_validation = None;
         cx.notify();
+    }
+
+    pub fn clear_editor_validation(&mut self, profile: &str, cx: &mut Context<Self>) {
+        if self
+            .editor_validation
+            .as_ref()
+            .is_some_and(|(p, _)| p == profile)
+        {
+            self.editor_validation = None;
+            cx.notify();
+        }
     }
 
     pub fn dismiss_banner(&mut self, cx: &mut Context<Self>) {
@@ -340,6 +404,21 @@ impl AppStore {
 
     pub fn set_auto_refresh_ip(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.settings.auto_refresh_ip = enabled;
+        let _ = self.settings.save();
+        cx.notify();
+    }
+
+    pub fn set_desktop_notifications(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings.desktop_notifications = enabled;
+        if let Some(ctrl) = &self.ctrl {
+            ctrl.set_notifications_enabled(enabled);
+        }
+        let _ = self.settings.save();
+        cx.notify();
+    }
+
+    pub fn set_onboarding_dismissed(&mut self, dismissed: bool, cx: &mut Context<Self>) {
+        self.settings.onboarding_dismissed = dismissed;
         let _ = self.settings.save();
         cx.notify();
     }
@@ -380,6 +459,38 @@ impl AppStore {
         SKELETON_JSON.to_string()
     }
 
+    fn apply_snapshot(&mut self, snap: Snapshot, bump_disk: bool) {
+        let now_running = snap.running;
+        if now_running {
+            if self.connected_since.is_none() {
+                self.connected_since = Some(Instant::now());
+            }
+            self.was_running_expected = true;
+        } else {
+            self.connected_since = None;
+        }
+
+        let profiles_changed = snap.profiles != self.snapshot.profiles;
+        self.snapshot = snap;
+        self.last_checked = Some(Instant::now());
+        if profiles_changed || bump_disk {
+            self.disk_revision = self.disk_revision.wrapping_add(1);
+        }
+
+        let prev_sel = self.selected_profile.clone();
+        if prev_sel.is_none()
+            || !prev_sel
+                .as_ref()
+                .is_some_and(|n| self.snapshot.profiles.iter().any(|p| &p.name == n))
+        {
+            self.selected_profile = self
+                .snapshot
+                .active
+                .clone()
+                .or_else(|| self.snapshot.profiles.first().map(|p| p.name.clone()));
+        }
+    }
+
     pub fn refresh_snapshot(&mut self, force_disk_bump: bool, cx: &mut Context<Self>) {
         let Some(ctrl) = self.ctrl.clone() else {
             return;
@@ -392,30 +503,33 @@ impl AppStore {
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let snap = cx
                 .background_executor()
-                .spawn(async move { ctrl.snapshot() })
+                .spawn({
+                    let ctrl = ctrl.clone();
+                    async move { ctrl.snapshot() }
+                })
                 .await;
             let _ = this.update(cx, |store, cx| {
                 store.snapshot_poll_in_flight = false;
+                store.last_checked = Some(Instant::now());
                 if let Ok(s) = snap {
+                    let unexpected_drop =
+                        store.was_running_expected && !s.running && store.busy_phase.is_none();
                     let changed = s != store.snapshot;
-                    let profiles_changed = s.profiles != store.snapshot.profiles;
                     if changed || force_disk_bump {
-                        store.snapshot = s;
-                        if profiles_changed || force_disk_bump {
-                            store.disk_revision = store.disk_revision.wrapping_add(1);
-                        }
-                        let prev_sel = store.selected_profile.clone();
-                        if prev_sel.is_none()
-                            || !prev_sel.as_ref().is_some_and(|n| {
-                                store.snapshot.profiles.iter().any(|p| &p.name == n)
-                            })
-                        {
-                            store.selected_profile = store.snapshot.active.clone().or_else(|| {
-                                store.snapshot.profiles.first().map(|p| p.name.clone())
-                            });
-                        }
-                        cx.notify();
+                        store.apply_snapshot(s, force_disk_bump);
                     }
+                    if unexpected_drop {
+                        store.was_running_expected = false;
+                        ctrl.notify_error(
+                            "sing-box disconnected",
+                            "The sing-box service stopped unexpectedly. Check Logs or Doctor.",
+                        );
+                        store.banner = Some((
+                            BannerTone::Error,
+                            "sing-box stopped unexpectedly. Inspect Logs or Doctor.".to_string(),
+                        ));
+                    }
+                    cx.notify();
                 }
             });
         });
@@ -453,6 +567,14 @@ impl AppStore {
         self.activate_profile(name, cx);
     }
 
+    pub fn restart_active(&mut self, cx: &mut Context<Self>) {
+        if let Some(active) = self.snapshot.active.clone() {
+            self.activate_profile(active, cx);
+        } else {
+            self.connect_active(cx);
+        }
+    }
+
     pub fn activate_profile(&mut self, name: String, cx: &mut Context<Self>) {
         if self.busy_phase.is_some() {
             return;
@@ -469,12 +591,15 @@ impl AppStore {
         let target = name.clone();
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let worker = cx.background_executor().spawn(async move {
-                let res = ctrl.gui_activate(&target, |phase| {
-                    let _ = phase_tx.send_blocking(phase.label().to_string());
-                });
-                let snap = ctrl.snapshot().ok();
-                (res, snap)
+            let worker = cx.background_executor().spawn({
+                let ctrl = ctrl.clone();
+                async move {
+                    let res = ctrl.gui_activate(&target, |phase| {
+                        let _ = phase_tx.send_blocking(phase.label().to_string());
+                    });
+                    let snap = ctrl.snapshot().ok();
+                    (res, snap)
+                }
             });
 
             while let Ok(label) = phase_rx.recv().await {
@@ -489,15 +614,20 @@ impl AppStore {
             let _ = this.update(cx, |store, cx| {
                 store.busy_phase = None;
                 if let Some(s) = snap {
-                    store.snapshot = s;
+                    store.apply_snapshot(s, false);
                 }
                 match res {
                     Ok(()) => {
+                        store.connected_since = Some(Instant::now());
+                        store.was_running_expected = true;
                         store.selected_profile = Some(name.clone());
                         store.banner = Some((BannerTone::Success, format!("Connected to {name}")));
                         should_refresh_ip = store.settings.auto_refresh_ip;
                     }
                     Err(err) => {
+                        if err.code != ExitCode::Service {
+                            ctrl.notify_error("sing-box activation failed", &err.message);
+                        }
                         store.banner = Some((BannerTone::Error, format!("{err}")));
                     }
                 }
@@ -526,23 +656,18 @@ impl AppStore {
         let target = name.clone();
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let worker = cx.background_executor().spawn(async move {
-                // Save validates first (allow_invalid = false), then activate verifies health.
-                match ctrl.gui_save_profile(&target, &content, false) {
-                    Ok(true) => {
-                        let snap = ctrl.snapshot().ok();
-                        (Ok(()), snap)
-                    }
-                    Ok(false) => {
-                        let res = ctrl.gui_activate(&target, |phase| {
-                            let _ = phase_tx.send_blocking(phase.label().to_string());
-                        });
-                        let snap = ctrl.snapshot().ok();
-                        (res, snap)
-                    }
-                    Err(err) => {
-                        let snap = ctrl.snapshot().ok();
-                        (Err(err), snap)
+            let worker = cx.background_executor().spawn({
+                let ctrl = ctrl.clone();
+                async move {
+                    match ctrl.gui_save_profile(&target, &content, false) {
+                        Ok(true) => (Ok(()), ctrl.snapshot().ok()),
+                        Ok(false) => {
+                            let res = ctrl.gui_activate(&target, |phase| {
+                                let _ = phase_tx.send_blocking(phase.label().to_string());
+                            });
+                            (res, ctrl.snapshot().ok())
+                        }
+                        Err(err) => (Err(err), ctrl.snapshot().ok()),
                     }
                 }
             });
@@ -558,13 +683,16 @@ impl AppStore {
             let mut should_refresh_ip = false;
             let _ = this.update(cx, |store, cx| {
                 store.busy_phase = None;
-                store.disk_revision = store.disk_revision.wrapping_add(1);
                 if let Some(s) = snap {
-                    store.snapshot = s;
+                    store.apply_snapshot(s, true);
                 }
                 match res {
                     Ok(()) => {
+                        store.connected_since = Some(Instant::now());
+                        store.was_running_expected = true;
                         store.selected_profile = Some(name.clone());
+                        store.editor_validation =
+                            Some((name.clone(), EditorValidationState::Valid));
                         store.banner = Some((
                             BannerTone::Success,
                             format!("Saved and connected to {name}"),
@@ -572,6 +700,13 @@ impl AppStore {
                         should_refresh_ip = store.settings.auto_refresh_ip;
                     }
                     Err(err) => {
+                        if err.code != ExitCode::Service {
+                            ctrl.notify_error("sing-box activation failed", &err.message);
+                        }
+                        store.editor_validation = Some((
+                            name.clone(),
+                            EditorValidationState::Invalid(format!("{err}")),
+                        ));
                         store.banner = Some((BannerTone::Error, format!("{err}")));
                     }
                 }
@@ -592,6 +727,7 @@ impl AppStore {
             return;
         };
 
+        self.was_running_expected = false;
         self.busy_phase = Some("Stopping sing-box service...".to_string());
         self.banner = None;
         cx.notify();
@@ -610,10 +746,11 @@ impl AppStore {
             let _ = this.update(cx, |store, cx| {
                 store.busy_phase = None;
                 if let Some(s) = snap {
-                    store.snapshot = s;
+                    store.apply_snapshot(s, false);
                 }
                 match res {
                     Ok(()) => {
+                        store.connected_since = None;
                         store.banner = Some((BannerTone::Info, "sing-box stopped".to_string()));
                         should_refresh_ip = store.settings.auto_refresh_ip;
                     }
@@ -638,13 +775,14 @@ impl AppStore {
                     .unwrap_or_else(|| "Unsupported operating system".to_string()),
             ));
         };
-        ctrl.create_from_skeleton(name)?;
+        ctrl.gui_create_profile(name)?;
         if let Ok(snap) = ctrl.snapshot() {
-            self.snapshot = snap;
+            self.apply_snapshot(snap, true);
         }
-        self.disk_revision = self.disk_revision.wrapping_add(1);
         self.selected_profile = Some(name.to_string());
         self.selected_tab = NavTab::Profiles;
+        self.editor_validation = None;
+        self.restart_file_watcher(cx);
         self.set_banner(
             BannerTone::Success,
             format!("Created profile {name} from skeleton"),
@@ -668,7 +806,7 @@ impl AppStore {
             let (name, res, snap) = cx
                 .background_executor()
                 .spawn(async move {
-                    let res = ctrl.pull_profile(&name, &url);
+                    let res = ctrl.gui_pull_profile(&name, &url);
                     let snap = ctrl.snapshot().ok();
                     (name, res, snap)
                 })
@@ -676,14 +814,15 @@ impl AppStore {
 
             let _ = this.update(cx, |store, cx| {
                 store.busy_phase = None;
-                store.disk_revision = store.disk_revision.wrapping_add(1);
                 if let Some(s) = snap {
-                    store.snapshot = s;
+                    store.apply_snapshot(s, true);
                 }
                 match res {
-                    Ok(_) => {
+                    Ok(()) => {
                         store.selected_profile = Some(name.clone());
                         store.selected_tab = NavTab::Profiles;
+                        store.editor_validation = None;
+                        store.restart_file_watcher(cx);
                         store.banner =
                             Some((BannerTone::Success, format!("Imported profile {name}")));
                     }
@@ -712,7 +851,7 @@ impl AppStore {
             let (name, res, snap) = cx
                 .background_executor()
                 .spawn(async move {
-                    let res = ctrl.sync_one(&name);
+                    let res = ctrl.gui_sync_one(&name);
                     let snap = ctrl.snapshot().ok();
                     (name, res, snap)
                 })
@@ -720,9 +859,8 @@ impl AppStore {
 
             let _ = this.update(cx, |store, cx| {
                 store.busy_phase = None;
-                store.disk_revision = store.disk_revision.wrapping_add(1);
                 if let Some(s) = snap {
-                    store.snapshot = s;
+                    store.apply_snapshot(s, true);
                 }
                 match res {
                     Ok(reloaded) => {
@@ -758,7 +896,7 @@ impl AppStore {
             let (res, snap) = cx
                 .background_executor()
                 .spawn(async move {
-                    let res = ctrl.sync_all();
+                    let res = ctrl.gui_sync_all();
                     let snap = ctrl.snapshot().ok();
                     (res, snap)
                 })
@@ -766,9 +904,8 @@ impl AppStore {
 
             let _ = this.update(cx, |store, cx| {
                 store.busy_phase = None;
-                store.disk_revision = store.disk_revision.wrapping_add(1);
                 if let Some(s) = snap {
-                    store.snapshot = s;
+                    store.apply_snapshot(s, true);
                 }
                 match res {
                     Ok(report) => {
@@ -835,20 +972,29 @@ impl AppStore {
 
             let _ = this.update(cx, |store, cx| {
                 store.busy_phase = None;
-                store.disk_revision = store.disk_revision.wrapping_add(1);
                 if let Some(s) = snap {
-                    store.snapshot = s;
+                    store.apply_snapshot(s, true);
                 }
                 match res {
                     Ok(reloaded) => {
                         let msg = if reloaded {
                             format!("Saved {name} and reloaded sing-box")
+                        } else if allow_invalid {
+                            format!("Saved draft {name}")
                         } else {
                             format!("Saved {name}")
                         };
+                        if !allow_invalid {
+                            store.editor_validation =
+                                Some((name.clone(), EditorValidationState::Valid));
+                        }
                         store.banner = Some((BannerTone::Success, msg));
                     }
                     Err(err) => {
+                        store.editor_validation = Some((
+                            name.clone(),
+                            EditorValidationState::Invalid(format!("{err}")),
+                        ));
                         store.banner = Some((BannerTone::Error, format!("{err}")));
                     }
                 }
@@ -862,21 +1008,31 @@ impl AppStore {
         let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
+        self.editor_validation = Some((name.clone(), EditorValidationState::Validating));
+        cx.notify();
+
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let res = cx
+            let (name, res) = cx
                 .background_executor()
-                .spawn(async move { ctrl.check_json_content(&name, &content) })
+                .spawn(async move {
+                    let res = ctrl.check_json_content(&name, &content);
+                    (name, res)
+                })
                 .await;
             let _ = this.update(cx, |store, cx| {
                 match res {
                     Ok(()) => {
+                        store.editor_validation = Some((name, EditorValidationState::Valid));
                         store.banner = Some((
                             BannerTone::Success,
                             "Current buffer is valid under sing-box check".to_string(),
                         ));
                     }
                     Err(err) => {
-                        store.banner = Some((BannerTone::Error, format!("{err}")));
+                        let msg = format!("{err}");
+                        store.editor_validation =
+                            Some((name, EditorValidationState::Invalid(msg.clone())));
+                        store.banner = Some((BannerTone::Error, msg));
                     }
                 }
                 cx.notify();
@@ -907,9 +1063,8 @@ impl AppStore {
 
             let _ = this.update(cx, |store, cx| {
                 store.busy_phase = None;
-                store.disk_revision = store.disk_revision.wrapping_add(1);
                 if let Some(s) = snap {
-                    store.snapshot = s;
+                    store.apply_snapshot(s, true);
                 }
                 match res {
                     Ok(_) => {
@@ -919,6 +1074,159 @@ impl AppStore {
                             });
                         }
                         store.banner = Some((BannerTone::Info, format!("Deleted {name}")));
+                    }
+                    Err(err) => {
+                        store.banner = Some((BannerTone::Error, format!("{err}")));
+                    }
+                }
+                cx.notify();
+            });
+        });
+        self.mutation_task = Some(task);
+    }
+
+    pub fn ensure_profiles_dir(&mut self, cx: &mut Context<Self>) {
+        if self.busy_phase.is_some() {
+            return;
+        }
+        let Some(ctrl) = self.require_ctrl(cx) else {
+            return;
+        };
+        self.busy_phase = Some("Creating profiles directory...".to_string());
+        cx.notify();
+
+        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let (res, snap, checks) = cx
+                .background_executor()
+                .spawn(async move {
+                    let res = ctrl.gui_ensure_profiles_dir();
+                    let snap = ctrl.snapshot().ok();
+                    let checks = ctrl.doctor();
+                    (res, snap, checks)
+                })
+                .await;
+
+            let _ = this.update(cx, |store, cx| {
+                store.busy_phase = None;
+                if let Some(s) = snap {
+                    store.apply_snapshot(s, true);
+                }
+                store.doctor_checks = checks;
+                match res {
+                    Ok(()) => {
+                        store.restart_file_watcher(cx);
+                        store.banner = Some((
+                            BannerTone::Success,
+                            format!(
+                                "Profiles directory ready at {}",
+                                store.layout().profiles_dir.display()
+                            ),
+                        ));
+                    }
+                    Err(err) => {
+                        store.banner = Some((BannerTone::Error, format!("{err}")));
+                    }
+                }
+                cx.notify();
+            });
+        });
+        self.mutation_task = Some(task);
+    }
+
+    pub fn repair_macos_sudoers(&mut self, root_script: String, cx: &mut Context<Self>) {
+        if self.busy_phase.is_some() {
+            return;
+        }
+        let Some(ctrl) = self.require_ctrl(cx) else {
+            return;
+        };
+        self.busy_phase = Some("Authorizing macOS sudoers install...".to_string());
+        cx.notify();
+
+        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let (res, checks, snap) = cx
+                .background_executor()
+                .spawn(async move {
+                    let apple_script = format!(
+                        "do shell script \"{}\" with administrator privileges",
+                        root_script.replace('\\', "\\\\").replace('"', "\\\"")
+                    );
+                    let out = std::process::Command::new("osascript")
+                        .args(["-e", &apple_script])
+                        .output();
+                    let checks = ctrl.doctor();
+                    let snap = ctrl.snapshot().ok();
+                    (out, checks, snap)
+                })
+                .await;
+
+            let _ = this.update(cx, |store, cx| {
+                store.busy_phase = None;
+                store.doctor_checks = checks;
+                if let Some(s) = snap {
+                    store.apply_snapshot(s, false);
+                }
+                match res {
+                    Ok(out) if out.status.success() => {
+                        store.banner = Some((
+                            BannerTone::Success,
+                            "Installed /etc/sudoers.d/sbctl via visudo".to_string(),
+                        ));
+                    }
+                    Ok(out) => {
+                        let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        let banner = if msg.is_empty() {
+                            "Administrator authorization failed".to_string()
+                        } else {
+                            msg
+                        };
+                        store.banner = Some((BannerTone::Error, banner));
+                    }
+                    Err(err) => {
+                        store.banner = Some((BannerTone::Error, err.to_string()));
+                    }
+                }
+                cx.notify();
+            });
+        });
+        self.mutation_task = Some(task);
+    }
+
+    pub fn repair_windows_helper(&mut self, cx: &mut Context<Self>) {
+        if self.busy_phase.is_some() {
+            return;
+        }
+        let Some(ctrl) = self.require_ctrl(cx) else {
+            return;
+        };
+        self.busy_phase = Some("Starting Windows helper service...".to_string());
+        cx.notify();
+
+        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let (res, checks, snap) = cx
+                .background_executor()
+                .spawn(async move {
+                    let res = ctrl.gui_repair_windows_helper();
+                    let checks = ctrl.doctor();
+                    let snap = ctrl.snapshot().ok();
+                    (res, checks, snap)
+                })
+                .await;
+
+            let _ = this.update(cx, |store, cx| {
+                store.busy_phase = None;
+                store.doctor_checks = checks;
+                if let Some(s) = snap {
+                    store.apply_snapshot(s, true);
+                }
+                match res {
+                    Ok(()) => {
+                        store.restart_file_watcher(cx);
+                        store.banner = Some((
+                            BannerTone::Success,
+                            "sbctl-agent helper service and profiles directory are ready"
+                                .to_string(),
+                        ));
                     }
                     Err(err) => {
                         store.banner = Some((BannerTone::Error, format!("{err}")));
@@ -1051,45 +1359,79 @@ impl AppStore {
         }
     }
 
-    fn start_file_watcher(&mut self, cx: &mut Context<Self>) {
+    fn restart_file_watcher(&mut self, cx: &mut Context<Self>) {
+        self._watcher = None;
+        self.watcher_task = None;
+
         let Some(ctrl) = &self.ctrl else {
             return;
         };
-        let watch_dirs: Vec<PathBuf> = [
-            Some(ctrl.layout.profiles_dir.clone()),
-            ctrl.layout.active_config_path.parent().map(PathBuf::from),
+        let profiles_dir = ctrl.layout.profiles_dir.clone();
+        let active_cfg = ctrl.layout.active_config_path.clone();
+        let err_log = ctrl.layout.error_log_path.clone();
+        let acc_log = ctrl.layout.access_log_path.clone();
+
+        let mut dirs = HashSet::new();
+        for dir in [
+            Some(profiles_dir.clone()),
+            active_cfg.parent().map(PathBuf::from),
+            err_log.parent().map(PathBuf::from),
+            acc_log.parent().map(PathBuf::from),
         ]
         .into_iter()
         .flatten()
-        .filter(|p| p.exists())
-        .collect();
+        {
+            if dir.exists() {
+                dirs.insert(dir);
+            }
+        }
 
-        if watch_dirs.is_empty() {
+        if dirs.is_empty() {
             return;
         }
 
-        let (tx, rx) = smol::channel::unbounded::<()>();
+        let (tx, rx) = smol::channel::unbounded::<WatchEventKind>();
         let watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-            if res.is_ok() {
-                let _ = tx.try_send(());
+            if let Ok(event) = res
+                && let Some(kind) = classify_watch_event(
+                    &event.paths,
+                    &profiles_dir,
+                    &active_cfg,
+                    &err_log,
+                    &acc_log,
+                )
+            {
+                let _ = tx.try_send(kind);
             }
         });
 
         if let Ok(mut w) = watcher {
-            for dir in watch_dirs {
+            for dir in dirs {
                 let _ = w.watch(&dir, RecursiveMode::NonRecursive);
             }
             self._watcher = Some(w);
-            let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                while rx.recv().await.is_ok() {
-                    cx.background_executor().timer(WATCHER_DEBOUNCE).await;
-                    while rx.try_recv().is_ok() {}
-                    let _ = this.update(cx, |store, cx| {
-                        store.refresh_snapshot(true, cx);
-                    });
-                }
-            });
-            self._daemon_tasks.push(task);
+            self.watcher_task = Some(cx.spawn(
+                async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                    while let Ok(first) = rx.recv().await {
+                        cx.background_executor().timer(WATCHER_DEBOUNCE).await;
+                        let mut combined = first;
+                        while let Ok(more) = rx.try_recv() {
+                            combined = merge_watch_kinds(combined, more);
+                        }
+                        let _ = this.update(cx, |store, cx| {
+                            if matches!(combined, WatchEventKind::Config | WatchEventKind::Both) {
+                                store.refresh_snapshot(true, cx);
+                            }
+                            if matches!(combined, WatchEventKind::Logs | WatchEventKind::Both)
+                                && (store.window_open || store.selected_tab == NavTab::Logs)
+                                && store.log_follow
+                            {
+                                store.poll_logs_async(cx);
+                            }
+                        });
+                    }
+                },
+            ));
         }
     }
 
@@ -1129,6 +1471,9 @@ impl AppStore {
                             if store.busy_phase.is_none() && last_poll.elapsed() >= interval {
                                 last_poll = Instant::now();
                                 store.refresh_snapshot(false, cx);
+                                if store.window_open && store.log_follow {
+                                    store.poll_logs_async(cx);
+                                }
                             }
                         })
                         .is_ok();
@@ -1140,6 +1485,35 @@ impl AppStore {
             self._daemon_tasks.push(snap_task);
         }
     }
+}
+
+fn classify_watch_event(
+    paths: &[PathBuf],
+    profiles_dir: &Path,
+    active_cfg: &Path,
+    err_log: &Path,
+    acc_log: &Path,
+) -> Option<WatchEventKind> {
+    let mut saw_cfg = false;
+    let mut saw_log = false;
+    for path in paths {
+        if path == err_log || path == acc_log {
+            saw_log = true;
+        } else if path == active_cfg || path == profiles_dir || path.parent() == Some(profiles_dir)
+        {
+            saw_cfg = true;
+        }
+    }
+    match (saw_cfg, saw_log) {
+        (true, true) => Some(WatchEventKind::Both),
+        (true, false) => Some(WatchEventKind::Config),
+        (false, true) => Some(WatchEventKind::Logs),
+        (false, false) => None,
+    }
+}
+
+fn merge_watch_kinds(a: WatchEventKind, b: WatchEventKind) -> WatchEventKind {
+    if a == b { a } else { WatchEventKind::Both }
 }
 
 fn apply_log_delta(

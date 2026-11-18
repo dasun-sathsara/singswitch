@@ -25,6 +25,17 @@ pub enum PipeRequest {
         name: String,
     },
     Stop,
+    CreateProfile {
+        name: String,
+    },
+    PullProfile {
+        name: String,
+        url: String,
+    },
+    SyncOne {
+        name: String,
+    },
+    SyncAll,
     SaveProfile {
         name: String,
         content: String,
@@ -36,6 +47,8 @@ pub enum PipeRequest {
         name: String,
         force: bool,
     },
+    EnsureProfilesDir,
+    RepairWindowsHelper,
 }
 
 /// Structured response returned by `sbctl-agent` or `sbctl --elevated-op`.
@@ -48,6 +61,10 @@ pub struct PipeResponse {
     pub health: Option<Health>,
     #[serde(default)]
     pub reloaded: bool,
+    #[serde(default)]
+    pub synced: Vec<String>,
+    #[serde(default)]
+    pub failed: Vec<(String, String)>,
 }
 
 impl PipeResponse {
@@ -59,28 +76,30 @@ impl PipeResponse {
             hints: Vec::new(),
             health: None,
             reloaded: false,
+            synced: Vec::new(),
+            failed: Vec::new(),
         }
     }
 
     pub fn with_reloaded(reloaded: bool) -> Self {
         Self {
-            ok: true,
-            code: ExitCode::Ok.as_i32(),
-            message: None,
-            hints: Vec::new(),
-            health: None,
             reloaded,
+            ..Self::success()
         }
     }
 
     pub fn with_health(health: Health) -> Self {
         Self {
-            ok: true,
-            code: ExitCode::Ok.as_i32(),
-            message: None,
-            hints: Vec::new(),
             health: Some(health),
-            reloaded: false,
+            ..Self::success()
+        }
+    }
+
+    pub fn with_sync_report(synced: Vec<String>, failed: Vec<(String, String)>) -> Self {
+        Self {
+            synced,
+            failed,
+            ..Self::success()
         }
     }
 
@@ -92,6 +111,8 @@ impl PipeResponse {
             hints: err.hints.clone(),
             health: None,
             reloaded: false,
+            synced: Vec::new(),
+            failed: Vec::new(),
         }
     }
 
@@ -168,6 +189,38 @@ pub fn try_send_pipe_request(_pipe_name: &str, _req: &PipeRequest) -> Result<Opt
     Ok(None)
 }
 
+#[cfg(windows)]
+fn build_pipe_security_descriptor() -> Result<windows_sys::Win32::Security::PSECURITY_DESCRIPTOR> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
+
+    // Grant FullControl to SYSTEM (SY) and Administrators (BA), and Read/Write to Interactive users (IU).
+    let sddl: Vec<u16> = OsStr::new("D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    let ok = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut sd,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(SbctlError::general(format!(
+            "could not build pipe security descriptor: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(sd)
+}
+
 /// Serve `\\.\pipe\sbctl-control` with an explicit SDDL DACL allowing `SYSTEM`,
 /// `BUILTIN\Administrators`, and `BUILTIN\Users` (Interactive Console users can
 /// request narrow profile switches without full admin rights).
@@ -190,10 +243,7 @@ where
         CloseHandle, ERROR_IO_PENDING, ERROR_PIPE_CONNECTED, GetLastError, INVALID_HANDLE_VALUE,
         LocalFree,
     };
-    use windows_sys::Win32::Security::Authorization::{
-        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
-    };
-    use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
     use windows_sys::Win32::System::Pipes::{
         ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE,
@@ -204,28 +254,7 @@ where
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    // Grant FullControl to SYSTEM (SY) and Administrators (BA), and Read/Write to Interactive users (IU).
-    let sddl: Vec<u16> = OsStr::new("D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)")
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-
-    let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-    let sd_ok = unsafe {
-        ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            sddl.as_ptr(),
-            SDDL_REVISION_1,
-            &mut sd,
-            std::ptr::null_mut(),
-        )
-    };
-    if sd_ok == 0 {
-        return Err(SbctlError::general(format!(
-            "could not build pipe security descriptor: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-
+    let sd = build_pipe_security_descriptor()?;
     let sa = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: sd,
@@ -314,15 +343,42 @@ mod tests {
 
     #[test]
     fn pipe_request_round_trips_json() {
-        let req = PipeRequest::SaveProfile {
-            name: "aws-sg".to_string(),
-            content: "{}".to_string(),
-            source_url: Some("https://example.com/p.json".to_string()),
-            allow_invalid: false,
-        };
-        let encoded = serde_json::to_string(&req).unwrap();
-        let decoded: PipeRequest = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(req, decoded);
+        let requests = [
+            PipeRequest::SaveProfile {
+                name: "aws-sg".to_string(),
+                content: "{}".to_string(),
+                source_url: Some("https://example.com/p.json".to_string()),
+                allow_invalid: false,
+            },
+            PipeRequest::CreateProfile {
+                name: "seed".to_string(),
+            },
+            PipeRequest::PullProfile {
+                name: "remote".to_string(),
+                url: "https://example.com/cfg.json".to_string(),
+            },
+            PipeRequest::SyncOne {
+                name: "remote".to_string(),
+            },
+            PipeRequest::SyncAll,
+            PipeRequest::EnsureProfilesDir,
+            PipeRequest::RepairWindowsHelper,
+        ];
+
+        for req in requests {
+            let encoded = serde_json::to_string(&req).unwrap();
+            let decoded: PipeRequest = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(req, decoded);
+        }
+
+        let sync_resp = PipeResponse::with_sync_report(
+            vec!["a".to_string()],
+            vec![("b".to_string(), "timeout".to_string())],
+        );
+        let decoded_resp: PipeResponse =
+            serde_json::from_str(&serde_json::to_string(&sync_resp).unwrap()).unwrap();
+        assert_eq!(decoded_resp.synced, vec!["a"]);
+        assert_eq!(decoded_resp.failed.len(), 1);
 
         let resp = PipeResponse::from_error(&SbctlError::service("boom").with_hint("check logs"));
         let err = resp.into_result().unwrap_err();

@@ -106,6 +106,9 @@ impl LogsView {
         &self,
         stream: LogStreamKind,
         severity: LogSeverityFilter,
+        follow: bool,
+        errors: usize,
+        warnings: usize,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let store_tab = self.store.clone();
@@ -116,23 +119,39 @@ impl LogsView {
             .gap_3()
             .flex_wrap()
             .child(
-                TabBar::new("logs-stream-tabs")
-                    .segmented()
-                    .selected_index(match stream {
-                        LogStreamKind::Error => 0,
-                        LogStreamKind::Access => 1,
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        TabBar::new("logs-stream-tabs")
+                            .segmented()
+                            .selected_index(match stream {
+                                LogStreamKind::Error => 0,
+                                LogStreamKind::Access => 1,
+                            })
+                            .child(Tab::new().label("Error Log"))
+                            .child(Tab::new().label("Access Log"))
+                            .on_click(cx.listener(move |this, idx, _, cx| {
+                                let next = if *idx == 1 {
+                                    LogStreamKind::Access
+                                } else {
+                                    LogStreamKind::Error
+                                };
+                                this.selected_line = None;
+                                store_tab.update(cx, |s, cx| s.set_log_stream(next, cx));
+                            })),
+                    )
+                    .child(if follow {
+                        Tag::success().xsmall().child("Streaming")
+                    } else {
+                        Tag::secondary().xsmall().child("Paused")
                     })
-                    .child(Tab::new().label("Error Log"))
-                    .child(Tab::new().label("Access Log"))
-                    .on_click(cx.listener(move |this, idx, _, cx| {
-                        let next = if *idx == 1 {
-                            LogStreamKind::Access
-                        } else {
-                            LogStreamKind::Error
-                        };
-                        this.selected_line = None;
-                        store_tab.update(cx, |s, cx| s.set_log_stream(next, cx));
-                    })),
+                    .when(errors > 0, |h| {
+                        h.child(Tag::danger().xsmall().child(format!("{errors} Err")))
+                    })
+                    .when(warnings > 0, |h| {
+                        h.child(Tag::warning().xsmall().child(format!("{warnings} Warn")))
+                    }),
             )
             .child(
                 h_flex()
@@ -377,7 +396,7 @@ impl LogsView {
 
 impl Render for LogsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (stream, follow, severity, layout, log_path, total_count) = {
+        let (stream, follow, severity, layout, log_path, total_count, (errors, warnings)) = {
             let s = self.store.read(cx);
             self.ensure_filter_cache(s);
             let layout = s.layout();
@@ -392,6 +411,7 @@ impl Render for LogsView {
                 layout,
                 path,
                 s.active_log_records().len(),
+                s.log_counts(),
             )
         };
 
@@ -406,7 +426,11 @@ impl Render for LogsView {
             .size_full()
             .p_5()
             .gap_4()
-            .child(self.render_stream_tabs_and_severity(stream, severity, cx))
+            .child(
+                self.render_stream_tabs_and_severity(
+                    stream, severity, follow, errors, warnings, cx,
+                ),
+            )
             .child(self.render_controls_bar(follow, count, total_count, cx))
             .child(self.render_virtual_log_box(count, &log_path, layout.platform.as_str(), cx))
             .when_some(self.selected_line.clone(), |this, line| {

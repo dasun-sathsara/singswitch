@@ -11,6 +11,7 @@ use gpui_kit::{
 };
 use sbctl_core::layout::Layout;
 
+use crate::actions::NavTab;
 use crate::state::{AppStore, BannerTone};
 use crate::theme::{ThemePreference, surface_card_bg};
 
@@ -144,6 +145,8 @@ fn render_behavior_card(
     let store_login = store.clone();
     let store_menubar = store.clone();
     let store_ip = store.clone();
+    let store_notify = store.clone();
+    let store_guide = store.clone();
 
     v_flex()
         .w_full()
@@ -193,6 +196,52 @@ fn render_behavior_card(
             },
             cx,
         ))
+        .child(setting_switch_row(
+            "set-notifications",
+            "Desktop notifications",
+            "Show native macOS or Windows alerts on profile switches and failures.",
+            settings.desktop_notifications,
+            false,
+            move |checked, _, cx| {
+                store_notify.update(cx, |s, cx| s.set_desktop_notifications(*checked, cx));
+            },
+            cx,
+        ))
+        .child(
+            h_flex()
+                .w_full()
+                .justify_between()
+                .items_center()
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_medium()
+                                .text_color(cx.theme().foreground)
+                                .child("First-run setup guide"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Re-open the setup checklist card on the Dashboard."),
+                        ),
+                )
+                .child(
+                    Button::new("set-show-onboarding")
+                        .outline()
+                        .small()
+                        .label("Show Guide")
+                        .on_click(move |_, _, cx| {
+                            store_guide.update(cx, |s, cx| {
+                                s.set_onboarding_dismissed(false, cx);
+                                s.set_tab(NavTab::Dashboard, cx);
+                            });
+                        }),
+                ),
+        )
 }
 
 fn setting_switch_row(
