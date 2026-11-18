@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sbctl-core",
+    "crates/sbctl-cli",
+    "crates/sbctl-app",
+]
+default-members = [
+    "crates/sbctl-core",
+    "crates/sbctl-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+clap = { version = "4.5", features = ["derive", "env"] }
+clap_complete = "4.5"
+dirs = "6"
+notify = "8.2"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smol = "2"
+tempfile = "3"
+thiserror = "2"
+ureq = { version = "3", default-features = false, features = ["native-tls", "gzip"] }
+windows-sys = "0.61"
+windows-service = "0.8"
+objc2 = "0.6"
+objc2-app-kit = "0.3.2"
+objc2-foundation = "0.3.2"
+gpui-kit = { version = "0.10.0", features = ["syntect"] }
+gpui-tray = { version = "0.3.0", default-features = false, features = ["gpui-kit", "menu-state"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

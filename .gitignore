@@ -1,0 +1,7 @@
+/target/
+/dist/
+**/*.rs.bk
+*.env
+*.pem
+.DS_Store
+Thumbs.db

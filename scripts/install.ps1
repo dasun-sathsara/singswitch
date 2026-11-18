@@ -1,0 +1,86 @@
+#Requires -Version 5.1
+#Requires -RunAsAdministrator
+param(
+    [string]$BinDir = "$PSScriptRoot\..\target\x86_64-pc-windows-msvc\release",
+    [string]$SingBoxExe = "$env:ProgramFiles\sing-box\sing-box.exe",
+    [string]$WinSwExe = "$env:ProgramFiles\sing-box\winsw.exe"
+)
+
+$ErrorActionPreference = "Stop"
+
+$InstallDir = "$env:ProgramFiles\sbctl"
+$SingBoxData = "$env:ProgramData\sing-box"
+$ProfilesDir = "$SingBoxData\profiles"
+$LogsDir = "$SingBoxData\logs"
+$SbctlState = "$env:ProgramData\sbctl"
+
+Write-Host "==> Creating directories..."
+New-Item -ItemType Directory -Force -Path $InstallDir, $ProfilesDir, $LogsDir, $SbctlState | Out-Null
+
+$sbctlSrc = Join-Path $BinDir "sbctl.exe"
+$appSrc = Join-Path $BinDir "sbctl-app.exe"
+if (-not (Test-Path $sbctlSrc)) { throw "Missing $sbctlSrc. Build with: cargo build --release --workspace --target x86_64-pc-windows-msvc" }
+if (-not (Test-Path $appSrc))   { throw "Missing $appSrc. Build with: cargo build --release --workspace --target x86_64-pc-windows-msvc" }
+
+Write-Host "==> Copying binaries to $InstallDir..."
+Copy-Item $sbctlSrc "$InstallDir\sbctl.exe" -Force
+Copy-Item $appSrc   "$InstallDir\sbctl-app.exe" -Force
+
+# Harden ProgramData ACLs so unprivileged users can read logs/profiles while service updates remain protected.
+icacls $SbctlState  /inheritance:r /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F" /grant "Users:(OI)(CI)R" | Out-Null
+icacls $SingBoxData /inheritance:r /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F" /grant "Users:(OI)(CI)RX" | Out-Null
+icacls $ProfilesDir /grant "Users:(OI)(CI)M" | Out-Null
+icacls $LogsDir     /grant "Users:(OI)(CI)R" | Out-Null
+
+# Add install directory to machine PATH if absent.
+$machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+if ($machinePath -notlike "*$InstallDir*") {
+    [Environment]::SetEnvironmentVariable("Path", "$machinePath;$InstallDir", "Machine")
+}
+
+# Register WinSW sing-box service when WinSW and sing-box binaries are present.
+if ((Test-Path $WinSwExe) -and (Test-Path $SingBoxExe)) {
+    $ServiceDir = Split-Path -Parent $WinSwExe
+    $WinSwXml = Join-Path $ServiceDir "sing-box.xml"
+    @"
+<service>
+  <id>sing-box</id>
+  <name>sing-box</name>
+  <description>sing-box universal proxy service managed by sbctl</description>
+  <executable>$SingBoxExe</executable>
+  <arguments>run -c "$SingBoxData\config.json"</arguments>
+  <logpath>$LogsDir</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>4</keepFiles>
+  </log>
+  <startmode>Manual</startmode>
+  <onfailure action="restart" delay="3 sec"/>
+</service>
+"@ | Set-Content -Encoding UTF8 $WinSwXml
+
+    & $WinSwExe install "$WinSwXml" | Out-Null
+} else {
+    Write-Warning "WinSW ($WinSwExe) or sing-box ($SingBoxExe) not found; skipping sing-box Windows service setup."
+}
+
+# Register privileged sbctl named-pipe helper service (allows unprivileged tray/GUI control without UAC prompts).
+$AgentService = "sbctl-agent"
+if (Get-Service -Name $AgentService -ErrorAction SilentlyContinue) {
+    Stop-Service -Name $AgentService -Force -ErrorAction SilentlyContinue
+    sc.exe delete $AgentService | Out-Null
+    Start-Sleep -Seconds 1
+}
+sc.exe create $AgentService binPath= "`"$InstallDir\sbctl.exe`" agent" start= auto DisplayName= "sbctl Privileged Helper" | Out-Null
+sc.exe start $AgentService | Out-Null
+
+# Create Start Menu shortcut.
+$ShortcutPath = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\sbctl.lnk"
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut($ShortcutPath)
+$Shortcut.TargetPath = "$InstallDir\sbctl-app.exe"
+$Shortcut.WorkingDirectory = $InstallDir
+$Shortcut.Description = "sbctl - sing-box desktop controller"
+$Shortcut.Save()
+
+Write-Host "==> Installation complete. Launch sbctl from Start Menu or run 'sbctl doctor'."
