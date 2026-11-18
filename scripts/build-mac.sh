@@ -12,7 +12,7 @@ if [[ "$HOST_OS" != "Darwin" ]]; then
 
     echo "==> Priming shader outputs for gpui-pre-apple..."
     cargo build --release --workspace --target aarch64-apple-darwin >/dev/null 2>&1 || true
-    "$ROOT_DIR/scripts/stitch-macos-shaders.sh" "$ROOT_DIR/target/aarch64-apple-darwin/release" || true
+    "$ROOT_DIR/scripts/stitch-macos-shaders.sh" "$ROOT_DIR/target/aarch64-apple-darwin/release"
 fi
 
 echo "==> Building release binaries for aarch64-apple-darwin..."

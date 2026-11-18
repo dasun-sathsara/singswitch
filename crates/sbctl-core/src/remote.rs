@@ -15,6 +15,7 @@ static REMOTE_AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
     ureq::Agent::config_builder()
         .timeout_global(Some(FETCH_TIMEOUT))
         .user_agent("sbctl")
+        .tls_config(crate::net::tls_config())
         .build()
         .new_agent()
 });

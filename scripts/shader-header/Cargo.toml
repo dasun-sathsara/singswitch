@@ -1,0 +1,12 @@
+[package]
+name = "shader-header"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone helper, built on demand and kept out of the main workspace so it
+# does not share target/ or dependency resolution with the shipped crates.
+[workspace]
+
+[dependencies]
+cbindgen = "0.29"

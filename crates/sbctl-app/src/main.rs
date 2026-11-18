@@ -6,6 +6,8 @@ extern crate gpui_kit as gpui;
 #[cfg(any(target_os = "macos", windows))]
 mod actions;
 #[cfg(any(target_os = "macos", windows))]
+mod diag;
+#[cfg(any(target_os = "macos", windows))]
 mod icons;
 #[cfg(any(target_os = "macos", windows))]
 mod shell;
@@ -51,6 +53,12 @@ mod desktop {
     pub fn main() {
         let start_background = std::env::args().any(|a| a == "--background" || a == "--minimized");
 
+        crate::diag::install_panic_hook();
+        crate::diag::log(&format!(
+            "starting sbctl-app {} background={start_background}",
+            env!("CARGO_PKG_VERSION")
+        ));
+
         gpui_kit::application()
             .with_assets(gpui_kit::assets::Assets)
             .with_quit_mode(QuitMode::Explicit)
@@ -64,6 +72,10 @@ mod desktop {
                 bind_global_shortcuts(cx);
 
                 let tray = TrayController::install(&store, cx).ok();
+                match &tray {
+                    Some(_) => crate::diag::log("tray installed"),
+                    None => crate::diag::log("tray unavailable; app runs as a plain window"),
+                }
 
                 cx.set_global(AppGlobalState {
                     store: store.clone(),
@@ -196,13 +208,17 @@ mod desktop {
             ..TitleBar::window_options()
         };
 
-        if let Ok((handle, view)) = open_window(options, cx, move |window, cx| {
+        match open_window(options, cx, move |window, cx| {
             cx.new(|cx| WorkspaceShell::new(store.clone(), window, cx))
         }) {
-            let _ = handle.update(cx, |_, window, _| window.activate_window());
-            let g = cx.global_mut::<AppGlobalState>();
-            g.main_window = Some(handle);
-            g.main_view = Some(view);
+            Ok((handle, view)) => {
+                let _ = handle.update(cx, |_, window, _| window.activate_window());
+                let g = cx.global_mut::<AppGlobalState>();
+                g.main_window = Some(handle);
+                g.main_view = Some(view);
+                crate::diag::log("main window opened");
+            }
+            Err(err) => crate::diag::log(&format!("main window failed: {err}")),
         }
     }
 

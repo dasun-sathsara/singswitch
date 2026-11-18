@@ -1,4 +1,5 @@
 /target/
+/scripts/shader-header/target/
 /dist/
 **/*.rs.bk
 .env

@@ -25,26 +25,33 @@ if [[ ${#OUT_DIRS[@]} -eq 0 ]]; then
     exit 1
 fi
 
+# Cross builds run gpui-pre-apple's build script on the Linux host, where its
+# macOS-only shader step is skipped, so the header has to be generated here.
+# Shipping without it yields an app that opens no window and reports
+# "building Metal library" at runtime.
+HEADER_GEN="$ROOT_DIR/scripts/shader-header"
+
 for out_dir in "${OUT_DIRS[@]}"; do
     stitched="${out_dir}/stitched_shaders.metal"
     header="${out_dir}/scene.h"
 
-    if [[ ! -f "$header" || "$GPUI_VENDOR/src/scene.rs" -nt "$header" ]]; then
-        if command -v cbindgen >/dev/null 2>&1; then
-            cbindgen --config "${GPUI_VENDOR}/cbindgen.toml" --crate gpui --output "$header" "$GPUI_VENDOR" 2>/dev/null || \
-            cbindgen --crate gpui --lang c --output "$header" "$GPUI_VENDOR" 2>/dev/null || \
-            : > "$header"
-        else
-            : > "$header"
-        fi
+    if [[ ! -s "$header" || "$GPUI_VENDOR/src/scene.rs" -nt "$header" ]]; then
+        cargo run --quiet --release --manifest-path "$HEADER_GEN/Cargo.toml" -- \
+            "$GPUI_VENDOR" "$APPLE_SRC" "$header"
     fi
 
-    if [[ ! -f "$stitched" || "$SHADERS_SRC" -nt "$stitched" ]]; then
-        {
-            if [[ -s "$header" ]]; then
-                cat "$header"
-            fi
-            grep -v '^#include "scene.h"' "$SHADERS_SRC"
-        } > "$stitched"
+    if [[ ! -s "$header" ]]; then
+        echo "error: shader header $header is empty" >&2
+        exit 1
+    fi
+
+    {
+        cat "$header"
+        grep -v '^#include "scene.h"' "$SHADERS_SRC"
+    } > "$stitched"
+
+    if ! grep -q 'Bounds_ScaledPixels' "$stitched"; then
+        echo "error: $stitched is missing the shader structs from scene.h" >&2
+        exit 1
     fi
 done

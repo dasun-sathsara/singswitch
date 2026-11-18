@@ -9,6 +9,7 @@ pub mod ip;
 pub mod layout;
 pub mod lock;
 pub mod logs;
+pub mod net;
 pub mod notify;
 pub mod profile;
 pub mod remote;

@@ -68,6 +68,8 @@ make cross    # macOS and Windows cross-compilation checks
 
 Set `MAC_SDK=/path/to/MacOSX14.5.sdk` and run `make bundle-macos` to cross-build `dist/sbctl.app` from Linux.
 
+A bundled app has no terminal, so startup records go to a file. If the window never appears, read `~/Library/Logs/sbctl/app.log` on macOS or `%LOCALAPPDATA%\sbctl\logs\app.log` on Windows. Each line carries a UTC timestamp, and the file includes tray availability, window creation results, and panic messages.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
