@@ -3,7 +3,9 @@ name = "sbctl-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Core sing-box profile, validation, and service control library for sbctl"
+authors.workspace = true
+rust-version.workspace = true
+description = "Profile validation, service control, and diagnostics for sbctl"
 
 [dependencies]
 regex.workspace = true

@@ -8,6 +8,7 @@ HOST_OS="$(uname -s)"
 if [[ "$HOST_OS" != "Darwin" ]]; then
     # shellcheck source=cross-env.sh
     source "$ROOT_DIR/scripts/cross-env.sh"
+    trap '[[ -n "${SBCTL_CROSS_SHIM_DIR:-}" && -d "$SBCTL_CROSS_SHIM_DIR" ]] && rm -rf "$SBCTL_CROSS_SHIM_DIR"' EXIT
 
     echo "==> Priming shader outputs for gpui-pre-apple..."
     cargo build --release --workspace --target aarch64-apple-darwin >/dev/null 2>&1 || true

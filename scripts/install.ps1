@@ -42,14 +42,17 @@ if ($machinePath -notlike "*$InstallDir*") {
 if ((Test-Path $WinSwExe) -and (Test-Path $SingBoxExe)) {
     $ServiceDir = Split-Path -Parent $WinSwExe
     $WinSwXml = Join-Path $ServiceDir "sing-box.xml"
+    $EscSingBoxExe = [System.Security.SecurityElement]::Escape($SingBoxExe)
+    $EscArguments = [System.Security.SecurityElement]::Escape("run -c `"$SingBoxData\config.json`"")
+    $EscLogsDir = [System.Security.SecurityElement]::Escape($LogsDir)
     @"
 <service>
   <id>sing-box</id>
   <name>sing-box</name>
   <description>sing-box universal proxy service managed by sbctl</description>
-  <executable>$SingBoxExe</executable>
-  <arguments>run -c "$SingBoxData\config.json"</arguments>
-  <logpath>$LogsDir</logpath>
+  <executable>$EscSingBoxExe</executable>
+  <arguments>$EscArguments</arguments>
+  <logpath>$EscLogsDir</logpath>
   <log mode="roll-by-size">
     <sizeThreshold>10240</sizeThreshold>
     <keepFiles>4</keepFiles>
@@ -71,7 +74,7 @@ if (Get-Service -Name $AgentService -ErrorAction SilentlyContinue) {
     sc.exe delete $AgentService | Out-Null
     Start-Sleep -Seconds 1
 }
-sc.exe create $AgentService binPath= "`"$InstallDir\sbctl.exe`" agent" start= auto DisplayName= "sbctl Privileged Helper" | Out-Null
+sc.exe create $AgentService binPath= "`"$InstallDir\sbctl.exe`" agent" start= auto DisplayName= "sbctl Helper" | Out-Null
 sc.exe start $AgentService | Out-Null
 
 # Create Start Menu shortcut.
@@ -80,7 +83,7 @@ $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = "$InstallDir\sbctl-app.exe"
 $Shortcut.WorkingDirectory = $InstallDir
-$Shortcut.Description = "sbctl - sing-box desktop controller"
+$Shortcut.Description = "Manage sing-box profiles and service"
 $Shortcut.Save()
 
 Write-Host "==> Installation complete. Launch sbctl from Start Menu or run 'sbctl doctor'."

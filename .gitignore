@@ -1,7 +1,9 @@
 /target/
 /dist/
 **/*.rs.bk
-*.env
+.env
+.env.*
 *.pem
+*.log
 .DS_Store
 Thumbs.db

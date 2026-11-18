@@ -3,7 +3,9 @@ name = "sbctl-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native desktop GUI and menu bar / system tray application for sbctl"
+authors.workspace = true
+rust-version.workspace = true
+description = "Desktop app and tray controller for sbctl"
 
 [[bin]]
 name = "sbctl-app"

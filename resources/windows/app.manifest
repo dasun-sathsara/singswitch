@@ -6,7 +6,7 @@
     name="app.lexiflix.sbctl"
     type="win32"
   />
-  <description>sbctl Desktop Controller</description>
+  <description>sbctl</description>
   <dependency>
     <dependentAssembly>
       <assemblyIdentity
