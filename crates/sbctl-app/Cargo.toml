@@ -1,0 +1,40 @@
+[package]
+name = "sbctl-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native desktop GUI and menu bar / system tray application for sbctl"
+
+[[bin]]
+name = "sbctl-app"
+path = "src/main.rs"
+
+[dependencies]
+dirs.workspace = true
+gpui-kit.workspace = true
+gpui-tray.workspace = true
+notify.workspace = true
+sbctl-core = { path = "../sbctl-core" }
+serde.workspace = true
+serde_json.workspace = true
+smol.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "NSApplication",
+    "NSRunningApplication",
+    "NSWindow",
+] }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSObject",
+    "NSString",
+] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+    "Win32_UI_WindowsAndMessaging",
+] }
