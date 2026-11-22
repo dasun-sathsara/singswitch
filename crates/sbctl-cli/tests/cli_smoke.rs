@@ -27,14 +27,12 @@ fn version_json_outputs_schema_v1() {
 #[test]
 fn logs_without_follow_exits_and_honours_json() {
     // `--follow` used to default to true, so `sbctl logs` never returned.
-    let dir = std::env::temp_dir().join(format!("sbctl-logs-test-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
+    // There is no log-path override to point at a temp dir, so this reads the
+    // real path and accepts either outcome; what it pins is that neither hangs.
     let out = Command::new(sbctl_bin())
         .args(["logs", "-n", "5", "--json"])
-        .env("SBCTL_LOG_DIR", &dir)
         .output()
         .expect("run sbctl logs -n 5 --json");
-    let _ = std::fs::remove_dir_all(&dir);
 
     // Either it has no log file yet (refused with a hint) or it printed schema 1
     // and exited. What must never happen is hanging.
@@ -95,5 +93,31 @@ fn unsupported_host_status_json_emits_structured_error() {
                 .unwrap_or("")
                 .contains("macOS and Windows")
         );
+    }
+}
+
+/// The layout guard is a compile-time `cfg`, so on a host that is neither macOS
+/// nor Windows every command fails before reaching its own logic. These two
+/// tests only assert the contract that survives that: a non-zero exit with a
+/// schema-1 JSON error and no prose on stdout. Reaching the `edit` argument
+/// checks themselves needs a macOS or Windows host.
+#[test]
+fn failures_are_machine_readable_and_never_silent() {
+    for args in [
+        vec!["edit", "anything", "--json"],
+        vec!["edit", "anything", "--set", "not_a_field=1", "--json"],
+    ] {
+        let out = Command::new(sbctl_bin())
+            .args(&args)
+            .output()
+            .unwrap_or_else(|e| panic!("run sbctl {args:?}: {e}"));
+        let body: Value = serde_json::from_slice(&out.stdout)
+            .unwrap_or_else(|e| panic!("sbctl {args:?} printed non-JSON: {e}"));
+        assert_eq!(body["schema"], 1, "{args:?}");
+        assert!(
+            body["error"].is_string(),
+            "unsilent failure for {args:?}: {body}"
+        );
+        assert!(!out.status.success(), "{args:?} must exit non-zero");
     }
 }

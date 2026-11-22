@@ -196,7 +196,9 @@ impl ProfilesView {
                                         });
                                         return;
                                     }
-                                    s_ok.update(cx, |s, cx| s.pull_profile(name, url, cx));
+                                    s_ok.update(cx, |s, cx| {
+                                        s.pull_profile(name, url, NoticeOrigin::Stage, cx)
+                                    });
                                     window.close_dialog(cx);
                                 }),
                         ),
@@ -629,7 +631,9 @@ impl ProfilesView {
                                             .disabled(busy)
                                             .on_click(move |_, _, cx| {
                                                 let n = n.clone();
-                                                st.update(cx, |s, cx| s.sync_profile(n, cx));
+                                                st.update(cx, |s, cx| {
+                                                    s.sync_profile(n, NoticeOrigin::Stage, cx)
+                                                });
                                             }),
                                     ),
                             )
@@ -697,14 +701,14 @@ impl ProfilesView {
                         .disabled(busy || !has_source)
                         .on_click(move |_, _, cx| {
                             let n = n.clone();
-                            sy.update(cx, |s, cx| s.sync_profile(n, cx));
+                            sy.update(cx, |s, cx| s.sync_profile(n, NoticeOrigin::Stage, cx));
                         }),
                 )
                 .item(
                     PopupMenuItem::new("Sync all profiles")
                         .disabled(busy)
                         .on_click(move |_, _, cx| {
-                            sa.update(cx, AppStore::sync_all);
+                            sa.update(cx, |s, cx| s.sync_all(NoticeOrigin::Stage, cx));
                         }),
                 )
                 .separator()

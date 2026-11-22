@@ -134,11 +134,15 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.sidebar_border = rgb(0x3A3A3E).into();
             theme.sidebar_accent = rgb(0x323238).into();
             theme.sidebar_accent_foreground = rgb(0xEDEDEF).into();
-            // `accent` is the hover/selected fill for menu rows and ghost
-            // buttons. Left unset it falls back to the stock neutral-800
-            // (#262626), which against our popover (#242427) is 1.02:1 -
-            // effectively invisible.
-            theme.accent = rgb(0x3A3A42).into();
+            // `accent` is the hover/selected fill for menu rows and ghost buttons.
+            // Left unset it fell back to the stock neutral-800 (#262626), which
+            // against our popover (#242427) is 1.02:1 and invisible. A hover fill
+            // is not a UI boundary, so the 3:1 non-text floor does not apply, but
+            // it has to be seen: this is 2.01:1 on the popover.
+            theme.accent = rgb(0x52525D).into();
+            // Explicit rather than depending on the library's fallback: this is
+            // the label colour drawn on the accent fill.
+            theme.accent_foreground = rgb(0xFAFAFA).into();
             theme.primary = rgb(0x5AA2FF).into();
             theme.primary_hover = rgb(0x74B1FF).into();
             theme.primary_active = rgb(0x488FE6).into();
@@ -146,6 +150,13 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.success = rgb(0x5BC97E).into();
             theme.warning = rgb(0xE0A33E).into();
             theme.danger = rgb(0xFF7B72).into();
+            // The library builds its danger button from `danger` at 20% alpha
+            // with `danger` as the label, which measures ~3:1. Set the pair
+            // explicitly so the confirm button in a dialog is comfortably legible.
+            theme.button_danger = rgb(0x5A2420).into();
+            theme.button_danger_hover = rgb(0x6B2B26).into();
+            theme.button_danger_active = rgb(0x7C332C).into();
+            theme.button_danger_foreground = rgb(0xFFB4AD).into();
             theme.ring = rgb(0x5AA2FF).into();
             theme.selection = rgb(0x323238).into();
             theme.caret = rgb(0x5AA2FF).into();
@@ -167,7 +178,8 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.sidebar_border = rgb(0xE1E1E4).into();
             theme.sidebar_accent = rgb(0xE4E4E8).into();
             theme.sidebar_accent_foreground = rgb(0x1B1B1E).into();
-            theme.accent = rgb(0xD6D6DB).into();
+            theme.accent = rgb(0xBFBFC7).into();
+            theme.accent_foreground = rgb(0x171717).into();
             theme.primary = rgb(0x0B62C4).into();
             theme.primary_hover = rgb(0x0A56AC).into();
             theme.primary_active = rgb(0x084A94).into();
@@ -175,6 +187,10 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.success = rgb(0x1F7A3D).into();
             theme.warning = rgb(0x8A4B00).into();
             theme.danger = rgb(0xB3261E).into();
+            theme.button_danger = rgb(0xFBE9E7).into();
+            theme.button_danger_hover = rgb(0xF7DAD6).into();
+            theme.button_danger_active = rgb(0xF2C9C4).into();
+            theme.button_danger_foreground = rgb(0x8C1D18).into();
             theme.ring = rgb(0x0B62C4).into();
             theme.selection = rgb(0xE4E4E8).into();
             theme.caret = rgb(0x0B62C4).into();

@@ -70,6 +70,9 @@ impl WorkspaceShell {
                 s.set_window_open(false, cx);
             });
             set_dock_visible(false);
+            // Same release as Cmd-W: without it the closed window's shell, editor
+            // rope, drafts and log buffers stay alive in the tray.
+            crate::desktop::forget_main_window(cx);
             true
         });
 

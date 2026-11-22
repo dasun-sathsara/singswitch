@@ -565,6 +565,13 @@ impl AppStore {
         cx.notify();
     }
 
+    /// Drop the current notice only if it belongs to `origin`.
+    fn clear_notice_for(&mut self, origin: NoticeOrigin) {
+        if self.notice.as_ref().is_some_and(|n| n.origin == origin) {
+            self.notice = None;
+        }
+    }
+
     /// Record feedback for a specific origin. Callers name where the message
     /// belongs so it renders beside that control, not at the top of the window.
     pub fn set_notice(
@@ -643,8 +650,10 @@ impl AppStore {
                 );
             }
             Err(err) => {
+                // The switch that failed lives in Settings, so the reason belongs
+                // next to it, not on the toolbar.
                 self.set_notice(
-                    NoticeOrigin::Toolbar,
+                    NoticeOrigin::Settings,
                     BannerTone::Error,
                     err.to_string(),
                     cx,
@@ -748,8 +757,10 @@ impl AppStore {
                             "sing-box disconnected",
                             "sing-box stopped unexpectedly. Check Logs.",
                         );
+                        // Report where the user actually is: a crash is just as
+                        // likely while the editor or Logs is open.
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: store.notice_origin_for_current_tab(),
                             tone: BannerTone::Error,
                             message: "sing-box stopped unexpectedly. Check Logs.".to_string(),
                         });
@@ -851,7 +862,10 @@ impl AppStore {
         };
 
         self.busy_phase = Some(format!("Activating {name}..."));
-        self.notice = None;
+        // Clear only this surface's previous message. One slot backs every
+        // origin, so clearing unconditionally discarded e.g. an unread settings
+        // failure just because the user started a connect.
+        self.clear_notice_for(origin);
         cx.notify();
 
         let (phase_tx, phase_rx) = smol::channel::unbounded();
@@ -927,7 +941,7 @@ impl AppStore {
         };
 
         self.busy_phase = Some(format!("Saving and activating {name}..."));
-        self.notice = None;
+        self.clear_notice_for(NoticeOrigin::Editor);
         cx.notify();
 
         let (phase_tx, phase_rx) = smol::channel::unbounded();
@@ -1020,7 +1034,7 @@ impl AppStore {
         self.was_running_expected = false;
         self.stop_requested = true;
         self.busy_phase = Some("Stopping sing-box...".to_string());
-        self.notice = None;
+        self.clear_notice_for(origin);
         cx.notify();
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -1084,6 +1098,10 @@ impl AppStore {
         self.selected_profile = Some(name.to_string());
         self.selected_tab = NavTab::Profiles;
         self.editor_validation = None;
+        // A new profile is shown on the stage, so leave the editor if it was
+        // open: otherwise the stage is unmounted and its "Created" notice is
+        // never drawn.
+        self.editing = false;
         self.restart_file_watcher(cx);
         self.set_notice(
             NoticeOrigin::Stage,
@@ -1094,7 +1112,13 @@ impl AppStore {
         Ok(())
     }
 
-    pub fn pull_profile(&mut self, name: String, url: String, cx: &mut Context<Self>) {
+    pub fn pull_profile(
+        &mut self,
+        name: String,
+        url: String,
+        origin: NoticeOrigin,
+        cx: &mut Context<Self>,
+    ) {
         if self.busy_phase.is_some() {
             return;
         }
@@ -1105,6 +1129,9 @@ impl AppStore {
         self.busy_phase = Some(format!("Downloading {name}..."));
         cx.notify();
 
+        // Success and failure of one action must land on the same surface.
+        let origin_success = origin;
+        let origin_failure = origin;
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let (name, res, snap) = cx
                 .background_executor()
@@ -1127,14 +1154,14 @@ impl AppStore {
                         store.editor_validation = None;
                         store.restart_file_watcher(cx);
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: origin_success,
                             tone: BannerTone::Success,
                             message: format!("Imported {name}"),
                         });
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Editor,
+                            origin: origin_failure,
                             tone: BannerTone::Error,
                             message: error_text(&err),
                         });
@@ -1146,7 +1173,7 @@ impl AppStore {
         self.mutation_task = Some(task);
     }
 
-    pub fn sync_profile(&mut self, name: String, cx: &mut Context<Self>) {
+    pub fn sync_profile(&mut self, name: String, origin: NoticeOrigin, cx: &mut Context<Self>) {
         if self.busy_phase.is_some() {
             return;
         }
@@ -1155,6 +1182,8 @@ impl AppStore {
         };
 
         self.busy_phase = Some(format!("Syncing {name}..."));
+        let origin_success = origin;
+        let origin_failure = origin;
         cx.notify();
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -1180,14 +1209,14 @@ impl AppStore {
                             format!("Synced {name}")
                         };
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: origin_success,
                             tone: BannerTone::Success,
                             message: note,
                         });
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Editor,
+                            origin: origin_failure,
                             tone: BannerTone::Error,
                             message: error_text(&err),
                         });
@@ -1199,13 +1228,15 @@ impl AppStore {
         self.mutation_task = Some(task);
     }
 
-    pub fn sync_all(&mut self, cx: &mut Context<Self>) {
+    pub fn sync_all(&mut self, origin: NoticeOrigin, cx: &mut Context<Self>) {
         if self.busy_phase.is_some() {
             return;
         }
         let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
+        let origin_success = origin;
+        let origin_failure = origin;
 
         self.busy_phase = Some("Syncing remote profiles...".to_string());
         cx.notify();
@@ -1236,20 +1267,20 @@ impl AppStore {
                                 .join("; ");
                             let synced = count_noun(report.synced.len(), "profile", "profiles");
                             store.notice = Some(Notice {
-                                origin: NoticeOrigin::Stage,
+                                origin: origin_success,
                                 tone: BannerTone::Warning,
                                 message: format!("Synced {synced}; failed: {details}"),
                             });
                         } else if report.synced.is_empty() {
                             store.notice = Some(Notice {
-                                origin: NoticeOrigin::Stage,
+                                origin: origin_success,
                                 tone: BannerTone::Info,
                                 message: "No remote profiles to sync".to_string(),
                             });
                         } else {
                             let synced = count_noun(report.synced.len(), "profile", "profiles");
                             store.notice = Some(Notice {
-                                origin: NoticeOrigin::Stage,
+                                origin: origin_success,
                                 tone: BannerTone::Success,
                                 message: format!("Synced {synced}"),
                             });
@@ -1257,7 +1288,7 @@ impl AppStore {
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Editor,
+                            origin: origin_failure,
                             tone: BannerTone::Error,
                             message: error_text(&err),
                         });
