@@ -145,6 +145,16 @@ pub struct AppStore {
     pub ip_info: Option<IpInfo>,
     pub ip_loading: bool,
     pub ip_error: Option<String>,
+    /// Bumped on every request so a reply from an older egress is discarded.
+    ip_generation: u64,
+    /// A refresh was asked for while one was already running.
+    ip_refresh_pending: bool,
+    /// Dispatch counter for Doctor runs; stale results are discarded so a slow
+    /// start-up pass cannot overwrite the checks a repair just produced.
+    doctor_generation: u64,
+    /// Dispatch counter for live validation; a late reply for older content is
+    /// dropped so "Configuration valid" can never describe text it never saw.
+    validation_generation: u64,
     pub busy_phase: Option<String>,
     /// Feedback shown next to the control that produced it. Replaces the old
     /// full-width banner, which scrolled out of view and mixed unrelated
@@ -169,8 +179,18 @@ pub struct AppStore {
     error_log_offset: u64,
     access_log_offset: u64,
     error_log_id: Option<sbctl_core::logs::LogFileId>,
+    /// Bumped by `reload_logs` so an in-flight poll cannot append a delta
+    /// computed against the offsets that reload just cleared.
+    log_generation: u64,
     access_log_id: Option<sbctl_core::logs::LogFileId>,
     was_running_expected: bool,
+    /// A stop this app asked for is in progress or awaiting confirmation.
+    ///
+    /// The snapshot-derived `was_running_expected` cannot express intent: a
+    /// poll that started before the click can land during the stop and re-arm
+    /// it, which turns a deliberate Disconnect into a false "stopped
+    /// unexpectedly" alert.
+    stop_requested: bool,
     log_poll_in_flight: bool,
     snapshot_poll_in_flight: bool,
     _watcher: Option<RecommendedWatcher>,
@@ -244,6 +264,10 @@ impl AppStore {
             ip_info: None,
             ip_loading: false,
             ip_error: None,
+            ip_generation: 0,
+            ip_refresh_pending: false,
+            doctor_generation: 0,
+            validation_generation: 0,
             busy_phase: None,
             notice: init_error.map(|m| Notice {
                 origin: NoticeOrigin::Toolbar,
@@ -267,9 +291,11 @@ impl AppStore {
             access_log_err: None,
             error_log_offset: 0,
             access_log_offset: 0,
+            log_generation: 0,
             error_log_id: None,
             access_log_id: None,
             was_running_expected: initially_running,
+            stop_requested: false,
             log_poll_in_flight: false,
             snapshot_poll_in_flight: false,
             _watcher: None,
@@ -629,7 +655,9 @@ impl AppStore {
             if self.connected_since.is_none() {
                 self.connected_since = Some(Instant::now());
             }
-            self.was_running_expected = true;
+            if !self.stop_requested {
+                self.was_running_expected = true;
+            }
         } else {
             self.connected_since = None;
         }
@@ -647,11 +675,15 @@ impl AppStore {
                 .as_ref()
                 .is_some_and(|n| self.snapshot.profiles.iter().any(|p| &p.name == n))
         {
-            self.selected_profile = self
+            // A dangling active symlink must not pin the selection to a name
+            // that has no profile behind it; fall through to a real one.
+            let active_exists = self
                 .snapshot
                 .active
                 .clone()
-                .or_else(|| self.snapshot.profiles.first().map(|p| p.name.clone()));
+                .filter(|n| self.snapshot.profiles.iter().any(|p| &p.name == n));
+            self.selected_profile =
+                active_exists.or_else(|| self.snapshot.profiles.first().map(|p| p.name.clone()));
         }
     }
 
@@ -676,11 +708,17 @@ impl AppStore {
                 store.snapshot_poll_in_flight = false;
                 store.last_checked = Some(Instant::now());
                 if let Ok(s) = snap {
-                    let unexpected_drop =
-                        store.was_running_expected && !s.running && store.busy_phase.is_none();
+                    let unexpected_drop = store.was_running_expected
+                        && !s.running
+                        && store.busy_phase.is_none()
+                        && !store.stop_requested;
+                    let confirmed_stop = store.stop_requested && !s.running;
                     let changed = s != store.snapshot;
                     if changed || force_disk_bump {
                         store.apply_snapshot(s, force_disk_bump);
+                    }
+                    if confirmed_stop {
+                        store.stop_requested = false;
                     }
                     if unexpected_drop {
                         store.was_running_expected = false;
@@ -707,7 +745,7 @@ impl AppStore {
             return;
         }
         if self.snapshot.running {
-            self.disconnect(cx);
+            self.disconnect(NoticeOrigin::Toolbar, cx);
         } else {
             self.connect_active(cx);
         }
@@ -745,18 +783,22 @@ impl AppStore {
             );
             return;
         };
-        self.activate_profile(name, cx);
+        self.activate_profile(name, NoticeOrigin::Toolbar, cx);
     }
 
     pub fn restart_active(&mut self, cx: &mut Context<Self>) {
         if let Some(active) = self.snapshot.active.clone() {
-            self.activate_profile(active, cx);
+            self.activate_profile(active, NoticeOrigin::Stage, cx);
         } else {
             self.connect_active(cx);
         }
     }
 
-    pub fn activate_profile(&mut self, name: String, cx: &mut Context<Self>) {
+    /// Activate `name`, reporting the outcome on the surface that asked for it.
+    ///
+    /// The stage unmounts while the editor is open and the toolbar is never the
+    /// stage, so a hard-coded origin posts results where nothing draws them.
+    pub fn activate_profile(&mut self, name: String, origin: NoticeOrigin, cx: &mut Context<Self>) {
         if self.busy_phase.is_some() {
             return;
         }
@@ -803,7 +845,7 @@ impl AppStore {
                         store.was_running_expected = true;
                         store.selected_profile = Some(name.clone());
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin,
                             tone: BannerTone::Success,
                             message: format!("Connected to {name}"),
                         });
@@ -814,7 +856,7 @@ impl AppStore {
                             ctrl.notify_error("sing-box activation failed", &err.message);
                         }
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin,
                             tone: BannerTone::Error,
                             message: format!("{err}"),
                         });
@@ -822,6 +864,9 @@ impl AppStore {
                 }
                 cx.notify();
                 if should_refresh_ip {
+                    // Invalidate first so a late reply from the old egress
+                    // cannot be shown as the new one.
+                    store.invalidate_ip();
                     store.refresh_ip(cx);
                 }
             });
@@ -906,6 +951,9 @@ impl AppStore {
                 }
                 cx.notify();
                 if should_refresh_ip {
+                    // Invalidate first so a late reply from the old egress
+                    // cannot be shown as the new one.
+                    store.invalidate_ip();
                     store.refresh_ip(cx);
                 }
             });
@@ -913,7 +961,8 @@ impl AppStore {
         self.mutation_task = Some(task);
     }
 
-    pub fn disconnect(&mut self, cx: &mut Context<Self>) {
+    /// Stop sing-box, reporting the outcome where the control lives.
+    pub fn disconnect(&mut self, origin: NoticeOrigin, cx: &mut Context<Self>) {
         if self.busy_phase.is_some() {
             return;
         }
@@ -922,6 +971,7 @@ impl AppStore {
         };
 
         self.was_running_expected = false;
+        self.stop_requested = true;
         self.busy_phase = Some("Stopping sing-box...".to_string());
         self.notice = None;
         cx.notify();
@@ -946,7 +996,7 @@ impl AppStore {
                     Ok(()) => {
                         store.connected_since = None;
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin,
                             tone: BannerTone::Info,
                             message: "sing-box stopped".to_string(),
                         });
@@ -954,7 +1004,7 @@ impl AppStore {
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin,
                             tone: BannerTone::Error,
                             message: format!("{err}"),
                         });
@@ -962,6 +1012,9 @@ impl AppStore {
                 }
                 cx.notify();
                 if should_refresh_ip {
+                    // Invalidate first so a late reply from the old egress
+                    // cannot be shown as the new one.
+                    store.invalidate_ip();
                     store.refresh_ip(cx);
                 }
             });
@@ -1176,6 +1229,7 @@ impl AppStore {
         allow_invalid: bool,
         cx: &mut Context<Self>,
     ) {
+        let origin = NoticeOrigin::Editor;
         if self.busy_phase.is_some() {
             return;
         }
@@ -1215,7 +1269,7 @@ impl AppStore {
                                 Some((name.clone(), EditorValidationState::Valid));
                         }
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin,
                             tone: BannerTone::Success,
                             message: msg,
                         });
@@ -1226,7 +1280,7 @@ impl AppStore {
                             EditorValidationState::Invalid(format!("{err}")),
                         ));
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin,
                             tone: BannerTone::Error,
                             message: format!("{err}"),
                         });
@@ -1242,6 +1296,8 @@ impl AppStore {
         let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
+        self.validation_generation = self.validation_generation.wrapping_add(1);
+        let generation = self.validation_generation;
         self.editor_validation = Some((name.clone(), EditorValidationState::Validating));
         cx.notify();
 
@@ -1254,6 +1310,9 @@ impl AppStore {
                 })
                 .await;
             let _ = this.update(cx, |store, cx| {
+                if store.validation_generation != generation {
+                    return;
+                }
                 match res {
                     Ok(()) => {
                         store.editor_validation = Some((name, EditorValidationState::Valid));
@@ -1268,7 +1327,7 @@ impl AppStore {
                         store.editor_validation =
                             Some((name, EditorValidationState::Invalid(msg.clone())));
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: NoticeOrigin::Editor,
                             tone: BannerTone::Error,
                             message: msg,
                         });
@@ -1340,6 +1399,7 @@ impl AppStore {
             return;
         };
         self.busy_phase = Some("Creating profiles directory...".to_string());
+        let doctor_generation = self.bump_doctor_generation();
         cx.notify();
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -1358,7 +1418,9 @@ impl AppStore {
                 if let Some(s) = snap {
                     store.apply_snapshot(s, true);
                 }
-                store.doctor_checks = checks;
+                if store.doctor_generation == doctor_generation {
+                    store.doctor_checks = checks;
+                }
                 match res {
                     Ok(()) => {
                         store.restart_file_watcher(cx);
@@ -1420,6 +1482,7 @@ impl AppStore {
             return;
         };
         self.busy_phase = Some(phase.to_string());
+        let doctor_generation = self.bump_doctor_generation();
         cx.notify();
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -1441,7 +1504,9 @@ impl AppStore {
 
             let _ = this.update(cx, |store, cx| {
                 store.busy_phase = None;
-                store.doctor_checks = checks;
+                if store.doctor_generation == doctor_generation {
+                    store.doctor_checks = checks;
+                }
                 if let Some(s) = snap {
                     store.apply_snapshot(s, false);
                 }
@@ -1491,6 +1556,7 @@ impl AppStore {
             return;
         };
         self.busy_phase = Some("Starting sbctl-agent...".to_string());
+        let doctor_generation = self.bump_doctor_generation();
         cx.notify();
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -1506,7 +1572,9 @@ impl AppStore {
 
             let _ = this.update(cx, |store, cx| {
                 store.busy_phase = None;
-                store.doctor_checks = checks;
+                if store.doctor_generation == doctor_generation {
+                    store.doctor_checks = checks;
+                }
                 if let Some(s) = snap {
                     store.apply_snapshot(s, true);
                 }
@@ -1533,10 +1601,25 @@ impl AppStore {
         self.mutation_task = Some(task);
     }
 
+    /// Drop the cached egress because the tunnel is about to change under it.
+    ///
+    /// Called on a successful connect or switch. Without this a reply from the
+    /// previous egress can land afterwards and be presented as the current one.
+    pub fn invalidate_ip(&mut self) {
+        self.ip_generation = self.ip_generation.wrapping_add(1);
+        self.ip_info = None;
+        self.ip_refresh_pending = true;
+    }
+
     pub fn refresh_ip(&mut self, cx: &mut Context<Self>) {
         if self.ip_loading {
+            // Queue it: a switch during a fetch must still end with a refresh,
+            // otherwise the previous egress stays on screen.
+            self.ip_refresh_pending = true;
             return;
         }
+        self.ip_generation = self.ip_generation.wrapping_add(1);
+        let generation = self.ip_generation;
         self.ip_loading = true;
         self.ip_error = None;
         cx.notify();
@@ -1549,19 +1632,34 @@ impl AppStore {
 
             let _ = this.update(cx, |store, cx| {
                 store.ip_loading = false;
-                match res {
-                    Ok(info) => {
-                        store.ip_info = Some(info);
-                        store.ip_error = None;
+                // A reply from before the tunnel changed describes an egress
+                // this screen no longer has.
+                if store.ip_generation == generation {
+                    match res {
+                        Ok(info) => {
+                            store.ip_info = Some(info);
+                            store.ip_error = None;
+                        }
+                        Err(err) => {
+                            store.ip_error = Some(err.message.clone());
+                        }
                     }
-                    Err(err) => {
-                        store.ip_error = Some(err.message.clone());
-                    }
+                }
+                if store.ip_refresh_pending {
+                    store.ip_refresh_pending = false;
+                    store.refresh_ip(cx);
                 }
                 cx.notify();
             });
         });
         self.ip_task = Some(task);
+    }
+
+    /// Next Doctor generation. Repair paths call this so their fresh checks
+    /// replace, and are not replaced by, anything already in flight.
+    fn bump_doctor_generation(&mut self) -> u64 {
+        self.doctor_generation = self.doctor_generation.wrapping_add(1);
+        self.doctor_generation
     }
 
     pub fn run_doctor(&mut self, cx: &mut Context<Self>) {
@@ -1572,6 +1670,7 @@ impl AppStore {
             return;
         }
         self.doctor_running = true;
+        let generation = self.bump_doctor_generation();
         cx.notify();
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -1582,7 +1681,9 @@ impl AppStore {
 
             let _ = this.update(cx, |store, cx| {
                 store.doctor_running = false;
-                store.doctor_checks = checks;
+                if store.doctor_generation == generation {
+                    store.doctor_checks = checks;
+                }
                 cx.notify();
             });
         });
@@ -1595,6 +1696,7 @@ impl AppStore {
         self.access_logs.clear();
         self.error_log_offset = 0;
         self.access_log_offset = 0;
+        self.log_generation = self.log_generation.wrapping_add(1);
         // Refresh identity so the next poll compares against the file we just
         // read rather than the one that existed before a rotation.
         self.error_log_id = sbctl_core::logs::log_file_id(&layout.error_log_path);
@@ -1628,6 +1730,7 @@ impl AppStore {
         let acc_off = self.access_log_offset;
         let err_id = self.error_log_id;
         let acc_id = self.access_log_id;
+        let log_generation = self.log_generation;
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let (err_res, acc_res, err_id_now, acc_id_now) = cx
@@ -1661,6 +1764,11 @@ impl AppStore {
 
             let _ = this.update(cx, |store, cx| {
                 store.log_poll_in_flight = false;
+                if store.log_generation != log_generation {
+                    // `reload_logs` already re-read the tails; this delta was
+                    // computed against the offsets it replaced.
+                    return;
+                }
                 let err_rotated = matches!(
                     (store.error_log_id, err_id_now),
                     (Some(prev), Some(now)) if prev.is_different_file(&now)

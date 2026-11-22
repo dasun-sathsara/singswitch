@@ -30,7 +30,7 @@ use sbctl_core::profile::Profile;
 use crate::actions::NavTab;
 use crate::fonts;
 use crate::shell::set_dock_visible;
-use crate::state::{AppStore, BannerTone};
+use crate::state::{AppStore, BannerTone, NoticeOrigin};
 use crate::theme::ThemePreference;
 use crate::views::doctor::DoctorView;
 use crate::views::logs::LogsView;
@@ -634,7 +634,9 @@ impl WorkspaceShell {
                                             })
                                             .on_click(move |_, _, cx| {
                                                 let n = name.clone();
-                                                st.update(cx, |s, cx| s.activate_profile(n, cx));
+                                                st.update(cx, |s, cx| {
+                                                    s.activate_profile(n, NoticeOrigin::Rail, cx)
+                                                });
                                             }),
                                         )
                                     }),
