@@ -149,6 +149,19 @@ impl ProfileEditorPanel {
         }
 
         if disk_rev != self.seen_disk_revision {
+            // The profile set may have changed: forget drafts for profiles that
+            // no longer exist, since nothing can select them again.
+            if !self.drafts.is_empty() {
+                let live: std::collections::HashSet<String> = self
+                    .store
+                    .read(cx)
+                    .snapshot
+                    .profiles
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect();
+                self.drafts.retain(|name, _| live.contains(name));
+            }
             self.seen_disk_revision = disk_rev;
             if let Some(name) = &self.loaded_profile {
                 let latest = self.store.read(cx).read_profile_content(name);
