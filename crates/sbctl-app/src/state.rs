@@ -157,7 +157,13 @@ impl AppStore {
         let mut settings = UiSettings::load();
         settings.launch_at_login = is_launch_at_login_enabled();
 
-        let (ctrl, init_error, snapshot) = match Controller::from_system(None) {
+        let (ctrl, init_error, snapshot) = match Layout::detect().map(|layout| {
+            Controller::for_layout_with_notifier(
+                layout,
+                None,
+                Box::new(crate::notifier::NativeNotifier),
+            )
+        }) {
             Ok(c) => {
                 c.set_notifications_enabled(settings.desktop_notifications);
                 let c = Arc::new(c);

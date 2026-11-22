@@ -24,6 +24,8 @@ Write-Host "==> Removing Start Menu shortcut, HKCU Run entry, and binaries..."
 Remove-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\sbctl.lnk" -Force -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "sbctl" -ErrorAction SilentlyContinue
 Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+# The managed sing-box copy is ours, unlike profiles and logs, so it always goes.
+Remove-Item -Path "$SbctlState\bin" -Recurse -Force -ErrorAction SilentlyContinue
 
 if ($Purge) {
     Write-Host "==> Removing $SingBoxData and $SbctlState..."

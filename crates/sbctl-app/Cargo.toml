@@ -24,6 +24,7 @@ serde_json.workspace = true
 smol.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2.workspace = true
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = [
     "NSApplication",
@@ -32,8 +33,14 @@ objc2-app-kit = { workspace = true, features = [
 ] }
 objc2-foundation = { workspace = true, features = [
     "NSArray",
+    "NSBundle",
     "NSObject",
     "NSString",
+] }
+objc2-user-notifications = { version = "0.3.2", features = [
+    "UNNotificationContent",
+    "UNNotificationRequest",
+    "UNUserNotificationCenter",
 ] }
 
 [target.'cfg(windows)'.dependencies]

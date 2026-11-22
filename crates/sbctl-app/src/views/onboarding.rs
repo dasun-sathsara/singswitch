@@ -167,19 +167,19 @@ fn step_install_singbox(
     cx: &App,
 ) -> impl IntoElement {
     let install_cmd = match platform {
-        PlatformKind::Darwin => "brew install sing-box",
-        PlatformKind::Windows => "winget install SagerNet.sing-box",
+        PlatformKind::Darwin => "sudo ./scripts/install-macos.sh",
+        PlatformKind::Windows => ".\\scripts\\install.ps1",
     };
     let store_copy = store.clone();
     let store_recheck = store.clone();
     step_row(
         "1",
-        "Install sing-box",
+        "Install the managed sing-box",
         done,
         if done {
             "Installed".to_string()
         } else {
-            format!("Install with `{install_cmd}`.")
+            format!("Sing-box ships with sbctl; stage it from the app bundle with `{install_cmd}`.")
         },
         h_flex()
             .gap_2()

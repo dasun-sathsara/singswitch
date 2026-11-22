@@ -96,6 +96,11 @@ impl UiSettings {
 }
 
 /// Apply the selected light, dark, or system theme.
+///
+/// Colours follow macOS system appearance rather than a web palette: grouped
+/// window background, white cards, hairline separators, secondary label greys,
+/// and the system blue accent. Windows uses the same neutral scale, which also
+/// matches its Fluent surfaces closely enough to look native there.
 pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut App) {
     let appearance = window
         .as_ref()
@@ -105,63 +110,65 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
 
     Theme::change(mode, window, cx);
     Theme::update(cx, |theme| {
-        theme.radius = gpui_kit::px(8.0);
-        theme.radius_lg = gpui_kit::px(12.0);
-        theme.font_size = gpui_kit::px(14.0);
+        theme.radius = gpui_kit::px(7.0);
+        theme.radius_lg = gpui_kit::px(10.0);
+        theme.font_size = gpui_kit::px(13.0);
         if theme.mode.is_dark() {
-            theme.background = rgb(0x0B1120).into();
-            theme.foreground = rgb(0xF1F5F9).into();
-            theme.muted = rgb(0x162033).into();
-            theme.muted_foreground = rgb(0x94A3B8).into();
-            theme.border = rgb(0x1E293B).into();
-            theme.title_bar = rgb(0x0F172A).into();
-            theme.title_bar_border = rgb(0x1E293B).into();
-            theme.sidebar = rgb(0x0F172A).into();
-            theme.sidebar_border = rgb(0x1E293B).into();
-            theme.sidebar_accent = rgb(0x1E293B).into();
-            theme.sidebar_accent_foreground = rgb(0xF8FAFC).into();
-            theme.primary = rgb(0x10B981).into();
-            theme.primary_hover = rgb(0x059669).into();
-            theme.primary_active = rgb(0x047857).into();
+            theme.background = rgb(0x1C1C1E).into();
+            theme.foreground = rgb(0xF2F2F7).into();
+            theme.muted = rgb(0x2C2C2E).into();
+            theme.muted_foreground = rgb(0x98989D).into();
+            theme.border = rgb(0x38383A).into();
+            theme.title_bar = rgb(0x232325).into();
+            theme.title_bar_border = rgb(0x38383A).into();
+            theme.sidebar = rgb(0x202022).into();
+            theme.sidebar_border = rgb(0x38383A).into();
+            theme.sidebar_accent = rgb(0x3A3A3C).into();
+            theme.sidebar_accent_foreground = rgb(0xFFFFFF).into();
+            theme.primary = rgb(0x0A84FF).into();
+            theme.primary_hover = rgb(0x409CFF).into();
+            theme.primary_active = rgb(0x0060DF).into();
             theme.primary_foreground = rgb(0xFFFFFF).into();
-            theme.success = rgb(0x10B981).into();
-            theme.warning = rgb(0xF59E0B).into();
-            theme.danger = rgb(0xEF4444).into();
+            theme.success = rgb(0x30D158).into();
+            theme.warning = rgb(0xFF9F0A).into();
+            theme.danger = rgb(0xFF453A).into();
         } else {
-            theme.background = rgb(0xF8FAFC).into();
-            theme.foreground = rgb(0x0F172A).into();
-            theme.muted = rgb(0xF1F5F9).into();
-            theme.muted_foreground = rgb(0x64748B).into();
-            theme.border = rgb(0xE2E8F0).into();
-            theme.title_bar = rgb(0xFFFFFF).into();
-            theme.title_bar_border = rgb(0xE2E8F0).into();
-            theme.sidebar = rgb(0xF1F5F9).into();
-            theme.sidebar_border = rgb(0xE2E8F0).into();
-            theme.sidebar_accent = rgb(0xE2E8F0).into();
-            theme.sidebar_accent_foreground = rgb(0x0F172A).into();
-            theme.primary = rgb(0x0F766E).into();
-            theme.primary_hover = rgb(0x0D9488).into();
-            theme.primary_active = rgb(0x115E59).into();
+            theme.background = rgb(0xF2F2F7).into();
+            theme.foreground = rgb(0x1D1D1F).into();
+            theme.muted = rgb(0xE8E8ED).into();
+            theme.muted_foreground = rgb(0x6E6E73).into();
+            theme.border = rgb(0xDCDCE0).into();
+            theme.title_bar = rgb(0xF7F7F9).into();
+            theme.title_bar_border = rgb(0xDCDCE0).into();
+            theme.sidebar = rgb(0xEDEDF0).into();
+            theme.sidebar_border = rgb(0xDCDCE0).into();
+            theme.sidebar_accent = rgb(0xDEDEE3).into();
+            theme.sidebar_accent_foreground = rgb(0x1D1D1F).into();
+            theme.primary = rgb(0x007AFF).into();
+            theme.primary_hover = rgb(0x0068D9).into();
+            theme.primary_active = rgb(0x0057B8).into();
             theme.primary_foreground = rgb(0xFFFFFF).into();
-            theme.success = rgb(0x059669).into();
-            theme.warning = rgb(0xD97706).into();
-            theme.danger = rgb(0xDC2626).into();
+            theme.success = rgb(0x248A3D).into();
+            theme.warning = rgb(0xB25000).into();
+            theme.danger = rgb(0xD70015).into();
         }
     });
 }
 
+/// Background for raised content surfaces: white in light mode, a lifted grey in dark.
 pub fn surface_card_bg(cx: &App) -> gpui_kit::Hsla {
     if cx.theme().is_dark() {
-        rgb(0x111827).into()
+        rgb(0x2A2A2C).into()
     } else {
         rgb(0xFFFFFF).into()
     }
 }
 
+/// Background for recessed pills, chips, and inline code.
 pub fn subtle_pill_bg(cx: &App) -> gpui_kit::Hsla {
     if cx.theme().is_dark() {
-        rgb(0x1E293B).into()
+        rgb(0x3A3A3C).into()
     } else {
-        rgb(0xF1F5F9).into()
+        rgb(0xEFEFF2).into()
     }
 }

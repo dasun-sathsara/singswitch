@@ -2,7 +2,6 @@ use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{
     ActiveTheme as _, IconName, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
@@ -92,37 +91,37 @@ impl DashboardView {
         let restarts = snap.health.restarts.filter(|&r| r > 0);
         let last_exit = snap.health.last_exit.clone();
 
+        let mut meta: Vec<String> = vec![snap.health.state.as_str().to_string()];
+        if let Some(tun) = snap.status_view.tun.clone() {
+            meta.push(tun);
+        }
+        if let Some(pid) = snap.status_view.pid {
+            meta.push(format!("PID {pid}"));
+        }
+        if let Some(up) = uptime {
+            meta.push(format!("up {up}"));
+        }
+        if let Some(count) = restarts {
+            meta.push(format!("{count} restarts"));
+        }
+        if let Some(code) = last_exit {
+            meta.push(format!("last exit {code}"));
+        }
+
         v_flex()
             .gap_1()
             .child(
                 h_flex()
                     .items_center()
-                    .flex_wrap()
-                    .gap_2()
-                    .child(div().size(px(10.0)).rounded_full().bg(status_color))
+                    .gap_1p5()
+                    .child(div().size(px(8.0)).rounded_full().bg(status_color))
                     .child(
                         div()
                             .text_sm()
                             .font_semibold()
                             .text_color(status_color)
                             .child(state_label),
-                    )
-                    .child(Tag::secondary().small().child(snap.health.state.as_str()))
-                    .when_some(snap.status_view.tun.clone(), |this, tun| {
-                        this.child(Tag::secondary().small().child(tun))
-                    })
-                    .when_some(snap.status_view.pid, |this, pid| {
-                        this.child(Tag::secondary().small().child(format!("PID {pid}")))
-                    })
-                    .when_some(uptime, |this, up| {
-                        this.child(Tag::info().small().child(format!("Uptime {up}")))
-                    })
-                    .when_some(restarts, |this, count| {
-                        this.child(Tag::secondary().small().child(format!("Runs: {count}")))
-                    })
-                    .when_some(last_exit, |this, code| {
-                        this.child(Tag::warning().small().child(format!("Last exit: {code}")))
-                    }),
+                    ),
             )
             .child(
                 div()
@@ -144,6 +143,12 @@ impl DashboardView {
                             "Pick a ready profile below to connect.".to_string()
                         }),
                     ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(meta.join("   ·   ")),
             )
     }
 
@@ -340,8 +345,9 @@ impl Render for DashboardView {
         v_flex()
             .size_full()
             .overflow_y_scrollbar()
-            .p_6()
-            .gap_5()
+            .px_5()
+            .py_4()
+            .gap_4()
             .when(show_onboarding, |this| {
                 this.child(render_onboarding_card(&self.store, cx))
             })
@@ -538,16 +544,13 @@ fn render_profile_card(
     let store_card = store.clone();
     let placeholder_count = prof.placeholders.len();
 
-    div()
+    v_flex()
         .id(SharedString::from(format!("quick-profile-{ix}")))
-        .w(px(230.0))
-        .p_4()
+        .w(px(236.0))
         .rounded(cx.theme().radius_lg)
         .bg(surface_card_bg(cx))
         .border_1()
-        .border_color(if is_connected {
-            cx.theme().success
-        } else if is_active {
+        .border_color(if is_active {
             cx.theme().primary
         } else {
             cx.theme().border
@@ -575,7 +578,9 @@ fn render_profile_card(
         })
         .child(
             v_flex()
-                .gap_2()
+                .gap_1()
+                .px_4()
+                .py_3()
                 .child(
                     h_flex()
                         .justify_between()
@@ -590,10 +595,10 @@ fn render_profile_card(
                                 .child(prof.name.clone()),
                         )
                         .when(is_connected, |t| {
-                            t.child(Tag::success().small().child("Live"))
+                            t.child(render_state_dot("Live", cx.theme().success, cx))
                         })
                         .when(is_active && !is_connected, |t| {
-                            t.child(Tag::secondary().small().child("Active"))
+                            t.child(render_state_dot("Active", cx.theme().primary, cx))
                         }),
                 )
                 .child(
@@ -603,19 +608,38 @@ fn render_profile_card(
                         .truncate()
                         .child(prof.server.clone().unwrap_or_else(|| "direct".to_string())),
                 )
-                .child(
-                    h_flex()
-                        .gap_1()
-                        .when(!ready, |t| {
-                            t.child(
-                                Tag::warning()
-                                    .small()
-                                    .child(format!("{placeholder_count} TODO")),
-                            )
-                        })
-                        .when(prof.source_url.is_some(), |t| {
-                            t.child(Tag::info().small().child("Remote"))
-                        }),
-                ),
+                .when(!ready, |t| {
+                    t.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().warning)
+                            .child(format!(
+                                "{placeholder_count} placeholder{} to fill",
+                                if placeholder_count == 1 { "" } else { "s" }
+                            )),
+                    )
+                })
+                .when(prof.source_url.is_some(), |t| {
+                    t.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Remote source"),
+                    )
+                }),
+        )
+}
+
+fn render_state_dot(label: &str, color: Hsla, cx: &App) -> impl IntoElement {
+    h_flex()
+        .gap_1()
+        .items_center()
+        .child(div().size(px(6.0)).rounded_full().bg(color))
+        .child(
+            div()
+                .text_xs()
+                .font_medium()
+                .text_color(cx.theme().muted_foreground)
+                .child(label.to_string()),
         )
 }

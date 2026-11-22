@@ -141,7 +141,7 @@ impl SbctlError {
     pub fn sing_box_missing() -> Self {
         Self::general("sing-box is not installed, or could not be found")
             .with_hint(
-                "install sing-box (Homebrew on macOS, WinGet on Windows) or run the installer",
+                "reinstall sbctl so its bundled sing-box lands in the privileged location, or set SBCTL_SINGBOX_BIN",
             )
             .with_kind(CoreErrorKind::SingBoxMissing)
     }

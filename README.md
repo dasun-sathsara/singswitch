@@ -7,13 +7,14 @@
 - **Verified switches with rollback.** `sbctl` validates profiles with `sing-box check`, blocks remaining `TODO_` placeholders, updates the active config atomically, restarts the service, and watches it for 2.5 seconds. It restores the prior profile and state if the daemon exits, changes PID, or restarts.
 - **Tray and desktop app.** `sbctl-app` runs in the macOS menu bar or Windows system tray and hides the Dock icon when its window closes. Switch profiles from the menu, edit VLESS and Reality fields without dropping custom DNS or routing JSON, tail logs, and run Doctor fixes.
 - **Scoped privileges.** Profile editing and the GUI run unprivileged. Service control uses five fixed `NOPASSWD` sudo rules on macOS and the `sbctl-agent` named pipe or UAC on Windows. See [SECURITY.md](SECURITY.md).
+- **Bundled sing-box.** The release carries a pinned, checksum-verified sing-box (`scripts/sing-box.lock`). The installer copies it to a root-owned path, so the daemon never execs a Homebrew, WinGet, or user-writable binary, and no separate sing-box install is needed.
 
 ## Platform layout
 
-| Platform | Service | Active config | Logs |
-| --- | --- | --- | --- |
-| macOS (Apple Silicon) | launchd daemon (`app.lexiflix.singbox`) | symlink at `/usr/local/etc/sing-box/config.json` | `/var/log/sing-box/{error,access}.log` |
-| Windows (x86_64) | WinSW (`sing-box`) and `sbctl-agent` | copy at `%ProgramData%\sing-box\config.json` | `%ProgramData%\sing-box\logs\sing-box.{err,out}.log` |
+| Platform | Service | sing-box binary | Active config | Logs |
+| --- | --- | --- | --- | --- |
+| macOS (Apple Silicon) | launchd daemon (`app.lexiflix.singbox`) | `/usr/local/libexec/sbctl/sing-box` | symlink at `/usr/local/etc/sing-box/config.json` | `/var/log/sing-box/{error,access}.log` |
+| Windows (x86_64) | WinSW (`sing-box`) and `sbctl-agent` | `%ProgramData%\sbctl\bin\sing-box.exe` | copy at `%ProgramData%\sing-box\config.json` | `%ProgramData%\sing-box\logs\sing-box.{err,out}.log` |
 
 ## Install
 
@@ -28,7 +29,7 @@ Remove with `./scripts/uninstall-macos.sh`, or pass `--purge` to delete profiles
 
 ### Windows
 
-Build on Windows or cross-compile (`cargo build --release --workspace --target x86_64-pc-windows-msvc`), then run from an elevated PowerShell prompt:
+Build on Windows or cross-compile (`cargo build --release --workspace --target x86_64-pc-windows-msvc`), stage the managed binary with `./scripts/fetch-sing-box.sh windows-amd64 target/x86_64-pc-windows-msvc/release`, then run from an elevated PowerShell prompt:
 
 ```powershell
 .\scripts\install.ps1

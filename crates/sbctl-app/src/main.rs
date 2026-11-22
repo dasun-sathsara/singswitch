@@ -10,6 +10,8 @@ mod diag;
 #[cfg(any(target_os = "macos", windows))]
 mod icons;
 #[cfg(any(target_os = "macos", windows))]
+mod notifier;
+#[cfg(any(target_os = "macos", windows))]
 mod shell;
 #[cfg(any(target_os = "macos", windows))]
 mod state;

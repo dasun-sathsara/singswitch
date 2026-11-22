@@ -20,7 +20,7 @@ No persistent root helper runs for `sbctl`. Both `sbctl` and `sbctl-app` run as 
 
 ### Windows
 
-`scripts/install.ps1` registers `sbctl-agent` as a `LocalSystem` service listening on `\\.\pipe\sbctl-control` with SDDL `D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)`. It also removes inheritance on `%ProgramData%\sing-box`, limiting writes to `SYSTEM` and `Administrators` while granting `Users` modify rights only inside `profiles\`.
+`scripts/install.ps1` registers `sbctl-agent` as a `LocalSystem` service listening on `\\.\pipe\sbctl-control` with SDDL `D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)`. It also removes inheritance on `%ProgramData%\sing-box`, limiting writes to `SYSTEM` and `Administrators` while granting `Users` modify rights only inside `profiles\`. The managed sing-box under `%ProgramData%\sbctl\bin` is writable only by `SYSTEM` and `Administrators`; `Users` get read and execute because the unprivileged tray app shells out to it for `check` and `version`.
 
 Both `sbctl-agent` and the `--elevated-op` UAC fallback deserialize typed JSON `PipeRequest` variants (`Probe`, `Activate`, `Stop`, `CreateProfile`, `PullProfile`, `SyncOne`, `SyncAll`, `SaveProfile`, `DeleteProfile`, `EnsureProfilesDir`, `RepairWindowsHelper`) and never execute arbitrary shell commands.
 
@@ -33,6 +33,10 @@ Both `sbctl-agent` and the `--elevated-op` UAC fallback deserialize typed JSON `
 | Remote pulls | Accept `http://` and `https://` URLs only, cap bodies at 8 MiB, require valid JSON, and pass `sing-box check` on a temporary file before saving. |
 | Notifications | Strip control characters and escape quotes and backslashes for `osascript`; strip control characters and XML-escape WinRT toast payloads. |
 | Concurrency | Serialize switches, pulls, syncs, and saves with an exclusive `sbctl.lock` file lock. |
+
+## Privileged binaries
+
+Both platforms run a sing-box that ordinary users cannot replace. macOS installs a root-owned copy at `/usr/local/libexec/sbctl/sing-box`; Windows installs one at `%ProgramData%\sbctl\bin\sing-box.exe` (plus `libcronet.dll`). The installer takes both from the checksum-verified release pinned in `scripts/sing-box.lock`, and the LaunchDaemon and WinSW service point at that path. A sing-box from Homebrew, WinGet, or `PATH` is only used as a fallback when no managed copy exists, and `sbctl doctor` flags it as unmanaged.
 
 ## Known limitation: user-writable profiles
 

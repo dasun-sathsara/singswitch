@@ -143,6 +143,22 @@ impl Layout {
     pub fn lock_path(&self) -> PathBuf {
         self.profiles_dir.join(".sbctl.lock")
     }
+
+    /// Privileged copy of sing-box installed by the app's bundling installers.
+    ///
+    /// The app never runs a sing-box owned by Homebrew, WinGet, or a shell
+    /// profile: a root daemon has to exec a binary that only root can replace.
+    pub fn managed_singbox_bin(&self) -> PathBuf {
+        match self.platform {
+            PlatformKind::Darwin => PathBuf::from("/usr/local/libexec/sbctl/sing-box"),
+            PlatformKind::Windows => self
+                .active_name_path
+                .as_ref()
+                .and_then(|path| path.parent())
+                .map(|dir| dir.join("bin").join("sing-box.exe"))
+                .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData\sbctl\bin\sing-box.exe")),
+        }
+    }
 }
 
 /// Resolve an executable on `PATH`, checking explicit fallbacks (crucial for macOS GUI bundles
@@ -184,6 +200,21 @@ pub fn resolve_singbox_binary(override_bin: Option<&Path>) -> Option<PathBuf> {
     } else {
         "sing-box"
     };
+
+    // The privileged copy the installer stages is what the daemon actually
+    // execs, so validate with that one whenever it exists. The bundled copy is
+    // the fallback for an app that was launched before installation.
+    if let Ok(layout) = Layout::detect() {
+        let managed = layout.managed_singbox_bin();
+        if is_executable_file(&managed) {
+            return Some(managed);
+        }
+    }
+
+    if let Some(bundled) = bundled_singbox_binary() {
+        return Some(bundled);
+    }
+
     if let Some(found) = find_in_path(exe_name) {
         return Some(found);
     }
@@ -224,6 +255,32 @@ pub fn resolve_singbox_binary(override_bin: Option<&Path>) -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Locate a sing-box copy shipped inside the app bundle next to this executable.
+///
+/// macOS: `sbctl.app/Contents/Resources/sing-box/sing-box`.
+/// Windows: `sing-box\sing-box.exe` beside the app executable.
+pub fn bundled_singbox_binary() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let exe_name = if cfg!(windows) {
+        "sing-box.exe"
+    } else {
+        "sing-box"
+    };
+
+    #[cfg(target_os = "macos")]
+    let candidates = vec![dir.join("../Resources/sing-box").join(exe_name)];
+    #[cfg(windows)]
+    let candidates = vec![
+        dir.join("sing-box").join(exe_name),
+        dir.join("../sing-box").join(exe_name),
+    ];
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let candidates: Vec<PathBuf> = vec![dir.join("sing-box").join(exe_name)];
+
+    candidates.into_iter().find(|path| is_executable_file(path))
 }
 
 fn find_in_path(name: &str) -> Option<PathBuf> {
@@ -324,5 +381,33 @@ mod tests {
             )
         );
         assert!(!layout.uses_sudo());
+    }
+
+    #[test]
+    fn managed_singbox_lives_outside_user_writable_roots() {
+        let darwin = Layout::darwin();
+        assert_eq!(
+            darwin.managed_singbox_bin(),
+            Path::new("/usr/local/libexec/sbctl/sing-box")
+        );
+        assert!(
+            !darwin
+                .managed_singbox_bin()
+                .starts_with(&darwin.profiles_dir)
+        );
+
+        let windows = Layout::windows_with_program_data(Path::new(r"C:\ProgramData"));
+        assert_eq!(
+            windows.managed_singbox_bin(),
+            Path::new(r"C:\ProgramData")
+                .join("sbctl")
+                .join("bin")
+                .join("sing-box.exe")
+        );
+        assert!(
+            !windows
+                .managed_singbox_bin()
+                .starts_with(&windows.profiles_dir)
+        );
     }
 }

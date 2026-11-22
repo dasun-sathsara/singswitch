@@ -1,0 +1,10 @@
+# Pinned sing-box release vendored into the app bundle.
+#
+# Checksums were computed from the official GitHub release assets on 2026-11-18
+# and are verified on every download. Update the version and all hashes together.
+
+SINGBOX_VERSION="1.14.4"
+
+SINGBOX_SHA_darwin_arm64="0d8c7f5ed5d587b0f1a5e9772a708ec3bfa4ac4c9329604b01d8d9c2ba406838"
+
+SINGBOX_SHA_windows_amd64="99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df"

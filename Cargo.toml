@@ -14,6 +14,7 @@ authors = ["Dasun Sathsara <x@dasunsathsara.com>"]
 rust-version = "1.89"
 
 [workspace.dependencies]
+block2 = "0.6"
 clap = { version = "4.5", features = ["derive", "env"] }
 clap_complete = "4.5"
 dirs = "6"

@@ -73,7 +73,7 @@ pub fn run_doctor_checks(
     sudo_probe: Option<&SudoProbeFn>,
 ) -> Vec<DiagnosticCheck> {
     let mut checks = Vec::new();
-    checks.push(check_singbox(checker));
+    checks.push(check_singbox(layout, checker));
     checks.push(check_profiles_dir(layout));
 
     if layout.uses_sudo() {
@@ -89,22 +89,60 @@ pub fn run_doctor_checks(
     checks
 }
 
-fn check_singbox(checker: &dyn Checker) -> DiagnosticCheck {
+fn check_singbox(layout: &Layout, checker: &dyn Checker) -> DiagnosticCheck {
+    let resolved = crate::layout::resolve_singbox_binary(None);
+    let managed = layout.managed_singbox_bin();
+    let bundled = crate::layout::bundled_singbox_binary();
+
+    // Both the copy shipped inside the app and the privileged copy the installer
+    // stages are ours, so neither is worth a warning. Anything else is some other
+    // package manager's binary on PATH and the service could break on its next update.
+    let shipped = |path: &std::path::Path| {
+        bundled.as_deref().is_some_and(|b| b == path) || managed.as_path() == path
+    };
+
     match checker.version() {
-        Ok(version) => DiagnosticCheck {
-            name: "sing-box".to_string(),
-            ok: true,
-            warning: false,
-            detail: format!("version {version}"),
-            hint: String::new(),
-            fix: None,
-        },
+        Ok(version) => {
+            let location = resolved
+                .as_deref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "an unknown location".to_string());
+            let ours = resolved.as_deref().is_some_and(&shipped);
+            let is_managed = resolved.as_deref() == Some(managed.as_path());
+            DiagnosticCheck {
+                name: "sing-box".to_string(),
+                ok: true,
+                warning: !ours,
+                detail: match (ours, is_managed) {
+                    (true, true) => format!("version {version}, managed copy at {location}"),
+                    (true, false) => {
+                        format!(
+                            "version {version}, bundled copy at {location}; run the installer to stage it at {}",
+                            managed.display()
+                        )
+                    }
+                    (false, _) => format!("version {version}, unmanaged copy at {location}"),
+                },
+                hint: if ours {
+                    String::new()
+                } else {
+                    format!(
+                        "reinstall sbctl.app so the service runs its own signed copy instead of this one, expected at {}",
+                        managed.display()
+                    )
+                },
+                fix: None,
+            }
+        }
         Err(_) => DiagnosticCheck {
             name: "sing-box".to_string(),
             ok: false,
             warning: false,
-            detail: "not found on PATH or standard install directories".to_string(),
-            hint: "install sing-box via Homebrew or WinGet, or run the installer".to_string(),
+            detail: format!(
+                "not found in the app bundle, at {}, or on PATH",
+                managed.display()
+            ),
+            hint: "reinstall sbctl.app so the installer copies its bundled binary".to_string(),
             fix: None,
         },
     }

@@ -9,14 +9,17 @@ fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_SRC="${ROOT_DIR}/dist/sbctl.app"
 TARGET_USER="${SUDO_USER:-$USER}"
-SING_BOX_BIN="$(command -v sing-box || echo /opt/homebrew/bin/sing-box)"
+SING_BOX_SRC="${APP_SRC}/Contents/Resources/sing-box/sing-box"
+MANAGED_BIN_DIR="/usr/local/libexec/sbctl"
+SING_BOX_BIN="${MANAGED_BIN_DIR}/sing-box"
 
 if [[ ! -d "$APP_SRC" ]]; then
     echo "error: missing ${APP_SRC}; build first with cargo build --release && ./scripts/bundle-macos.sh" >&2
     exit 1
 fi
-if [[ ! -x "$SING_BOX_BIN" ]]; then
-    echo "error: sing-box binary not found on PATH or /opt/homebrew/bin/sing-box" >&2
+if [[ ! -x "$SING_BOX_SRC" ]]; then
+    echo "error: missing sing-box inside the app bundle at ${SING_BOX_SRC}" >&2
+    echo "hint: rebuild the bundle with scripts/build-macos.sh" >&2
     exit 1
 fi
 
@@ -26,12 +29,17 @@ sudo cp -R "$APP_SRC" /Applications/sbctl.app
 sudo install -d -m 755 /usr/local/bin
 sudo install -m 755 /Applications/sbctl.app/Contents/MacOS/sbctl /usr/local/bin/sbctl
 
+echo "==> Installing the managed sing-box binary..."
+sudo install -d -m 755 -o root -g wheel "$MANAGED_BIN_DIR"
+sudo install -m 755 -o root -g wheel "$SING_BOX_SRC" "$SING_BOX_BIN"
+
 echo "==> Creating sing-box configuration and log directories..."
 sudo install -d -m 755 /usr/local/etc/sing-box/profiles
 sudo chown -R "${TARGET_USER}":staff /usr/local/etc/sing-box
-sudo install -d -m 755 /var/log/sing-box
+sudo install -d -m 755 -o root -g wheel /var/log/sing-box
 sudo touch /var/log/sing-box/error.log /var/log/sing-box/access.log
-sudo chown -R "${TARGET_USER}":staff /var/log/sing-box
+sudo chown root:wheel /var/log/sing-box/error.log /var/log/sing-box/access.log
+sudo chmod 644 /var/log/sing-box/error.log /var/log/sing-box/access.log
 
 echo "==> Installing LaunchDaemon /Library/LaunchDaemons/app.lexiflix.singbox.plist..."
 PLIST_TMP="$(mktemp)"

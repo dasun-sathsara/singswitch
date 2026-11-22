@@ -125,15 +125,25 @@ impl Controller {
 
     /// Construct a `Controller` wired to real system runners for a given `Layout`.
     pub fn for_layout(layout: Layout, trace: Option<TraceHook>) -> Self {
+        let notifier = default_notifier(layout.platform);
+        Self::for_layout_with_notifier(layout, trace, notifier)
+    }
+
+    /// Construct a `Controller` with a caller-supplied notifier, used by the app
+    /// so switch notices come from the system notification center instead of a
+    /// subprocess.
+    pub fn for_layout_with_notifier(
+        layout: Layout,
+        trace: Option<TraceHook>,
+        notifier: Box<dyn Notifier>,
+    ) -> Self {
         let exec_runner: Arc<dyn Runner> = Arc::new(ExecRunner {
             trace,
             ..Default::default()
         });
         let enabled = Arc::new(AtomicBool::new(true));
-        let notifier: Arc<dyn Notifier> = Arc::new(ToggleableNotifier::new(
-            default_notifier(layout.platform),
-            enabled.clone(),
-        ));
+        let notifier: Arc<dyn Notifier> =
+            Arc::new(ToggleableNotifier::new(notifier, enabled.clone()));
         let mut ctrl = Self::with_runner(
             layout,
             exec_runner,

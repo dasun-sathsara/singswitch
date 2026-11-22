@@ -2,7 +2,7 @@
 #Requires -RunAsAdministrator
 param(
     [string]$BinDir = "$PSScriptRoot\..\target\x86_64-pc-windows-msvc\release",
-    [string]$SingBoxExe = "$env:ProgramFiles\sing-box\sing-box.exe",
+    [string]$SingBoxExe = "$env:ProgramData\sbctl\bin\sing-box.exe",
     [string]$WinSwExe = "$env:ProgramFiles\sing-box\winsw.exe"
 )
 
@@ -26,8 +26,25 @@ Write-Host "==> Copying binaries to $InstallDir..."
 Copy-Item $sbctlSrc "$InstallDir\sbctl.exe" -Force
 Copy-Item $appSrc   "$InstallDir\sbctl-app.exe" -Force
 
+Write-Host "==> Installing the managed sing-box binary..."
+$ManagedBinDir = "$SbctlState\bin"
+New-Item -ItemType Directory -Force -Path $ManagedBinDir | Out-Null
+$BundledSingBox = Join-Path $BinDir "sing-box\sing-box.exe"
+if (Test-Path $BundledSingBox) {
+    Copy-Item $BundledSingBox $SingBoxExe -Force
+    $BundledDll = Join-Path $BinDir "sing-box\libcronet.dll"
+    if (Test-Path $BundledDll) {
+        Copy-Item $BundledDll (Join-Path $ManagedBinDir "libcronet.dll") -Force
+    }
+} elseif (-not (Test-Path $SingBoxExe)) {
+    Write-Warning "No managed sing-box found at $SingBoxExe; stage one with scripts/fetch-sing-box.sh windows-amd64 into $BinDir."
+}
+
 # Harden ProgramData ACLs so unprivileged users can read logs/profiles while service updates remain protected.
 icacls $SbctlState  /inheritance:r /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F" /grant "Users:(OI)(CI)R" | Out-Null
+# The tray app runs unprivileged and still has to exec the managed sing-box for
+# `check` and `version`, so the binary directory needs execute rights for Users.
+icacls $ManagedBinDir /grant "Users:(OI)(CI)RX" | Out-Null
 icacls $SingBoxData /inheritance:r /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F" /grant "Users:(OI)(CI)RX" | Out-Null
 icacls $ProfilesDir /grant "Users:(OI)(CI)M" | Out-Null
 icacls $LogsDir     /grant "Users:(OI)(CI)R" | Out-Null

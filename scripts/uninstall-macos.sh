@@ -17,6 +17,7 @@ sudo launchctl bootout system/app.lexiflix.singbox 2>/dev/null || true
 echo "==> Removing application, CLI, LaunchDaemon, and sudoers rules..."
 sudo rm -rf /Applications/sbctl.app
 sudo rm -f /usr/local/bin/sbctl
+sudo rm -rf /usr/local/libexec/sbctl
 sudo rm -f /Library/LaunchDaemons/app.lexiflix.singbox.plist
 sudo rm -f /etc/sudoers.d/sbctl
 
