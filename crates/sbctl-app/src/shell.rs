@@ -59,8 +59,9 @@ pub fn install_app_menus(cx: &mut App) {
                 MenuItem::action("New Profile...", NewProfileDialog),
                 MenuItem::action("Import Profile from URL...", ImportUrlDialog),
                 MenuItem::separator(),
+                MenuItem::action("Edit Profile", crate::actions::EditSelectedProfile),
                 MenuItem::action("Save Profile", SaveCurrentProfile),
-                MenuItem::action("Save & Activate", SaveAndActivateProfile),
+                MenuItem::action("Save & Reconnect", SaveAndActivateProfile),
                 MenuItem::separator(),
                 MenuItem::action("Close Window", CloseWindow),
             ],
@@ -72,6 +73,7 @@ pub fn install_app_menus(cx: &mut App) {
                 MenuItem::action("Connect", ConnectActive),
                 MenuItem::action("Disconnect", DisconnectService),
                 MenuItem::separator(),
+                MenuItem::action("Restart Service", crate::actions::RestartService),
                 MenuItem::action("Sync Remote Profiles", SyncAll),
                 MenuItem::action("Refresh Public IP", RefreshIp),
             ],
@@ -95,13 +97,7 @@ pub fn install_app_menus(cx: &mut App) {
             name: "Window".into(),
             items: vec![
                 MenuItem::action(
-                    "Dashboard",
-                    SelectTab {
-                        tab: NavTab::Dashboard,
-                    },
-                ),
-                MenuItem::action(
-                    "Profiles",
+                    "Connections",
                     SelectTab {
                         tab: NavTab::Profiles,
                     },

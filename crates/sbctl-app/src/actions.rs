@@ -3,7 +3,6 @@ use gpui_kit::{Action, actions};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum NavTab {
     #[default]
-    Dashboard,
     Profiles,
     Logs,
     Doctor,
@@ -29,6 +28,13 @@ actions!(
         CloseWindow,
         QuitApp,
         Noop,
+        BackToConnections,
+        EditSelectedProfile,
+        DeleteSelectedProfile,
+        CopyPublicIp,
+        RestartService,
+        RefreshStatus,
+        SyncSelectedProfile,
     ]
 );
 

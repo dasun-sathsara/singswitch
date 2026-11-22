@@ -1,11 +1,11 @@
-use gpui_kit::{App, Entity, Menu, MenuItem, Subscription};
+use gpui_kit::{App, Entity, MenuItem, Subscription};
 use gpui_tray::{Icon, Tray};
 use sbctl_core::profile::Profile;
 use sbctl_core::service::RunState;
 
 use crate::actions::{
     ConnectActive, DisconnectService, Noop, OpenLogsView, OpenMainWindow, OpenSettingsView,
-    QuitApp, RefreshIp, RunDoctor, SwitchProfile, SyncAll,
+    QuitApp, RefreshIp, RestartService, RunDoctor, SwitchProfile, SyncAll,
 };
 use crate::icons::{TrayVisualState, build_tray_icon};
 use crate::state::AppStore;
@@ -194,9 +194,9 @@ fn format_status_header(store: &AppStore) -> String {
             None => "Connected".to_string(),
         }
     } else if let Some(name) = &store.snapshot.active {
-        format!("Disconnected, {name} selected")
+        format!("Stopped · {name} selected")
     } else {
-        "Disconnected".to_string()
+        "Stopped".to_string()
     }
 }
 
@@ -229,18 +229,20 @@ fn push_connection_telemetry(items: &mut Vec<MenuItem>, store: &AppStore) {
 
 fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
     let mut items = Vec::new();
+    let is_busy = store.busy_phase.is_some();
+    let broken = store.snapshot.broken.is_some() || store.snapshot.health.state == RunState::Error;
+
     items.push(MenuItem::action(format_status_header(store), Noop).disabled(true));
     push_connection_telemetry(&mut items, store);
 
-    let needs_doctor =
-        store.snapshot.broken.is_some() || store.snapshot.health.state == RunState::Error;
-    if needs_doctor {
+    // A failure outranks everything else, so the escape hatch sits directly
+    // under the reason instead of at the bottom of a Tools submenu.
+    if broken {
+        items.push(MenuItem::separator());
         items.push(MenuItem::action("Run Doctor...", RunDoctor));
     }
 
     items.push(MenuItem::separator());
-
-    let is_busy = store.busy_phase.is_some();
     if store.snapshot.running {
         items.push(MenuItem::action("Disconnect", DisconnectService).disabled(is_busy));
     } else {
@@ -252,14 +254,13 @@ fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
         items.push(MenuItem::separator());
         for profile in &store.snapshot.profiles {
             let is_active = store.snapshot.active.as_deref() == Some(profile.name.as_str());
-            let mut label = if profile.ready() {
-                profile.name.clone()
-            } else {
+            let label = if !profile.ready() {
                 format!("{}: needs setup", profile.name)
+            } else if is_active && !store.snapshot.running {
+                format!("{}: selected", profile.name)
+            } else {
+                profile.name.clone()
             };
-            if is_active && !store.snapshot.running {
-                label.push_str(", selected");
-            }
             items.push(
                 MenuItem::action(
                     label,
@@ -278,23 +279,21 @@ fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
         .profiles
         .iter()
         .any(|p| p.source_url.is_some());
-    let tools_items = vec![
-        MenuItem::action("Sync Remote Profiles", SyncAll).disabled(is_busy || !has_remote),
-        MenuItem::action("Refresh Public IP", RefreshIp).disabled(store.ip_loading),
-        MenuItem::separator(),
-        MenuItem::action("Run Doctor...", RunDoctor),
-    ];
 
     items.push(MenuItem::separator());
-    items.push(MenuItem::submenu(Menu {
-        name: "Tools".into(),
-        items: tools_items,
-        disabled: false,
-    }));
+    items.push(
+        MenuItem::action("Restart service", RestartService)
+            .disabled(is_busy || !store.snapshot.running),
+    );
+    items.push(MenuItem::action("Refresh public IP", RefreshIp).disabled(store.ip_loading));
+    items.push(MenuItem::action("Sync remote profiles", SyncAll).disabled(is_busy || !has_remote));
+    if !broken {
+        items.push(MenuItem::action("Run Doctor...", RunDoctor));
+    }
 
     items.push(MenuItem::separator());
     items.push(MenuItem::action("Open sbctl", OpenMainWindow));
-    items.push(MenuItem::action("View Logs", OpenLogsView));
+    items.push(MenuItem::action("Logs", OpenLogsView));
     items.push(MenuItem::action("Settings...", OpenSettingsView));
     items.push(MenuItem::separator());
     items.push(MenuItem::action("Quit sbctl", QuitApp));

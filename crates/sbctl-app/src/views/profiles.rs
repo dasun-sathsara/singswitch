@@ -3,27 +3,24 @@ use std::cell::Cell;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{
     ActiveTheme as _, IconName, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
     App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Window, div, prelude::FluentBuilder as _, px,
+    ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription, Window,
+    div, prelude::FluentBuilder as _, px,
 };
-use sbctl_core::logs::contains_ignore_ascii_case;
-use sbctl_core::profile::Profile;
 
+use crate::actions::NavTab;
+use crate::fonts;
 use crate::state::{AppStore, BannerTone};
-use crate::theme::{subtle_pill_bg, surface_card_bg};
 use crate::views::editor::ProfileEditorPanel;
 
 pub struct ProfilesView {
     store: Entity<AppStore>,
     editor: Entity<ProfileEditorPanel>,
-    search_input: Entity<InputState>,
+    _search_input: Entity<InputState>,
     _sub: Subscription,
 }
 
@@ -50,7 +47,7 @@ impl ProfilesView {
         Self {
             store,
             editor,
-            search_input,
+            _search_input: search_input,
             _sub: sub,
         }
     }
@@ -195,318 +192,594 @@ impl ProfilesView {
         });
     }
 
-    fn render_profile_list_pane(&self, cx: &Context<Self>) -> impl IntoElement {
+    /// The Connections stage: one profile, stated honestly.
+    ///
+    /// Everything in the provenance block comes from the profile's own JSON.
+    /// Service health and the observed public IP are deliberately absent here;
+    /// they belong to the machine and live in the toolbar and status strip.
+    fn render_stage(&self, cx: &Context<Self>) -> impl IntoElement {
         let s = self.store.read(cx);
         let snap = &s.snapshot;
-        let selected_name = s.selected_profile.as_deref();
-        let search = s.profile_search_query.trim();
-        let is_busy = s.busy_phase.is_some();
+        let busy = s.busy_phase.is_some();
         let init_err = s.init_error.is_some();
 
-        let filtered: Vec<_> = snap
-            .profiles
-            .iter()
-            .filter(|p| {
-                search.is_empty()
-                    || contains_ignore_ascii_case(&p.name, search)
-                    || p.server
-                        .as_deref()
-                        .is_some_and(|srv| contains_ignore_ascii_case(srv, search))
-            })
-            .cloned()
-            .collect();
+        let setup = s.setup_condition();
 
-        let store_new = self.store.clone();
-        let store_pull = self.store.clone();
+        let Some(prof) = s
+            .selected_profile
+            .as_ref()
+            .and_then(|n| snap.profiles.iter().find(|p| &p.name == n).cloned())
+        else {
+            return render_setup(&setup, &self.store, cx).into_any_element();
+        };
+
+        let facts = sbctl_core::profile::config_facts_from_file(&prof.path);
+        let is_live = snap.running && snap.active.as_deref() == Some(prof.name.as_str());
+        let ready = prof.ready();
+        let name_act = prof.name.clone();
+        let name_del = prof.name.clone();
+        let name_sync = prof.name.clone();
+        let store_act = self.store.clone();
+        let store_del = self.store.clone();
+        let store_edit = self.store.clone();
+        let store_sync = self.store.clone();
+        let cfg_path = prof.path.display().to_string();
+        let path_for_copy = cfg_path.clone();
+
+        let endpoint = facts
+            .as_ref()
+            .and_then(|f| f.endpoint.clone())
+            .or_else(|| prof.server.clone());
+        let transport = facts
+            .as_ref()
+            .and_then(|f| f.outbound_type.clone())
+            .unwrap_or_else(|| "unknown".to_string());
 
         v_flex()
-            .w(px(290.0))
-            .h_full()
-            .p_3()
-            .gap_3()
-            .rounded(cx.theme().radius_lg)
-            .bg(surface_card_bg(cx))
-            .border_1()
-            .border_color(cx.theme().border)
+            .id("connections-stage")
+            .size_full()
+            .overflow_y_scroll()
+            .p(px(24.0))
+            .gap(px(0.0))
+            // Head
             .child(
                 h_flex()
                     .w_full()
-                    .gap_2()
+                    .items_start()
+                    .gap(px(16.0))
                     .child(
-                        Button::new("prof-add-btn")
-                            .primary()
-                            .small()
-                            .icon(IconName::Plus)
-                            .label("New")
-                            .disabled(is_busy || init_err)
-                            .on_click(move |_, window, cx| {
-                                Self::open_new_profile_dialog(store_new.clone(), window, cx);
-                            }),
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .gap(px(4.0))
+                            .child(
+                                div()
+                                    .text_size(px(24.0))
+                                    .font_bold()
+                                    .child(prof.name.clone()),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap(px(6.0))
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .font_family(fonts::mono_family())
+                                            .text_size(px(12.5))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(endpoint.clone().unwrap_or_else(|| "—".into())),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(12.5))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(format!("· {transport}")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(12.5))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(if prof.source_url.is_some() {
+                                                "· source saved"
+                                            } else {
+                                                "· no source"
+                                            }),
+                                    ),
+                            ),
                     )
                     .child(
-                        Button::new("prof-pull-btn")
-                            .outline()
-                            .small()
-                            .icon(IconName::ExternalLink)
-                            .label("Import")
-                            .disabled(is_busy || init_err)
-                            .on_click(move |_, window, cx| {
-                                Self::open_import_url_dialog(store_pull.clone(), window, cx);
-                            }),
+                        h_flex()
+                            .gap(px(8.0))
+                            .items_center()
+                            .child(
+                                Button::new("conn-switch")
+                                    .primary()
+                                    .small()
+                                    .label(if is_live { "Reconnect" } else { "Switch" })
+                                    .disabled(busy || init_err || !ready)
+                                    .tooltip(if ready {
+                                        format!("Switch sing-box to {}", prof.name)
+                                    } else {
+                                        format!("{} TODO values remaining", prof.placeholders.len())
+                                    })
+                                    .on_click(move |_, _, cx| {
+                                        let n = name_act.clone();
+                                        store_act.update(cx, |s, cx| s.activate_profile(n, cx));
+                                    }),
+                            )
+                            .child(
+                                Button::new("conn-edit")
+                                    .outline()
+                                    .small()
+                                    .label("Edit")
+                                    .disabled(busy)
+                                    .on_click(move |_, _, cx| {
+                                        store_edit.update(cx, |s, cx| s.begin_edit(cx));
+                                    }),
+                            )
+                            .child(self.render_overflow(&prof, is_live, busy, cx))
+                            .child(
+                                Button::new("conn-delete")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Delete)
+                                    .tooltip("Delete profile")
+                                    .disabled(busy)
+                                    .on_click(move |_, window, cx| {
+                                        open_delete_dialog(
+                                            name_del.clone(),
+                                            is_live,
+                                            store_del.clone(),
+                                            window,
+                                            cx,
+                                        );
+                                    }),
+                            ),
                     ),
             )
-            .child(Input::new(&self.search_input).cleanable(true).small())
+            // Provenance — configured values only
             .child(
                 v_flex()
-                    .flex_1()
-                    .overflow_y_scrollbar()
-                    .gap_1()
-                    .when(filtered.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .p_3()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("No matching profiles"),
-                        )
-                    })
-                    .children(filtered.into_iter().enumerate().map(|(ix, prof)| {
-                        render_profile_list_item(
-                            ix,
-                            prof,
-                            selected_name,
-                            snap.active.as_deref(),
-                            snap.running,
-                            &self.store,
-                            cx,
-                        )
-                    })),
+                    .mt(px(22.0))
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(prov_row(
+                        "Configured outbound",
+                        match facts.as_ref() {
+                            None => "unavailable · config could not be parsed".to_string(),
+                            Some(f) => match (&f.outbound_type, &f.endpoint) {
+                                (Some(kind), Some(ep)) => {
+                                    let tag = f
+                                        .outbound_tag
+                                        .as_deref()
+                                        .map(|t| format!(" · {t}"))
+                                        .unwrap_or_default();
+                                    format!("{kind}{tag} · {ep}")
+                                }
+                                _ => "none · no outbound declares a server".to_string(),
+                            },
+                        },
+                        facts.is_some(),
+                        cx,
+                    ))
+                    .child(prov_row(
+                        "Tunnel",
+                        match facts.as_ref() {
+                            None => "unavailable".to_string(),
+                            Some(f) => match f.tun_state() {
+                                sbctl_core::profile::TunState::Named => format!(
+                                    "{} · from the profile",
+                                    f.tun_interface.clone().unwrap_or_default()
+                                ),
+                                sbctl_core::profile::TunState::Unnamed => {
+                                    "OS default · no interface set".to_string()
+                                }
+                                sbctl_core::profile::TunState::Absent => {
+                                    "none · no TUN inbound in this config".to_string()
+                                }
+                            },
+                        },
+                        facts.is_some(),
+                        cx,
+                    )),
             )
+            // Runtime facts — only while running
+            .when(is_live, |el| {
+                el.child(
+                    h_flex()
+                        .py(px(14.0))
+                        .gap(px(24.0))
+                        .items_center()
+                        .children(s.connected_since.map(|since| {
+                            let secs = since.elapsed().as_secs();
+                            info_pair("Up", format_duration(secs), cx)
+                        }))
+                        .children(
+                            snap.health
+                                .pid
+                                .map(|pid| info_pair("PID", format!("{pid}"), cx)),
+                        )
+                        .children(
+                            snap.health
+                                .restarts
+                                .filter(|n| *n > 0)
+                                .map(|n| info_pair("Restarts", format!("{n}"), cx)),
+                        )
+                        .children(
+                            snap.health
+                                .last_exit
+                                .clone()
+                                .map(|code| info_pair("Last exit", code, cx)),
+                        ),
+                )
+            })
+            // Broken config, verbatim
+            .when_some(snap.broken.clone(), |el, reason| {
+                el.child(
+                    h_flex().gap(px(10.0)).items_center().py(px(10.0)).child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().danger)
+                            .child(format!("Config broken: {reason}")),
+                    ),
+                )
+            })
+            // Config facts
+            .child(
+                v_flex()
+                    .mt(px(4.0))
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(fact_row("Config", path_for_copy.clone(), true, cx))
+                    .when_some(prof.source_url.clone(), |el, url| {
+                        let n = name_sync.clone();
+                        let st = store_sync.clone();
+                        el.child(
+                            h_flex()
+                                .min_h(px(32.0))
+                                .border_b_1()
+                                .border_color(cx.theme().border)
+                                .gap(px(16.0))
+                                .items_center()
+                                .child(
+                                    div()
+                                        .w(px(132.0))
+                                        .flex_none()
+                                        .text_size(px(12.0))
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Source"),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .truncate()
+                                        .font_family(fonts::mono_family())
+                                        .text_size(px(12.5))
+                                        .child(url),
+                                )
+                                .child(
+                                    Button::new("conn-sync")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::RefreshCw)
+                                        .tooltip("Sync from source")
+                                        .disabled(busy)
+                                        .on_click(move |_, _, cx| {
+                                            let n = n.clone();
+                                            st.update(cx, |s, cx| s.sync_profile(n, cx));
+                                        }),
+                                ),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+}
+
+impl ProfilesView {
+    /// Operations that used to live on the Dashboard. They stay reachable from
+    /// the stage so nothing the old app could do became hidden.
+    fn render_overflow(
+        &self,
+        prof: &sbctl_core::profile::Profile,
+        is_live: bool,
+        busy: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+
+        let name = prof.name.clone();
+        let has_source = prof.source_url.is_some();
+        let store_restart = self.store.clone();
+        let store_refresh = self.store.clone();
+        let store_sync = self.store.clone();
+        let store_sync_all = self.store.clone();
+        let store_ip = self.store.clone();
+        let cfg_path = prof.path.display().to_string();
+        let public_ip =
+            std::rc::Rc::new(self.store.read(cx).ip_info.as_ref().map(|i| i.ip.clone()));
+        Button::new("conn-overflow")
+            .ghost()
+            .small()
+            .icon(IconName::Ellipsis)
+            .tooltip("More actions")
+            .dropdown_menu(move |menu, _, _| {
+                let n = name.clone();
+                let r = store_restart.clone();
+                let rf = store_refresh.clone();
+                let sy = store_sync.clone();
+                let sa = store_sync_all.clone();
+                let ip = store_ip.clone();
+                let path = cfg_path.clone();
+                let original_ip = public_ip.clone();
+                menu.item(
+                    PopupMenuItem::new("Restart service")
+                        .disabled(busy || !is_live)
+                        .on_click(move |_, _, cx| {
+                            r.update(cx, |s, cx| s.restart_active(cx));
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new("Refresh status").on_click(move |_, _, cx| {
+                        rf.update(cx, |s, cx| {
+                            s.refresh_snapshot(true, cx);
+                            s.refresh_ip(cx);
+                        });
+                    }),
+                )
+                .separator()
+                .item(
+                    PopupMenuItem::new("Sync from source")
+                        .disabled(busy || !has_source)
+                        .on_click(move |_, _, cx| {
+                            let n = n.clone();
+                            sy.update(cx, |s, cx| s.sync_profile(n, cx));
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new("Sync all profiles")
+                        .disabled(busy)
+                        .on_click(move |_, _, cx| {
+                            sa.update(cx, AppStore::sync_all);
+                        }),
+                )
+                .separator()
+                .item(
+                    PopupMenuItem::new("Copy public IP")
+                        .disabled(original_ip.is_none())
+                        .on_click(move |_, _, cx| {
+                            if let Some(value) = (*original_ip).clone() {
+                                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(value));
+                                ip.update(cx, |s, cx| {
+                                    s.set_banner(BannerTone::Success, "Public IP copied", cx);
+                                });
+                            }
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new("Copy config path").on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(path.clone()));
+                    }),
+                )
+            })
+    }
+}
+
+/// The setup region. Shown whenever a condition holds, independent of the old
+/// `onboarding_dismissed` flag: dismissal can hide welcome copy, never a failure.
+fn render_setup(
+    condition: &crate::state::SetupCondition,
+    store: &Entity<AppStore>,
+    cx: &Context<ProfilesView>,
+) -> impl IntoElement {
+    use crate::state::SetupCondition as C;
+
+    let (title, body): (String, String) = match condition {
+        C::None => (
+            "Select a profile".into(),
+            "Pick a profile on the left to inspect it.".into(),
+        ),
+        C::InitFailed(err) => ("sbctl cannot reach the service".into(), err.clone()),
+        C::Broken(reason) => ("The active configuration is broken".into(), reason.clone()),
+        C::Blocked(name) => (
+            "A required permission is missing".into(),
+            format!("Doctor reports {name} is not ready. Run Doctor to repair it."),
+        ),
+        C::EmptyLibrary => (
+            "No profiles yet".into(),
+            "Add one, or import a sing-box config from a URL.".into(),
+        ),
+        C::Unfinished(names) => (
+            "Every profile still has TODO values".into(),
+            format!("Finish {} before connecting.", names.join(", ")),
+        ),
+    };
+
+    let store_new = store.clone();
+    let store_import = store.clone();
+    let store_doctor = store.clone();
+
+    v_flex()
+        .size_full()
+        .p(px(24.0))
+        .gap(px(14.0))
+        .child(div().text_size(px(20.0)).font_bold().child(title))
+        .child(
+            div()
+                .max_w(px(520.0))
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(body),
+        )
+        .child(
+            h_flex()
+                .gap(px(8.0))
+                .children(
+                    matches!(condition, C::EmptyLibrary | C::Unfinished(_)).then(|| {
+                        Button::new("setup-new")
+                            .primary()
+                            .small()
+                            .label("New profile")
+                            .on_click(move |_, window, cx| {
+                                ProfilesView::open_new_profile_dialog(
+                                    store_new.clone(),
+                                    window,
+                                    cx,
+                                );
+                            })
+                    }),
+                )
+                .children(matches!(condition, C::EmptyLibrary).then(|| {
+                    Button::new("setup-import")
+                        .outline()
+                        .small()
+                        .label("Import from URL")
+                        .on_click(move |_, window, cx| {
+                            ProfilesView::open_import_url_dialog(store_import.clone(), window, cx);
+                        })
+                }))
+                .children(
+                    matches!(condition, C::Blocked(_) | C::Broken(_) | C::InitFailed(_)).then(
+                        || {
+                            Button::new("setup-doctor")
+                                .primary()
+                                .small()
+                                .label("Run Doctor")
+                                .on_click(move |_, _, cx| {
+                                    store_doctor.update(cx, |s, cx| {
+                                        s.set_tab(NavTab::Doctor, cx);
+                                        s.run_doctor(cx);
+                                    });
+                                })
+                        },
+                    ),
+                ),
+        )
+}
+
+fn prov_row(
+    label: &'static str,
+    value: String,
+    known: bool,
+    cx: &Context<ProfilesView>,
+) -> impl IntoElement {
+    h_flex()
+        .min_h(px(36.0))
+        .border_b_1()
+        .border_color(cx.theme().border)
+        .gap(px(16.0))
+        .items_center()
+        .child(
+            div()
+                .w(px(132.0))
+                .flex_none()
+                .text_size(px(12.0))
+                .text_color(cx.theme().muted_foreground)
+                .child(label),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .truncate()
+                .font_family(fonts::mono_family())
+                .text_size(px(12.5))
+                .text_color(if known {
+                    cx.theme().foreground
+                } else {
+                    cx.theme().muted_foreground
+                })
+                .child(value),
+        )
+}
+
+fn fact_row(
+    label: &'static str,
+    value: String,
+    mono: bool,
+    cx: &Context<ProfilesView>,
+) -> impl IntoElement {
+    h_flex()
+        .min_h(px(32.0))
+        .border_b_1()
+        .border_color(cx.theme().border)
+        .gap(px(16.0))
+        .items_center()
+        .child(
+            div()
+                .w(px(132.0))
+                .flex_none()
+                .text_size(px(12.0))
+                .text_color(cx.theme().muted_foreground)
+                .child(label),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .truncate()
+                .when(mono, |el| el.font_family(fonts::mono_family()))
+                .text_size(px(12.5))
+                .child(value),
+        )
+}
+
+fn info_pair(label: &'static str, value: String, cx: &Context<ProfilesView>) -> impl IntoElement {
+    h_flex()
+        .gap(px(8.0))
+        .items_baseline()
+        .child(
+            div()
+                .text_size(px(12.0))
+                .text_color(cx.theme().muted_foreground)
+                .child(label),
+        )
+        .child(
+            div()
+                .font_family(fonts::mono_family())
+                .text_size(px(12.0))
+                .child(value),
+        )
+}
+
+fn format_duration(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    if h > 0 {
+        format!("{h}h {m}m")
+    } else {
+        format!("{m}m")
     }
 }
 
 impl Render for ProfilesView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let s = self.store.read(cx);
-        let snap = &s.snapshot;
-        let is_busy = s.busy_phase.is_some();
-        let selected_profile = s
-            .selected_profile
-            .as_ref()
-            .and_then(|n| snap.profiles.iter().find(|p| &p.name == n).cloned());
-
-        h_flex()
-            .size_full()
-            .p_5()
-            .gap_4()
-            .child(self.render_profile_list_pane(cx))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .h_full()
-                    .gap_3()
-                    .when_some(selected_profile, |this, prof| {
-                        let is_active = snap.active.as_deref() == Some(prof.name.as_str());
-                        this.child(render_profile_detail_header(
-                            prof,
-                            is_active && snap.running,
-                            is_busy,
-                            &self.store,
-                            cx,
-                        ))
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .w_full()
-                            .min_h(px(0.0))
-                            .child(self.editor.clone()),
-                    ),
-            )
+        if s.editing {
+            v_flex()
+                .size_full()
+                .p(px(16.0))
+                .child(self.editor.clone())
+                .into_any_element()
+        } else {
+            self.render_stage(cx).into_any_element()
+        }
     }
 }
 
-fn render_profile_list_item(
-    ix: usize,
-    prof: Profile,
-    selected_name: Option<&str>,
-    active_name: Option<&str>,
-    running: bool,
-    store: &Entity<AppStore>,
-    cx: &App,
-) -> impl IntoElement {
-    let is_sel = selected_name == Some(prof.name.as_str());
-    let is_active = active_name == Some(prof.name.as_str());
-    let is_live = is_active && running;
-    let store_sel = store.clone();
-    let name = prof.name.clone();
-
-    div()
-        .id(SharedString::from(format!("prof-row-{ix}")))
-        .w_full()
-        .px_3()
-        .py_2()
-        .rounded(cx.theme().radius)
-        .cursor_pointer()
-        .when(is_sel, |d| d.bg(subtle_pill_bg(cx)))
-        .border_1()
-        .border_color(if is_sel {
-            cx.theme().primary
-        } else {
-            cx.theme().transparent
-        })
-        .hover(|d| d.bg(subtle_pill_bg(cx)))
-        .on_click(move |_, _, cx| {
-            let target = name.clone();
-            store_sel.update(cx, |s, cx| s.select_profile(Some(target), cx));
-        })
-        .child(
-            v_flex()
-                .gap_1()
-                .child(
-                    h_flex()
-                        .justify_between()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_semibold()
-                                .text_color(cx.theme().foreground)
-                                .truncate()
-                                .child(prof.name),
-                        )
-                        .when(is_live, |t| t.child(Tag::success().xsmall().child("Live")))
-                        .when(is_active && !is_live, |t| {
-                            t.child(Tag::secondary().xsmall().child("Active"))
-                        }),
-                )
-                .child(
-                    h_flex()
-                        .justify_between()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .truncate()
-                                .child(prof.server.unwrap_or_else(|| "direct".to_string())),
-                        )
-                        .when(!prof.placeholders.is_empty(), |t| {
-                            t.child(Tag::warning().xsmall().child("Setup"))
-                        }),
-                ),
-        )
-}
-
-fn render_profile_detail_header(
-    prof: Profile,
-    is_connected: bool,
-    is_busy: bool,
-    store: &Entity<AppStore>,
-    cx: &App,
-) -> impl IntoElement {
-    let ready = prof.ready();
-    let name_act = prof.name.clone();
-    let name_sync = prof.name.clone();
-    let name_del = prof.name.clone();
-    let store_act = store.clone();
-    let store_sync = store.clone();
-    let store_del = store.clone();
-
-    h_flex()
-        .w_full()
-        .p_4()
-        .justify_between()
-        .items_center()
-        .gap_3()
-        .rounded(cx.theme().radius_lg)
-        .bg(surface_card_bg(cx))
-        .border_1()
-        .border_color(cx.theme().border)
-        .child(
-            v_flex()
-                .gap_1()
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(
-                            div()
-                                .text_base()
-                                .font_semibold()
-                                .text_color(cx.theme().foreground)
-                                .child(prof.name),
-                        )
-                        .when(is_connected, |t| {
-                            t.child(Tag::success().small().child("Connected"))
-                        })
-                        .when(!ready, |t| {
-                            t.child(Tag::warning().small().child("Needs setup"))
-                        }),
-                )
-                .when_some(prof.source_url.clone(), |t, url| {
-                    t.child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .truncate()
-                            .child(format!("Source: {url}")),
-                    )
-                }),
-        )
-        .child(
-            h_flex()
-                .gap_2()
-                .when(prof.source_url.is_some(), |t| {
-                    t.child(
-                        Button::new("prof-sync-one")
-                            .outline()
-                            .small()
-                            .icon(IconName::RefreshCw)
-                            .label("Sync")
-                            .disabled(is_busy)
-                            .on_click(move |_, _, cx| {
-                                let n = name_sync.clone();
-                                store_sync.update(cx, |s, cx| s.sync_profile(n, cx));
-                            }),
-                    )
-                })
-                .child(
-                    Button::new("prof-activate-btn")
-                        .primary()
-                        .small()
-                        .icon(IconName::Play)
-                        .label(if is_connected {
-                            "Reconnect"
-                        } else {
-                            "Activate"
-                        })
-                        .disabled(is_busy || !ready)
-                        .on_click(move |_, _, cx| {
-                            let n = name_act.clone();
-                            store_act.update(cx, |s, cx| s.activate_profile(n, cx));
-                        }),
-                )
-                .child(
-                    Button::new("prof-delete-btn")
-                        .danger()
-                        .small()
-                        .icon(IconName::Delete)
-                        .label("Delete")
-                        .disabled(is_busy)
-                        .on_click(move |_, window, cx| {
-                            open_delete_dialog(
-                                name_del.clone(),
-                                is_connected,
-                                store_del.clone(),
-                                window,
-                                cx,
-                            );
-                        }),
-                ),
-        )
+/// Confirm deleting whichever profile is selected. Used by the keyboard action so
+/// the warning about stopping a running service is never skipped.
+pub fn confirm_delete_selected(store: Entity<AppStore>, window: &mut Window, cx: &mut App) {
+    let (name, is_live) = {
+        let s = store.read(cx);
+        let Some(name) = s.selected_profile.clone() else {
+            return;
+        };
+        let live = s.snapshot.running && s.snapshot.active.as_deref() == Some(name.as_str());
+        (name, live)
+    };
+    open_delete_dialog(name, is_live, store, window, cx);
 }
 
 fn open_delete_dialog(

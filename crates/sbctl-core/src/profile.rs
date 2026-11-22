@@ -232,6 +232,110 @@ pub fn extract_server(json_text: &str) -> Option<String> {
     extract_server_value(&val)
 }
 
+/// What a profile's own JSON declares, for display. Nothing here is observed
+/// from the running daemon; every field is read from the configuration file.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ConfigFacts {
+    /// Outbound type of the first outbound that has a server (`vless`, `trojan`, …).
+    pub outbound_type: Option<String>,
+    /// Tag of that outbound, when the config sets one.
+    pub outbound_tag: Option<String>,
+    /// `host:port`, `[v6]:port`, or a bare host when no port is declared.
+    pub endpoint: Option<String>,
+    /// Declared TUN interface name.
+    pub tun_interface: Option<String>,
+    /// Whether the config declares any TUN inbound at all. Distinguishes
+    /// "no TUN inbound" from "TUN inbound with no interface name".
+    pub has_tun_inbound: bool,
+}
+
+impl ConfigFacts {
+    /// True when the document parsed and declares a TUN inbound.
+    pub fn tun_state(&self) -> TunState {
+        if !self.has_tun_inbound {
+            TunState::Absent
+        } else if self.tun_interface.is_none() {
+            TunState::Unnamed
+        } else {
+            TunState::Named
+        }
+    }
+}
+
+/// How a profile's TUN inbound is described, in the three cases that matter to a user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TunState {
+    /// The document has no TUN inbound.
+    Absent,
+    /// A TUN inbound exists but sets no `interface_name`, so the OS picks the name.
+    Unnamed,
+    /// The profile names its interface.
+    Named,
+}
+
+/// Parse a profile document into display facts.
+///
+/// Returns `None` when the document is not valid JSON: callers must distinguish
+/// "cannot read this config" from "this config declares nothing", because they
+/// mean different things to the user.
+pub fn extract_config_facts(json_text: &str) -> Option<ConfigFacts> {
+    let val: Value = serde_json::from_str(json_text).ok()?;
+    let (outbound_type, outbound_tag, endpoint) = val
+        .get("outbounds")
+        .and_then(Value::as_array)
+        .and_then(|outbounds| {
+            outbounds.iter().find_map(|out| {
+                let kind = out.get("type").and_then(Value::as_str).unwrap_or("");
+                if matches!(kind, "direct" | "block" | "dns") {
+                    return None;
+                }
+                let server = out.get("server").and_then(Value::as_str).unwrap_or("");
+                if server.is_empty() {
+                    return None;
+                }
+                let endpoint = match out.get("server_port").and_then(Value::as_u64) {
+                    Some(port) if port > 0 => {
+                        if server.starts_with('[') || !server.contains(':') {
+                            format!("{server}:{port}")
+                        } else {
+                            format!("[{server}]:{port}")
+                        }
+                    }
+                    _ => server.to_string(),
+                };
+                Some((
+                    Some(kind.to_string()),
+                    out.get("tag").and_then(Value::as_str).map(str::to_string),
+                    Some(endpoint),
+                ))
+            })
+        })
+        .unwrap_or((None, None, None));
+
+    let inbounds = val.get("inbounds").and_then(Value::as_array);
+    let tun_inbound = inbounds.and_then(|list| {
+        list.iter()
+            .find(|inbound| inbound.get("type").and_then(Value::as_str) == Some("tun"))
+    });
+
+    Some(ConfigFacts {
+        outbound_type,
+        outbound_tag,
+        endpoint,
+        tun_interface: tun_inbound
+            .and_then(|t| t.get("interface_name").and_then(Value::as_str))
+            .filter(|name| !name.is_empty())
+            .map(str::to_string),
+        has_tun_inbound: tun_inbound.is_some(),
+    })
+}
+
+/// Read display facts from a profile path.
+pub fn config_facts_from_file(path: &Path) -> Option<ConfigFacts> {
+    let data = fs::read_to_string(path).ok()?;
+    extract_config_facts(&data)
+}
+
 /// Read the outbound server summary from a profile path.
 pub fn server_from_file(path: &Path) -> Option<String> {
     let data = fs::read_to_string(path).ok()?;
@@ -241,6 +345,32 @@ pub fn server_from_file(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_facts_separate_absent_and_unnamed_tun() {
+        let no_tun = r#"{"inbounds":[{"type":"mixed","listen":"127.0.0.1"}],"outbounds":[{"type":"vless","tag":"proxy","server":"203.0.113.9","server_port":443}]}"#;
+        let facts = extract_config_facts(no_tun).expect("valid json");
+        assert_eq!(facts.tun_state(), TunState::Absent);
+        assert_eq!(facts.outbound_type.as_deref(), Some("vless"));
+        assert_eq!(facts.outbound_tag.as_deref(), Some("proxy"));
+        assert_eq!(facts.endpoint.as_deref(), Some("203.0.113.9:443"));
+
+        let unnamed =
+            r#"{"inbounds":[{"type":"tun","stack":"gvisor"}],"outbounds":[{"type":"direct"}]}"#;
+        let facts = extract_config_facts(unnamed).expect("valid json");
+        assert_eq!(facts.tun_state(), TunState::Unnamed);
+        assert!(facts.endpoint.is_none());
+
+        let named = r#"{"inbounds":[{"type":"tun","interface_name":"utun123"}],"outbounds":[{"type":"trojan","server":"[2001:db8::1]","server_port":8443}]}"#;
+        let facts = extract_config_facts(named).expect("valid json");
+        assert_eq!(facts.tun_state(), TunState::Named);
+        assert_eq!(facts.endpoint.as_deref(), Some("[2001:db8::1]:8443"));
+    }
+
+    #[test]
+    fn config_facts_report_unparseable_config_as_none() {
+        assert!(extract_config_facts("{ not json").is_none());
+    }
 
     #[test]
     fn validate_name_rejects_unsafe_and_reserved_names() {

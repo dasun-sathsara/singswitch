@@ -43,7 +43,6 @@ pub struct UiSettings {
     pub auto_refresh_ip: bool,
     pub desktop_notifications: bool,
     pub onboarding_dismissed: bool,
-    pub sidebar_collapsed: bool,
     pub window_width: f32,
     pub window_height: f32,
 }
@@ -57,7 +56,6 @@ impl Default for UiSettings {
             auto_refresh_ip: true,
             desktop_notifications: true,
             onboarding_dismissed: false,
-            sidebar_collapsed: false,
             window_width: DEFAULT_WINDOW_WIDTH,
             window_height: DEFAULT_WINDOW_HEIGHT,
         }
@@ -112,63 +110,68 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
     Theme::update(cx, |theme| {
         theme.radius = gpui_kit::px(7.0);
         theme.radius_lg = gpui_kit::px(10.0);
-        theme.font_size = gpui_kit::px(13.0);
+        theme.font_size = gpui_kit::px(15.0);
+        theme.font_family = crate::fonts::ui_family();
+        theme.mono_font_family = crate::fonts::mono_family();
         if theme.mode.is_dark() {
-            theme.background = rgb(0x1C1C1E).into();
-            theme.foreground = rgb(0xF2F2F7).into();
-            theme.muted = rgb(0x2C2C2E).into();
-            theme.muted_foreground = rgb(0x98989D).into();
-            theme.border = rgb(0x38383A).into();
-            theme.title_bar = rgb(0x232325).into();
-            theme.title_bar_border = rgb(0x38383A).into();
-            theme.sidebar = rgb(0x202022).into();
-            theme.sidebar_border = rgb(0x38383A).into();
-            theme.sidebar_accent = rgb(0x3A3A3C).into();
-            theme.sidebar_accent_foreground = rgb(0xFFFFFF).into();
-            theme.primary = rgb(0x0A84FF).into();
-            theme.primary_hover = rgb(0x409CFF).into();
-            theme.primary_active = rgb(0x0060DF).into();
-            theme.primary_foreground = rgb(0xFFFFFF).into();
-            theme.success = rgb(0x30D158).into();
-            theme.warning = rgb(0xFF9F0A).into();
-            theme.danger = rgb(0xFF453A).into();
+            theme.background = rgb(0x161513).into();
+            theme.foreground = rgb(0xEFEDE8).into();
+            theme.muted = rgb(0x232220).into();
+            theme.muted_foreground = rgb(0x9A968C).into();
+            theme.border = rgb(0x2E2C29).into();
+            theme.title_bar = rgb(0x161513).into();
+            theme.title_bar_border = rgb(0x2E2C29).into();
+            theme.sidebar = rgb(0x1D1C1A).into();
+            theme.sidebar_border = rgb(0x2E2C29).into();
+            theme.sidebar_accent = rgb(0x2C2B34).into();
+            theme.sidebar_accent_foreground = rgb(0xEFEDE8).into();
+            theme.primary = rgb(0x9C97F0).into();
+            theme.primary_hover = rgb(0xADA9F5).into();
+            theme.primary_active = rgb(0x8A85E6).into();
+            theme.primary_foreground = rgb(0x161513).into();
+            theme.success = rgb(0x46C97B).into();
+            theme.warning = rgb(0xE5A93B).into();
+            theme.danger = rgb(0xF07A6E).into();
+            theme.ring = rgb(0x9C97F0).into();
+            theme.selection = rgb(0x2C2B34).into();
+            theme.caret = rgb(0x9C97F0).into();
         } else {
-            theme.background = rgb(0xF2F2F7).into();
-            theme.foreground = rgb(0x1D1D1F).into();
-            theme.muted = rgb(0xE8E8ED).into();
-            theme.muted_foreground = rgb(0x6E6E73).into();
-            theme.border = rgb(0xDCDCE0).into();
-            theme.title_bar = rgb(0xF7F7F9).into();
-            theme.title_bar_border = rgb(0xDCDCE0).into();
-            theme.sidebar = rgb(0xEDEDF0).into();
-            theme.sidebar_border = rgb(0xDCDCE0).into();
-            theme.sidebar_accent = rgb(0xDEDEE3).into();
-            theme.sidebar_accent_foreground = rgb(0x1D1D1F).into();
-            theme.primary = rgb(0x007AFF).into();
-            theme.primary_hover = rgb(0x0068D9).into();
-            theme.primary_active = rgb(0x0057B8).into();
+            theme.background = rgb(0xF7F6F3).into();
+            theme.foreground = rgb(0x171613).into();
+            theme.muted = rgb(0xEFEEE9).into();
+            theme.muted_foreground = rgb(0x6E6A62).into();
+            theme.border = rgb(0xE2E0D9).into();
+            theme.title_bar = rgb(0xF7F6F3).into();
+            theme.title_bar_border = rgb(0xE2E0D9).into();
+            theme.sidebar = rgb(0xFFFFFF).into();
+            theme.sidebar_border = rgb(0xE2E0D9).into();
+            theme.sidebar_accent = rgb(0xF2F2F9).into();
+            theme.sidebar_accent_foreground = rgb(0x171613).into();
+            theme.primary = rgb(0x4A47A3).into();
+            theme.primary_hover = rgb(0x3D3A8C).into();
+            theme.primary_active = rgb(0x333077).into();
             theme.primary_foreground = rgb(0xFFFFFF).into();
-            theme.success = rgb(0x248A3D).into();
-            theme.warning = rgb(0xB25000).into();
-            theme.danger = rgb(0xD70015).into();
+            theme.success = rgb(0x1C7A45).into();
+            theme.warning = rgb(0x8A5300).into();
+            theme.danger = rgb(0xA3261D).into();
+            theme.ring = rgb(0x4A47A3).into();
+            theme.selection = rgb(0xF2F2F9).into();
+            theme.caret = rgb(0x4A47A3).into();
         }
     });
 }
 
-/// Background for raised content surfaces: white in light mode, a lifted grey in dark.
+/// Background for content regions.
+///
+/// Deliberately identical to the window ground: the redesign removed raised
+/// white cards, so content is separated by hairlines and space instead of by a
+/// second surface colour. Kept as a named helper so the intent is explicit at
+/// each call site rather than implied by `background`.
 pub fn surface_card_bg(cx: &App) -> gpui_kit::Hsla {
-    if cx.theme().is_dark() {
-        rgb(0x2A2A2C).into()
-    } else {
-        rgb(0xFFFFFF).into()
-    }
+    cx.theme().background
 }
 
-/// Background for recessed pills, chips, and inline code.
+/// Background for recessed rows, hover states, and inline code.
 pub fn subtle_pill_bg(cx: &App) -> gpui_kit::Hsla {
-    if cx.theme().is_dark() {
-        rgb(0x3A3A3C).into()
-    } else {
-        rgb(0xEFEFF2).into()
-    }
+    cx.theme().muted
 }
