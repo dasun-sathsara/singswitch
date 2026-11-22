@@ -335,7 +335,9 @@ impl ProfilesView {
                                     })
                                     .on_click(move |_, _, cx| {
                                         let n = name_act.clone();
-                                        store_act.update(cx, |s, cx| s.activate_profile(n, cx));
+                                        store_act.update(cx, |s, cx| {
+                                            s.activate_profile(n, NoticeOrigin::Stage, cx)
+                                        });
                                     }),
                             )
                             .child(

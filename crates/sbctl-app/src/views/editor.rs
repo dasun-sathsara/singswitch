@@ -36,6 +36,12 @@ pub struct ProfileEditorPanel {
     external_change_pending: bool,
     validated_snapshot: Option<String>,
     active_tab: EditorTab,
+    /// Unsaved buffers, keyed by profile name.
+    ///
+    /// A rail click used to clear `editing` and lose whatever was typed. Keeping
+    /// the draft means leaving is never destructive, without a modal the user
+    /// has to answer.
+    drafts: std::collections::HashMap<String, String>,
 
     json_editor: Entity<EditorState>,
 
@@ -72,6 +78,7 @@ impl ProfileEditorPanel {
             disk_model: None,
             external_change_pending: false,
             validated_snapshot: None,
+            drafts: std::collections::HashMap::new(),
             active_tab: EditorTab::Guided,
             json_editor,
             model: ProfileFormModel::default(),
@@ -104,6 +111,18 @@ impl ProfileEditorPanel {
         };
 
         if target != self.loaded_profile {
+            // Preserve unsaved work for the profile being left.
+            if let Some(prev) = self.loaded_profile.clone()
+                && !self.disk_json.is_empty()
+            {
+                let current = self.json_editor.read(cx).value().to_string();
+                if current != self.disk_json {
+                    self.drafts.insert(prev, current);
+                } else {
+                    self.drafts.remove(&prev);
+                }
+            }
+
             self.loaded_profile = target.clone();
             self.seen_disk_revision = disk_rev;
             self.external_change_pending = false;
@@ -111,6 +130,10 @@ impl ProfileEditorPanel {
             if let Some(name) = target {
                 let content = self.store.read(cx).read_profile_content(&name);
                 self.load_json_into_views(&content, window, cx);
+                if let Some(draft) = self.drafts.get(&name).cloned() {
+                    self.json_editor
+                        .update(cx, |s, cx| s.set_value(draft, window, cx));
+                }
             } else {
                 self.disk_json.clear();
                 self.disk_model = None;
@@ -122,7 +145,15 @@ impl ProfileEditorPanel {
             self.seen_disk_revision = disk_rev;
             if let Some(name) = &self.loaded_profile {
                 let latest = self.store.read(cx).read_profile_content(name);
+                let editor_now = self.json_editor.read(cx).value().to_string();
                 if latest == self.disk_json {
+                    self.external_change_pending = false;
+                } else if latest == editor_now {
+                    // The disk now holds exactly what the editor shows, which is
+                    // what our own successful save produces. Adopt it as the new
+                    // baseline instead of claiming a phantom outside change.
+                    self.disk_json = latest.clone();
+                    self.disk_model = ProfileFormModel::from_json_str(&latest).ok();
                     self.external_change_pending = false;
                 } else if !self.is_dirty(cx) {
                     self.load_json_into_views(&latest, window, cx);
@@ -234,6 +265,11 @@ impl ProfileEditorPanel {
         Ok(next)
     }
 
+    /// Drop the stashed draft once the profile it belongs to is saved.
+    fn clear_draft(&mut self, name: &str) {
+        self.drafts.remove(name);
+    }
+
     fn is_dirty(&self, cx: &App) -> bool {
         if self.json_editor.read(cx).value().as_ref() != self.disk_json {
             return true;
@@ -321,6 +357,7 @@ impl ProfileEditorPanel {
         // Draft profiles can save incomplete TODO placeholders as long as they are not active.
         let allow_invalid = has_todos && !is_active;
 
+        self.clear_draft(&name);
         self.store.update(cx, |s, cx| {
             s.save_profile_content(name, content, allow_invalid, cx);
         });

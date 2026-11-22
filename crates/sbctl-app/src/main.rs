@@ -39,7 +39,7 @@ mod desktop {
         ToggleService,
     };
     use crate::shell::{install_app_menus, set_dock_visible};
-    use crate::state::AppStore;
+    use crate::state::{AppStore, NoticeOrigin};
     use crate::theme::{MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, apply_theme};
     use crate::tray::TrayController;
     use crate::views::WorkspaceShell;
@@ -312,13 +312,15 @@ mod desktop {
 
         cx.on_action(|_: &DisconnectService, cx: &mut App| {
             let store = cx.global::<AppGlobalState>().store.clone();
-            store.update(cx, AppStore::disconnect);
+            store.update(cx, |s, cx| s.disconnect(NoticeOrigin::Toolbar, cx));
         });
 
         cx.on_action(|action: &SwitchProfile, cx: &mut App| {
             let store = cx.global::<AppGlobalState>().store.clone();
             let name = action.name.clone();
-            store.update(cx, |s, cx| s.activate_profile(name, cx));
+            store.update(cx, |s, cx| {
+                s.activate_profile(name, NoticeOrigin::Toolbar, cx)
+            });
         });
 
         cx.on_action(|action: &SyncProfile, cx: &mut App| {
