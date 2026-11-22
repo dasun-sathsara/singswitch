@@ -84,7 +84,9 @@ impl UiSettings {
         }
         let body = serde_json::to_string_pretty(self)
             .map_err(|e| SbctlError::general(format!("failed to serialize UI settings: {e}")))?;
-        fs::write(&path, body)
+        // Atomic: a crash or kill mid-write would otherwise leave truncated
+        // JSON, and `load` silently resets every setting on a parse failure.
+        sbctl_core::activator::write_file_atomic(&path, body.as_bytes(), 0o644)
             .map_err(|e| SbctlError::general(format!("failed to write {}: {e}", path.display())))
     }
 }

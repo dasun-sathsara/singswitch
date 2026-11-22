@@ -419,11 +419,17 @@ mod desktop {
                 let _ = handle.update(cx, |_, window, cx| {
                     let b = window.bounds().size;
                     store.update(cx, |s, cx| {
-                        s.update_window_size(b.width.as_f32(), b.height.as_f32());
+                        s.update_window_size(b.width.as_f32(), b.height.as_f32(), true);
                         s.set_window_open(false, cx);
                     });
                     window.remove_window();
                 });
+                // Drop the handle to the removed window's view tree. Keeping it
+                // retained the whole shell, editor rope, drafts and both log
+                // buffers for as long as the app sat in the tray.
+                let g = cx.global_mut::<AppGlobalState>();
+                g.main_window = None;
+                g.main_view = None;
             }
             set_dock_visible(false);
         });

@@ -40,7 +40,7 @@ impl TrayIcons {
 struct MenuFingerprint {
     running: bool,
     health_state: RunState,
-    busy_phase: Option<String>,
+    busy: bool,
     broken: Option<String>,
     active: Option<String>,
     selected: Option<String>,
@@ -61,7 +61,7 @@ impl MenuFingerprint {
         Self {
             running: store.snapshot.running,
             health_state: store.snapshot.health.state,
-            busy_phase: store.busy_phase.clone(),
+            busy: store.busy_phase.is_some(),
             broken: store.snapshot.broken.clone(),
             active: store.snapshot.active.clone(),
             selected: store.selected_profile.clone(),

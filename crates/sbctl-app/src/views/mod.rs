@@ -61,7 +61,8 @@ impl WorkspaceShell {
         window.on_window_should_close(cx, move |window, cx| {
             let b = window.bounds().size;
             store_close.update(cx, |s, cx| {
-                s.update_window_size(b.width.as_f32(), b.height.as_f32());
+                // Closing is a final write point: persist here, or the size is lost.
+                s.update_window_size(b.width.as_f32(), b.height.as_f32(), true);
                 s.set_window_open(false, cx);
             });
             set_dock_visible(false);
@@ -106,7 +107,7 @@ impl WorkspaceShell {
         subs.push(cx.observe_window_bounds(window, move |_, window, cx| {
             let b = window.bounds().size;
             store_bounds.update(cx, |s, _| {
-                s.update_window_size(b.width.as_f32(), b.height.as_f32());
+                s.update_window_size(b.width.as_f32(), b.height.as_f32(), false);
             });
         }));
 

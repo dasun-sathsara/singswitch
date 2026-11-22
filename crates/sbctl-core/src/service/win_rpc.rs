@@ -67,6 +67,10 @@ pub struct PipeResponse {
     pub failed: Vec<(String, String)>,
 }
 
+/// Largest request line the privileged helper will read from the pipe.
+#[cfg(windows)]
+const MAX_PIPE_REQUEST_BYTES: u64 = 1024 * 1024;
+
 impl PipeResponse {
     pub fn success() -> Self {
         Self {
@@ -135,7 +139,7 @@ impl PipeResponse {
 #[cfg(windows)]
 pub fn try_send_pipe_request(pipe_name: &str, req: &PipeRequest) -> Result<Option<PipeResponse>> {
     use std::fs::OpenOptions;
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
     use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
@@ -235,7 +239,7 @@ where
 {
     use std::ffi::OsStr;
     use std::fs::File;
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::FromRawHandle;
     use std::sync::atomic::Ordering;
@@ -295,7 +299,9 @@ where
         let mut file = unsafe { File::from_raw_handle(handle) };
         let mut line = String::new();
         {
-            let mut reader = BufReader::new(&file);
+            // Bounded: this pipe is served as SYSTEM, so an unbounded read lets
+            // any interactive user grow privileged memory by streaming a line.
+            let mut reader = BufReader::new(&file).take(MAX_PIPE_REQUEST_BYTES);
             let _ = reader.read_line(&mut line);
         }
 

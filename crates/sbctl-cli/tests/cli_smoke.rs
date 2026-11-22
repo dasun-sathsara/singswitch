@@ -64,9 +64,12 @@ fn print_sudoers_renders_scoped_darwin_rules() {
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("alice ALL=(root) NOPASSWD:"));
-    assert!(stdout.contains(
-        "/bin/ln -sfn /usr/local/etc/sing-box/profiles/*.json /usr/local/etc/sing-box/config.json"
-    ));
+    // No globbed grant: sudo matches the whole argv as one string, so `*`
+    // crossed `/` and the old activate rule permitted `../` traversal.
+    assert!(
+        !stdout.contains("*.json"),
+        "sudoers must not grant a globbed path:\n{stdout}"
+    );
     assert!(stdout.contains("/bin/launchctl kickstart -k system/app.lexiflix.singbox"));
     assert!(!stdout.contains(".."));
 }

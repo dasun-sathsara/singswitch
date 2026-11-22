@@ -170,23 +170,13 @@ impl Controller {
                     layout.plist_path.clone(),
                     sudo.clone(),
                 ));
-                let layout_clone = layout.clone();
-                let sudo_link = sudo.clone();
+                // No privileged hook: the installer gives the target user the
+                // config directory, so activating is an ordinary atomic symlink
+                // swap. It used to run `sudo ln -sfn <profiles>/*.json <config>`,
+                // whose NOPASSWD rule accepted `../` traversal.
                 let act = Arc::new(SymlinkActivator::new(
                     layout.active_config_path.clone(),
-                    Some(Arc::new(move |target| {
-                        let argv = layout_clone.activate_argv(target);
-                        let cmd_args: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
-                        let out = sudo_link.run(&argv[0], &cmd_args)?;
-                        if out.success {
-                            Ok(())
-                        } else {
-                            Err(SbctlError::service(format!(
-                                "could not update active symlink: {}",
-                                out.combined.trim()
-                            )))
-                        }
-                    })),
+                    None,
                 ));
                 (mgr, act)
             }
@@ -249,14 +239,27 @@ impl Controller {
         (is_active, running)
     }
 
-    fn restore_previous_profile(&self, path: &std::path::Path, old_bytes: &[u8], restart: bool) {
-        let _ = write_file_atomic(path, old_bytes, 0o644);
-        if self.layout.active_name_path.is_some() {
-            let _ = self.activator.activate(path);
+    /// Put the previous profile back. Returns the reasons it could not, so the
+    /// caller never announces a successful revert that did not happen.
+    fn restore_previous_profile(
+        &self,
+        path: &std::path::Path,
+        old_bytes: &[u8],
+        restart: bool,
+    ) -> Vec<String> {
+        let mut failures = Vec::new();
+        if let Err(err) = write_file_atomic(path, old_bytes, 0o644) {
+            failures.push(format!("rewrite: {err}"));
         }
-        if restart {
-            let _ = self.manager.restart();
+        if self.layout.active_name_path.is_some()
+            && let Err(err) = self.activator.activate(path)
+        {
+            failures.push(format!("reactivate: {err}"));
         }
+        if restart && let Err(err) = self.manager.restart() {
+            failures.push(format!("restart: {err}"));
+        }
+        failures
     }
 
     /// Acquire the file lock.
@@ -469,8 +472,13 @@ impl Controller {
                     }
                 }
                 Err(err) => {
+                    // A probe error means the state is unknown, not healthy.
+                    // Reporting it as running skipped rollback and announced a
+                    // switch that may never have taken effect.
                     self.debug(format!("probe error while awaiting start: {err}"));
-                    return Some(Health::unknown(RunState::Running));
+                    if attempt > 0 && Instant::now() >= deadline {
+                        return None;
+                    }
                 }
             }
             attempt += 1;
@@ -618,11 +626,20 @@ impl Controller {
             self.notifier
                 .notify_error("sing-box reload failed", &problem);
             if let Some(old) = &old_bytes {
-                self.restore_previous_profile(&path, old, true);
-                return Err(SbctlError::service(format!(
-                    "sing-box reloaded {name} but {problem}; reverted {name} to previous contents"
-                ))
-                .with_hint("inspect the service output with: sbctl logs"));
+                let failures = self.restore_previous_profile(&path, old, true);
+                let message = if failures.is_empty() {
+                    format!(
+                        "sing-box reloaded {name} but {problem}; reverted {name} to previous contents"
+                    )
+                } else {
+                    // Never claim a revert that did not happen.
+                    format!(
+                        "sing-box reloaded {name} but {problem}; reverting ALSO failed ({}). The profile may be left in the broken state.",
+                        failures.join("; ")
+                    )
+                };
+                return Err(SbctlError::service(message)
+                    .with_hint("inspect the service output with: sbctl logs"));
             }
             return Err(
                 SbctlError::service(format!("sing-box reloaded {name} but {problem}")).with_hints(
@@ -763,10 +780,17 @@ impl Controller {
                             .is_ok_and(|h| h.state == RunState::Running);
                         if running {
                             if let Err(act_err) = self.activate_locked(&active_name, |_| {}) {
+                                let mut detail = act_err.to_string();
                                 if let Some(old) = &old_bytes {
-                                    self.restore_previous_profile(&path, old, true);
+                                    let failures = self.restore_previous_profile(&path, old, true);
+                                    if !failures.is_empty() {
+                                        detail = format!(
+                                            "{detail}; reverting also failed ({})",
+                                            failures.join("; ")
+                                        );
+                                    }
                                 }
-                                report.failed.push((active_name, act_err.to_string()));
+                                report.failed.push((active_name, detail));
                                 return Ok(report);
                             }
                         } else if self.layout.active_name_path.is_some() {
@@ -831,6 +855,12 @@ impl Controller {
         fs::remove_file(&path).map_err(|e| store_error(e, &self.layout.profiles_dir, "delete"))?;
         remove_source(&self.layout.profiles_dir, name)
             .map_err(|e| store_error(e, &self.layout.profiles_dir, "delete"))?;
+
+        // Clear the active marker too, or it keeps naming a profile that no
+        // longer exists and the UI shows a phantom active profile.
+        if is_active && let Err(err) = self.activator.clear() {
+            self.debug(format!("could not clear active profile marker: {err}"));
+        }
 
         Ok(is_active)
     }
@@ -1239,22 +1269,11 @@ mod tests {
             Arc::new(NoopNotifier),
         );
         if platform == PlatformKind::Darwin {
-            // In unit tests without root, record the `sudo -n ln -sfn` command through
-            // FakeRunner AND swap the real symlink inside the temp directory.
-            let real_act =
-                crate::activator::SymlinkActivator::new(layout.active_config_path.clone(), None);
-            let runner_for_link = fake_runner.clone();
-            let layout_for_link = layout.clone();
+            // Production activates without sudo; the test fixture must too, or it
+            // stops describing the shipped code path.
             ctrl.activator = Arc::new(crate::activator::SymlinkActivator::new(
                 layout.active_config_path,
-                Some(Arc::new(move |target| {
-                    let argv = layout_for_link.activate_argv(target);
-                    let mut sudo_args = vec!["-n"];
-                    sudo_args.extend(argv.iter().map(String::as_str));
-                    let _ = runner_for_link.run("sudo", &sudo_args)?;
-                    let _ = real_act.activate(target)?;
-                    Ok(())
-                })),
+                None,
             ));
         }
         ctrl.settle_delay = Duration::ZERO;
