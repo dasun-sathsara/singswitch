@@ -1,12 +1,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{Result, SbctlError};
+use crate::form_model::ProfileFormModel;
 use crate::source::read_source;
 
 /// Required filename extension for sing-box profiles.
@@ -18,9 +17,6 @@ const MAX_NAME_LENGTH: usize = 64;
 /// Canonical seed template embedded into the binary.
 pub const SKELETON_JSON: &str = include_str!("../../../assets/skeleton.json");
 
-static PLACEHOLDER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"TODO_[A-Z0-9_]+").expect("valid regex"));
-
 const WINDOWS_RESERVED_NAMES: &[&str] = &[
     "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
     "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
@@ -31,7 +27,10 @@ const WINDOWS_RESERVED_NAMES: &[&str] = &[
 pub struct Profile {
     pub name: String,
     pub path: PathBuf,
-    pub placeholders: Vec<String>,
+    /// Fields the user still has to fill in before this can connect.
+    ///
+    /// Computed from the parsed config, not from scanning the raw text.
+    pub missing: Vec<crate::readiness::Field>,
     pub server: Option<String>,
     pub tun: Option<String>,
     pub source_url: Option<String>,
@@ -46,9 +45,12 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// Reports whether all template `TODO_` placeholders have been replaced.
+    /// Whether this profile can connect.
+    ///
+    /// Requires that the file parsed at all: an unreadable or unparseable file
+    /// used to report "ready" because the marker scan found nothing in it.
     pub fn ready(&self) -> bool {
-        self.placeholders.is_empty()
+        self.config_parsed && self.missing.is_empty()
     }
 }
 
@@ -148,7 +150,6 @@ pub fn list_profiles(profiles_dir: &Path) -> std::io::Result<Vec<Profile>> {
             continue;
         }
         let raw = fs::read_to_string(&path).ok();
-        let placeholders = raw.as_deref().map(placeholders_in).unwrap_or_default();
         // One parse per profile. This used to parse the same text twice, once
         // for the server/tun summary and once for the display facts.
         let tree: Option<Value> = raw
@@ -162,11 +163,16 @@ pub fn list_profiles(profiles_dir: &Path) -> std::io::Result<Vec<Profile>> {
         let parsed_facts = tree.as_ref().and_then(extract_config_facts_value);
         let config_parsed = parsed_facts.is_some();
         let facts = parsed_facts.unwrap_or_default();
+        // Readiness from the parsed document, per outbound type and switches.
+        let missing = tree
+            .as_ref()
+            .map(|v| ProfileFormModel::from_value(v).missing())
+            .unwrap_or_default();
 
         profiles.push(Profile {
             name,
             path,
-            placeholders,
+            missing,
             server,
             tun,
             source_url,
@@ -176,23 +182,6 @@ pub fn list_profiles(profiles_dir: &Path) -> std::io::Result<Vec<Profile>> {
     }
     profiles.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(profiles)
-}
-
-/// Return the sorted, deduplicated `TODO_*` markers in `text`.
-pub fn placeholders_in(text: &str) -> Vec<String> {
-    let mut found: Vec<String> = PLACEHOLDER_RE
-        .find_iter(text)
-        .map(|m| m.as_str().to_string())
-        .collect();
-    found.sort();
-    found.dedup();
-    found
-}
-
-/// Read placeholders from disk.
-pub fn placeholders_in_file(path: &Path) -> std::io::Result<Vec<String>> {
-    let data = fs::read_to_string(path)?;
-    Ok(placeholders_in(&data))
 }
 
 /// Parse `json_text` once and return `(server_summary, tun_interface_name)`.
@@ -434,18 +423,33 @@ mod tests {
     }
 
     #[test]
-    fn skeleton_contains_expected_placeholders() {
-        let markers = placeholders_in(SKELETON_JSON);
-        assert_eq!(
-            markers,
-            vec![
-                "TODO_REALITY_PUBLIC_KEY",
-                "TODO_SERVER_IP_OR_HOST",
-                "TODO_SHORT_ID",
-                "TODO_SNI_HOSTNAME",
-                "TODO_UUID",
-            ]
-        );
+    fn skeleton_seeds_no_sentinel_values() {
+        // A new profile must not carry placeholder text into a real config file.
+        assert!(!SKELETON_JSON.contains("TODO_"));
+        let tree: Value = serde_json::from_str(SKELETON_JSON).expect("skeleton is valid JSON");
+        let missing = crate::form_model::ProfileFormModel::from_value(&tree).missing();
+        // The seed declares a vless outbound with TLS+Reality, so these are what
+        // a fresh profile still needs before it can connect.
+        assert!(missing.contains(&crate::readiness::Field::Server));
+        assert!(missing.contains(&crate::readiness::Field::Uuid));
+        assert!(missing.contains(&crate::readiness::Field::RealityPublicKey));
+    }
+
+    #[test]
+    fn an_unparseable_profile_is_not_ready() {
+        // The old marker scan found nothing in an unreadable file and called it
+        // ready. Readiness now requires the config to parse.
+        let p = Profile {
+            name: "x".into(),
+            path: PathBuf::from("/tmp/x.json"),
+            missing: Vec::new(),
+            server: None,
+            tun: None,
+            source_url: None,
+            config_parsed: false,
+            facts: Default::default(),
+        };
+        assert!(!p.ready());
     }
 
     #[test]

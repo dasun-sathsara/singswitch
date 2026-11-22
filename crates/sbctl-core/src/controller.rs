@@ -13,13 +13,11 @@ use crate::activator::{
 use crate::checker::{Checker, ExecChecker, check_temp_bytes};
 use crate::doctor::diagnose_active;
 use crate::error::{ExitCode, Result, SbctlError, store_error};
+use crate::form_model::ProfileFormModel;
 use crate::layout::{Layout, PlatformKind};
 use crate::lock::AdvisoryLock;
 use crate::notify::{Notifier, ToggleableNotifier, default_notifier};
-use crate::profile::{
-    Profile, SKELETON_JSON, list_profiles, path_for, placeholders_in, placeholders_in_file,
-    validate_name,
-};
+use crate::profile::{Profile, SKELETON_JSON, list_profiles, path_for, validate_name};
 use crate::remote::{fetch_remote_profile, normalise_profile_url, validate_remote_body};
 use crate::runner::{ExecRunner, Runner, SudoRunner, TraceHook};
 use crate::service::SudoProbeFn;
@@ -82,7 +80,8 @@ pub struct StatusView {
     pub tun: Option<String>,
     pub server: Option<String>,
     pub pid: Option<u32>,
-    pub placeholders: Vec<String>,
+    /// Fields the active profile still needs, for the agent-facing JSON.
+    pub missing: Vec<crate::readiness::Field>,
     pub broken: Option<String>,
 }
 
@@ -326,13 +325,13 @@ impl Controller {
             tun: None,
             server: None,
             pid: health.pid,
-            placeholders: Vec::new(),
+            missing: Vec::new(),
             broken: broken.map(ToString::to_string),
         };
         if let Some(active_name) = active
             && let Some(p) = profiles.iter().find(|p| p.name == active_name)
         {
-            view.placeholders = p.placeholders.clone();
+            view.missing = p.missing.clone();
             view.tun = p.tun.clone();
             view.server = p.server.clone();
         }
@@ -367,7 +366,10 @@ impl Controller {
             .ok_or_else(|| SbctlError::profile_not_found(name, &available))?;
 
         if !target.ready() {
-            return Err(SbctlError::placeholders(&target.name, &target.placeholders));
+            return Err(SbctlError::profile_incomplete(
+                &target.name,
+                &target.missing,
+            ));
         }
 
         on_phase(ActivationPhase::Validating);
@@ -585,16 +587,25 @@ impl Controller {
         validate_name(name)?;
 
         let path = path_for(&self.layout.profiles_dir, name);
+
+        // Parse, then check the fields this outbound type needs, then let
+        // sing-box decide validity. Running the validator first reported
+        // "invalid public_key" for an unfinished profile - true and useless.
+        let parsed = serde_json::from_str::<serde_json::Value>(content);
+        if parsed.is_err() && !allow_invalid {
+            check_temp_bytes(self.checker.as_ref(), "sbctl-validate-", content.as_bytes())?;
+        }
+        if let (Ok(tree), false) = (&parsed, allow_invalid) {
+            let missing = ProfileFormModel::from_value(tree).missing();
+            if !missing.is_empty() {
+                return Err(SbctlError::profile_incomplete(name, &missing));
+            }
+        }
         if !allow_invalid {
             check_temp_bytes(self.checker.as_ref(), "sbctl-validate-", content.as_bytes())?;
         }
 
-        let markers = placeholders_in(content);
         let (is_active, running) = self.is_active_and_running(name);
-
-        if is_active && running && !markers.is_empty() {
-            return Err(SbctlError::placeholders(name, &markers));
-        }
 
         let old_bytes = fs::read(&path).ok();
         write_file_atomic(&path, content.as_bytes(), 0o644)?;
@@ -603,8 +614,12 @@ impl Controller {
             return Ok(false);
         }
 
+        // Only re-point the active symlink at content that is ready to load.
+        let complete = serde_json::from_str::<serde_json::Value>(content)
+            .map(|t| ProfileFormModel::from_value(&t).missing().is_empty())
+            .unwrap_or(false);
         if self.layout.active_name_path.is_some()
-            && markers.is_empty()
+            && complete
             && let Err(err) = self.activator.activate(&path)
         {
             if let Some(old) = &old_bytes {
@@ -888,9 +903,11 @@ impl Controller {
             .find(|p| p.name == target_name)
             .ok_or_else(|| SbctlError::profile_not_found(&target_name, &available))?;
 
-        let markers = placeholders_in_file(&target.path).unwrap_or(target.placeholders);
-        if !markers.is_empty() {
-            return Err(SbctlError::placeholders(&target.name, &markers));
+        if !target.missing.is_empty() {
+            return Err(SbctlError::profile_incomplete(
+                &target.name,
+                &target.missing,
+            ));
         }
 
         self.checker.check(&target.path)?;
@@ -904,9 +921,11 @@ impl Controller {
                 "invalid JSON syntax: {err}"
             )));
         }
-        let markers = placeholders_in(content);
-        if !markers.is_empty() {
-            return Err(SbctlError::placeholders(label, &markers));
+        if let Ok(model) = ProfileFormModel::from_json_str(content) {
+            let missing = model.missing();
+            if !missing.is_empty() {
+                return Err(SbctlError::profile_incomplete(label, &missing));
+            }
         }
         check_temp_bytes(
             self.checker.as_ref(),
@@ -1277,7 +1296,7 @@ mod tests {
         let p = path_for(&ctrl.layout.profiles_dir, "work");
         fs::write(
             &p,
-            r#"{"outbounds":[{"type":"vless","server":"1.2.3.4","server_port":443}]}"#,
+            r#"{"outbounds":[{"type":"vless","server":"1.2.3.4","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111"}]}"#,
         )
         .unwrap();
 
@@ -1312,8 +1331,8 @@ mod tests {
         let (_dir, ctrl, runner, _checker) = test_controller(PlatformKind::Darwin);
         let prev = path_for(&ctrl.layout.profiles_dir, "good");
         let broken = path_for(&ctrl.layout.profiles_dir, "bad");
-        fs::write(&prev, r#"{"tag":"good"}"#).unwrap();
-        fs::write(&broken, r#"{"tag":"bad"}"#).unwrap();
+        fs::write(&prev, r#"{"outbounds":[{"type":"vless","tag":"good","server":"1.2.3.4","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111"}]}"#).unwrap();
+        fs::write(&broken, r#"{"outbounds":[{"type":"vless","tag":"bad","server":"1.2.3.4","server_port":443,"uuid":"22222222-2222-2222-2222-222222222222"}]}"#).unwrap();
 
         // Activate "good" first so it becomes the known rollback target.
         runner.set_response(
@@ -1349,12 +1368,19 @@ mod tests {
     }
 
     #[test]
-    fn activation_refuses_placeholders() {
+    fn activation_refuses_an_incomplete_profile_and_names_the_fields() {
         let (_dir, ctrl, _runner, _checker) = test_controller(PlatformKind::Windows);
         ctrl.create_from_skeleton("seed").expect("create");
         let err = ctrl.activate("seed").unwrap_err();
         assert_eq!(err.code, ExitCode::Validation);
-        assert!(err.message.contains("TODO_UUID"));
+        // The message names fields the user can act on, not marker tokens.
+        assert!(err.message.contains("UUID"), "msg: {}", err.message);
+        assert!(
+            err.message.contains("server address"),
+            "msg: {}",
+            err.message
+        );
+        assert!(!err.message.contains("TODO_"), "msg: {}", err.message);
     }
 
     #[test]
@@ -1447,11 +1473,12 @@ mod tests {
                 FakeResult::ok("STATE : 4 RUNNING\nPID : 300\n"),
             ],
         );
-        let reloaded = ctrl
-            .save_profile("work", r#"{"version":"new"}"#, false)
-            .unwrap();
+        // Must be a complete config: saving now checks the fields this outbound
+        // type needs before asking sing-box whether it is valid.
+        let new_json = r#"{"outbounds":[{"type":"vless","tag":"work","server":"5.6.7.8","server_port":443,"uuid":"33333333-3333-3333-3333-333333333333"}]}"#;
+        let reloaded = ctrl.save_profile("work", new_json, false).unwrap();
         assert!(reloaded);
-        assert_eq!(fs::read_to_string(&p).unwrap(), r#"{"version":"new"}"#);
+        assert_eq!(fs::read_to_string(&p).unwrap(), new_json);
 
         // Crash loop on reload: probe (RUNNING) -> wait_for_stop (STOPPED) -> baseline (400) -> after (401) -> rollback wait_for_stop (STOPPED).
         runner.queue_responses(
@@ -1464,12 +1491,13 @@ mod tests {
                 FakeResult::ok("STATE : 1 STOPPED\nPID : 0\n"),
             ],
         );
-        let err = ctrl
-            .save_profile("work", r#"{"version":"broken"}"#, false)
-            .unwrap_err();
+        // Complete, but different: this must reach the crash-loop rollback rather
+        // than being refused for missing fields.
+        let broken_json = r#"{"outbounds":[{"type":"vless","tag":"work","server":"9.9.9.9","server_port":443,"uuid":"44444444-4444-4444-4444-444444444444"}]}"#;
+        let err = ctrl.save_profile("work", broken_json, false).unwrap_err();
         assert_eq!(err.code, ExitCode::Service);
         assert!(err.message.contains("reverted work"));
-        assert_eq!(fs::read_to_string(&p).unwrap(), r#"{"version":"new"}"#);
+        assert_eq!(fs::read_to_string(&p).unwrap(), new_json);
     }
 
     #[test]
@@ -1477,8 +1505,8 @@ mod tests {
         let (_dir, ctrl, runner, _checker) = test_controller(PlatformKind::Darwin);
         let prev = path_for(&ctrl.layout.profiles_dir, "good");
         let broken = path_for(&ctrl.layout.profiles_dir, "bad");
-        fs::write(&prev, r#"{"tag":"good"}"#).unwrap();
-        fs::write(&broken, r#"{"tag":"bad"}"#).unwrap();
+        fs::write(&prev, r#"{"outbounds":[{"type":"vless","tag":"good","server":"1.2.3.4","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111"}]}"#).unwrap();
+        fs::write(&broken, r#"{"outbounds":[{"type":"vless","tag":"bad","server":"1.2.3.4","server_port":443,"uuid":"22222222-2222-2222-2222-222222222222"}]}"#).unwrap();
 
         ctrl.activator.activate(&prev).unwrap();
 
@@ -1513,20 +1541,37 @@ mod tests {
     }
 
     #[test]
-    fn check_json_content_validates_syntax_placeholders_and_checker() {
+    fn check_json_content_validates_syntax_completeness_and_checker() {
         let (_dir, ctrl, _runner, _checker) = test_controller(PlatformKind::Darwin);
         let syntax_err = ctrl.check_json_content("work", "{ bad json").unwrap_err();
         assert_eq!(syntax_err.code, ExitCode::Validation);
 
-        let todo_err = ctrl
-            .check_json_content("work", r#"{"server":"TODO_SERVER_IP_OR_HOST"}"#)
+        // A legacy sentinel counts as unfilled, and the message names the field.
+        let incomplete = ctrl
+            .check_json_content(
+                "work",
+                r#"{"outbounds":[{"type":"vless","server":"TODO_SERVER_IP_OR_HOST"}]}"#,
+            )
             .unwrap_err();
-        assert_eq!(todo_err.code, ExitCode::Validation);
-        assert!(todo_err.message.contains("TODO_SERVER_IP_OR_HOST"));
-
+        assert_eq!(incomplete.code, ExitCode::Validation);
         assert!(
-            ctrl.check_json_content("work", r#"{"log":{"level":"info"}}"#)
-                .is_ok()
+            incomplete.message.contains("server address"),
+            "msg: {}",
+            incomplete.message
+        );
+        assert!(
+            incomplete.message.contains("UUID"),
+            "msg: {}",
+            incomplete.message
+        );
+
+        // A complete config passes both the field check and the validator.
+        assert!(
+            ctrl.check_json_content(
+                "work",
+                r#"{"outbounds":[{"type":"vless","server":"1.2.3.4","uuid":"11111111-1111-1111-1111-111111111111"}]}"#,
+            )
+            .is_ok()
         );
     }
 
@@ -1547,7 +1592,7 @@ mod tests {
         assert!(ctrl.layout.profiles_dir.is_dir());
 
         let bad = path_for(&ctrl.layout.profiles_dir, "bad");
-        fs::write(&bad, r#"{"tag":"bad"}"#).unwrap();
+        fs::write(&bad, r#"{"outbounds":[{"type":"vless","tag":"bad","server":"1.2.3.4","server_port":443,"uuid":"22222222-2222-2222-2222-222222222222"}]}"#).unwrap();
         runner.set_response(
             "sudo -n /bin/launchctl print",
             FakeResult::err(113, "not loaded"),

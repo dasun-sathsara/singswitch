@@ -33,7 +33,6 @@ const WATCHER_DEBOUNCE: Duration = Duration::from_millis(150);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoticeOrigin {
     /// The profile rail and its switch actions.
-    #[allow(dead_code)]
     Rail,
     /// The stage header's Switch action.
     Stage,
@@ -233,7 +232,7 @@ fn empty_snapshot() -> Snapshot {
             tun: None,
             server: None,
             pid: None,
-            placeholders: Vec::new(),
+            missing: Vec::new(),
             broken: None,
         },
     }
@@ -585,12 +584,6 @@ impl AppStore {
         cx.notify();
     }
 
-    /// Convenience for the common "copied" case, which reports on its button.
-    #[allow(dead_code)]
-    pub fn note_copied(&mut self, origin: NoticeOrigin, what: &str, cx: &mut Context<Self>) {
-        self.set_notice(origin, BannerTone::Success, format!("{what} copied"), cx);
-    }
-
     /// The notice for one origin, if it is the current one.
     pub fn notice_for(&self, origin: NoticeOrigin) -> Option<&Notice> {
         self.notice.as_ref().filter(|n| n.origin == origin)
@@ -828,9 +821,20 @@ impl AppStore {
         self.activate_profile(name, NoticeOrigin::Toolbar, cx);
     }
 
-    pub fn restart_active(&mut self, cx: &mut Context<Self>) {
+    /// Which surface is showing right now, for menu commands that must report
+    /// somewhere the user can see.
+    pub fn notice_origin_for_current_tab(&self) -> NoticeOrigin {
+        match self.selected_tab {
+            NavTab::Logs => NoticeOrigin::Logs,
+            NavTab::Settings => NoticeOrigin::Settings,
+            NavTab::Profiles if self.editing => NoticeOrigin::Editor,
+            NavTab::Profiles => NoticeOrigin::Stage,
+        }
+    }
+
+    pub fn restart_active(&mut self, origin: NoticeOrigin, cx: &mut Context<Self>) {
         if let Some(active) = self.snapshot.active.clone() {
-            self.activate_profile(active, NoticeOrigin::Stage, cx);
+            self.activate_profile(active, origin, cx);
         } else {
             self.connect_active(cx);
         }
@@ -969,8 +973,11 @@ impl AppStore {
                         store.selected_profile = Some(name.clone());
                         store.editor_validation =
                             Some((name.clone(), EditorValidationState::Valid));
+                        // Save & Connect runs while the editor is mounted, so
+                        // the result belongs on the editor, not the stage it
+                        // covers.
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: NoticeOrigin::Editor,
                             tone: BannerTone::Success,
                             message: format!("Saved and connected to {name}"),
                         });
@@ -985,7 +992,7 @@ impl AppStore {
                             EditorValidationState::Invalid(error_text(&err)),
                         ));
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: NoticeOrigin::Editor,
                             tone: BannerTone::Error,
                             message: error_text(&err),
                         });
@@ -1129,7 +1136,7 @@ impl AppStore {
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: NoticeOrigin::Editor,
                             tone: BannerTone::Error,
                             message: error_text(&err),
                         });
@@ -1182,7 +1189,7 @@ impl AppStore {
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: NoticeOrigin::Editor,
                             tone: BannerTone::Error,
                             message: error_text(&err),
                         });
@@ -1252,7 +1259,7 @@ impl AppStore {
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: NoticeOrigin::Editor,
                             tone: BannerTone::Error,
                             message: error_text(&err),
                         });

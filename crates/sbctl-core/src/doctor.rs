@@ -134,7 +134,7 @@ mod tests {
         let profiles = vec![crate::profile::Profile {
             name: "work".to_string(),
             path: dir.path().join("work.json"),
-            placeholders: Vec::new(),
+            missing: Vec::new(),
             server: None,
             tun: None,
             source_url: None,

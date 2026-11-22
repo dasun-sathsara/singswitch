@@ -134,6 +134,11 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.sidebar_border = rgb(0x3A3A3E).into();
             theme.sidebar_accent = rgb(0x323238).into();
             theme.sidebar_accent_foreground = rgb(0xEDEDEF).into();
+            // `accent` is the hover/selected fill for menu rows and ghost
+            // buttons. Left unset it falls back to the stock neutral-800
+            // (#262626), which against our popover (#242427) is 1.02:1 -
+            // effectively invisible.
+            theme.accent = rgb(0x3A3A42).into();
             theme.primary = rgb(0x5AA2FF).into();
             theme.primary_hover = rgb(0x74B1FF).into();
             theme.primary_active = rgb(0x488FE6).into();
@@ -162,6 +167,7 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.sidebar_border = rgb(0xE1E1E4).into();
             theme.sidebar_accent = rgb(0xE4E4E8).into();
             theme.sidebar_accent_foreground = rgb(0x1B1B1E).into();
+            theme.accent = rgb(0xD6D6DB).into();
             theme.primary = rgb(0x0B62C4).into();
             theme.primary_hover = rgb(0x0A56AC).into();
             theme.primary_active = rgb(0x084A94).into();
@@ -189,29 +195,6 @@ pub fn surface_card_bg(cx: &App) -> gpui_kit::Hsla {
 /// Background for recessed rows, hover states, and inline code.
 pub fn subtle_pill_bg(cx: &App) -> gpui_kit::Hsla {
     cx.theme().muted
-}
-
-/// Geometry for every single-line field, so the rail filter, dialogs, and the
-/// guided editor cannot drift apart.
-pub const INPUT_HEIGHT: f32 = 32.0;
-pub const INPUT_RADIUS: f32 = 6.0;
-/// The frame every input sits in. Reserved for fields that need an explicit
-/// box; the component's own frame covers the rest with the same tokens.
-#[allow(dead_code)]
-///
-/// Target size for the field frame. Retained for reference: the shipped inputs
-/// use the component's own border, which is painted at full alpha and therefore
-/// meets the 3:1 non-text contrast floor. The component's 50%-alpha focus ring
-/// topped out at 2.8:1 and is not relied on.
-pub fn input_frame(focused: bool, cx: &gpui_kit::App) -> gpui_kit::Div {
-    use gpui_kit::Styled as _;
-    let theme = cx.theme();
-    gpui_kit::div()
-        .h(gpui_kit::px(INPUT_HEIGHT))
-        .rounded(gpui_kit::px(INPUT_RADIUS))
-        .bg(surface(cx))
-        .border_1()
-        .border_color(if focused { theme.ring } else { theme.border })
 }
 
 /// The edge of a control that must read as a control: a button outline or a

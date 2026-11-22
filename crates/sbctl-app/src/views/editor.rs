@@ -14,7 +14,6 @@ use gpui_kit::{
     Styled as _, Window, div, prelude::FluentBuilder as _, px, relative,
 };
 use sbctl_core::form_model::{DEFAULT_SERVER_PORT, DEFAULT_TUN_MTU, ProfileFormModel};
-use sbctl_core::profile::placeholders_in;
 use std::rc::Rc;
 
 use crate::actions::BackToConnections;
@@ -54,7 +53,6 @@ pub struct ProfileEditorPanel {
     /// otherwise look like an outside change and raise a false banner.
     last_submitted: Option<String>,
     derived_json: SharedString,
-    derived_todos: Vec<String>,
     derived_syntax: Option<String>,
 
     json_editor: Entity<EditorState>,
@@ -95,7 +93,6 @@ impl ProfileEditorPanel {
             drafts: std::collections::HashMap::new(),
             last_submitted: None,
             derived_json: SharedString::default(),
-            derived_todos: Vec::new(),
             derived_syntax: None,
             active_tab: EditorTab::Guided,
             json_editor,
@@ -427,9 +424,12 @@ impl ProfileEditorPanel {
         }
 
         let is_active = self.store.read(cx).snapshot.active.as_deref() == Some(name.as_str());
-        let has_todos = !placeholders_in(&content).is_empty();
-        // Draft profiles can save incomplete TODO placeholders as long as they are not active.
-        let allow_invalid = has_todos && !is_active;
+        // A profile with fields still to fill saves as a draft, so an inactive
+        // one can be kept while the user finds the values.
+        let incomplete = sbctl_core::form_model::ProfileFormModel::from_json_str(&content)
+            .map(|m| !m.missing().is_empty())
+            .unwrap_or(true);
+        let allow_invalid = incomplete && !is_active;
 
         self.clear_draft(&name);
         // Record what we submitted so the resulting disk change is recognised
@@ -936,13 +936,24 @@ impl Render for ProfileEditorPanel {
         // repaint for an unrelated reason reuses them instead of re-scanning.
         let live_json = self.json_editor.read(cx).value();
         if live_json != self.derived_json {
-            self.derived_todos = placeholders_in(&live_json);
             self.derived_syntax = serde_json::from_str::<serde_json::Value>(&live_json)
                 .err()
                 .map(|err| format!("JSON syntax error: {err}"));
             self.derived_json = live_json.clone();
         }
-        let live_todos = self.derived_todos.clone();
+        // Readiness comes from whichever document the user is looking at: the
+        // guided form on that tab, the JSON buffer otherwise. Deriving it from
+        // the buffer alone meant typing the last value into the form left the
+        // strip listing it and "Save & Connect" disabled until a save.
+        let live_missing = match self.active_tab {
+            EditorTab::Guided => self
+                .build_model_from_inputs(cx)
+                .map(|m| m.missing())
+                .unwrap_or_default(),
+            EditorTab::Json => sbctl_core::form_model::ProfileFormModel::from_json_str(&live_json)
+                .map(|m| m.missing())
+                .unwrap_or_default(),
+        };
         let syntax_status = match (&self.derived_syntax, self.active_tab) {
             (Some(err), EditorTab::Json) => Err(err.clone()),
             _ => Ok(()),
@@ -976,8 +987,8 @@ impl Render for ProfileEditorPanel {
                     cx,
                 ))
             })
-            .when(!live_todos.is_empty(), |this| {
-                this.child(render_placeholder_strip(live_todos, cx))
+            .when(!live_missing.is_empty(), |this| {
+                this.child(render_missing_strip(live_missing, cx))
             })
             .child(match self.active_tab {
                 EditorTab::Guided => self.render_guided_form(cx),
@@ -1034,7 +1045,7 @@ fn open_save_draft_dialog(
     });
 }
 
-fn render_placeholder_strip(live_todos: Vec<String>, cx: &App) -> impl IntoElement {
+fn render_missing_strip(missing: Vec<sbctl_core::readiness::Field>, cx: &App) -> impl IntoElement {
     h_flex()
         .w_full()
         .flex_wrap()
@@ -1045,12 +1056,12 @@ fn render_placeholder_strip(live_todos: Vec<String>, cx: &App) -> impl IntoEleme
                 .text_xs()
                 .font_bold()
                 .text_color(cx.theme().warning)
-                .child("Placeholders:"),
+                .child("Still needed:"),
         )
         .children(
-            live_todos
+            missing
                 .into_iter()
-                .map(|tok| Tag::warning().xsmall().child(tok)),
+                .map(|f| Tag::warning().xsmall().child(f.label())),
         )
 }
 

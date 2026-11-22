@@ -40,21 +40,21 @@
     {
       "type": "vless",
       "tag": "proxy",
-      "server": "TODO_SERVER_IP_OR_HOST",
+      "server": "",
       "server_port": 443,
-      "uuid": "TODO_UUID",
+      "uuid": "",
       "flow": "xtls-rprx-vision",
       "tls": {
         "enabled": true,
-        "server_name": "TODO_SNI_HOSTNAME",
+        "server_name": "",
         "utls": {
           "enabled": true,
           "fingerprint": "chrome"
         },
         "reality": {
           "enabled": true,
-          "public_key": "TODO_REALITY_PUBLIC_KEY",
-          "short_id": "TODO_SHORT_ID"
+          "public_key": "",
+          "short_id": ""
         }
       }
     },
