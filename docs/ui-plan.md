@@ -1,5 +1,11 @@
 # sbctl desktop UI: design plan (v3)
 
+> **Historical.** This is the design record for the v3 shell, kept because the
+> reasoning still explains the layout. It is not current: the Doctor feature
+> described below was removed after the fact, and the `TODO_` placeholder scheme
+> was replaced by typed readiness (`crates/sbctl-core/src/readiness.rs`). Read
+> `README.md` for the shipped behaviour.
+
 Status: revised after two adversarial reviews. v3 is a behaviour spec, not a layout sketch: every
 state below names the code that produces it and what the user sees when it holds.
 Mode: **Operate**. macOS primary, Windows parity.

@@ -4,7 +4,7 @@
 
 ## How it works
 
-- **Verified switches with rollback.** `sbctl` validates profiles with `sing-box check`, blocks remaining `TODO_` placeholders, updates the active config atomically, restarts the service, and watches it for 2.5 seconds. It restores the prior profile and state if the daemon exits, changes PID, or restarts.
+- **Verified switches with rollback.** `sbctl` validates profiles with `sing-box check`, refuses to activate a profile whose required fields are still empty (naming them), updates the active config atomically, restarts the service, and watches it for 2.5 seconds. It restores the prior profile and state if the daemon exits, changes PID, or restarts.
 - **Tray and desktop app.** `sbctl-app` runs in the macOS menu bar or Windows system tray and hides the Dock icon when its window closes. Switch profiles from the menu, edit VLESS and Reality fields without dropping custom DNS or routing JSON, and tail logs.
 - **Scoped privileges.** Profile editing and the GUI run unprivileged. Service control uses four fixed `NOPASSWD` sudo rules on macOS and the `sbctl-agent` named pipe or UAC on Windows. See [SECURITY.md](SECURITY.md).
 - **Bundled sing-box.** The release carries a pinned, checksum-verified sing-box (`scripts/sing-box.lock`). The installer copies it to a root-owned path, so the daemon never execs a Homebrew, WinGet, or user-writable binary, and no separate sing-box install is needed.

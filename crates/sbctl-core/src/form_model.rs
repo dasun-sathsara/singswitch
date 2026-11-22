@@ -687,6 +687,9 @@ mod tests {
 
     #[test]
     fn round_trip_preserves_custom_sections_and_fills_required_fields() {
+        // This fixture carries the legacy TODO_ sentinels on purpose: they must
+        // read as unfilled, and filling the fields must replace them, without any
+        // rewrite of profiles the user has not touched.
         let input = r#"{
   "log": { "level": "info", "timestamp": true },
   "endpoints": [{ "type": "tailscale", "tag": "ts-ep", "state_directory": "tailscale" }],
@@ -729,6 +732,19 @@ mod tests {
         form.reality_short_id = "abcd".to_string();
         form.tun_mtu = 1400;
         form.reject_ipv6 = false;
+
+        let seeded = ProfileFormModel::from_json_str(input).expect("legacy profile parses");
+        assert_eq!(
+            seeded.missing(),
+            vec![
+                crate::readiness::Field::Server,
+                crate::readiness::Field::Uuid,
+                crate::readiness::Field::ServerName,
+                crate::readiness::Field::RealityPublicKey,
+                crate::readiness::Field::RealityShortId,
+            ],
+            "legacy sentinels must count as unfilled"
+        );
 
         let updated = form.apply_to_json_str(input).expect("apply");
         let applied: Value = serde_json::from_str(&updated).unwrap();
