@@ -202,14 +202,29 @@ mod desktop {
         set_dock_visible(true);
 
         let existing = cx.global::<AppGlobalState>().main_window;
-        if let Some(handle) = existing
-            && handle
-                .update(cx, |_, window, _| {
-                    window.activate_window();
-                })
-                .is_ok()
-        {
-            return;
+        if let Some(handle) = existing {
+            // Re-focus whatever window is still attached to this handle. Ask the
+            // app which windows exist rather than inferring it from update's
+            // result: a window that exists but is not updatable right now (for
+            // example while an action is being dispatched) would otherwise send
+            // us down the open path and leave a second window behind.
+            if cx
+                .windows()
+                .iter()
+                .any(|w| w.window_id() == handle.window_id())
+            {
+                if handle
+                    .update(cx, |_, window, _| window.activate_window())
+                    .is_err()
+                {
+                    crate::diag::log("main window present but not focusable");
+                }
+                return;
+            }
+            // Stale handle: the window went away without the close path running.
+            let g = cx.global_mut::<AppGlobalState>();
+            g.main_window = None;
+            g.main_view = None;
         }
 
         let (store, width, height) = {
@@ -373,7 +388,9 @@ mod desktop {
 
         cx.on_action(|_: &crate::actions::RestartService, cx: &mut App| {
             let store = cx.global::<AppGlobalState>().store.clone();
-            store.update(cx, AppStore::restart_active);
+            // Reached from the menu on any tab, so report where the user is.
+            let origin = store.read(cx).notice_origin_for_current_tab();
+            store.update(cx, |s, cx| s.restart_active(origin, cx));
         });
 
         cx.on_action(|_: &crate::actions::DeleteSelectedProfile, cx: &mut App| {
@@ -401,15 +418,34 @@ mod desktop {
                 let g = cx.global::<AppGlobalState>();
                 (g.main_window, g.store.clone())
             };
+            // Cmd-W and File > Close Window must honour the same rule as the
+            // native close button: hiding the window is only safe when a tray
+            // can bring it back. window.remove_window() skips
+            // on_window_should_close, so without this check a machine whose
+            // tray failed to install loses the window and the Dock icon.
+            if !store.read(cx).tray_available {
+                crate::diag::log("close ignored: no tray to restore the window from");
+                return;
+            }
             if let Some(handle) = handle {
-                let _ = handle.update(cx, |_, window, cx| {
-                    let b = window.bounds().size;
-                    store.update(cx, |s, cx| {
-                        s.update_window_size(b.width.as_f32(), b.height.as_f32(), true);
-                        s.set_window_open(false, cx);
-                    });
-                    window.remove_window();
-                });
+                // Only drop the handle once the window is actually gone;
+                // clearing it on failure would make the next open spawn a
+                // second window beside the first.
+                let closed = handle
+                    .update(cx, |_, window, cx| {
+                        let b = window.bounds().size;
+                        store.update(cx, |s, cx| {
+                            s.update_window_size(b.width.as_f32(), b.height.as_f32(), true);
+                            s.set_window_open(false, cx);
+                        });
+                        window.remove_window();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !closed {
+                    crate::diag::log("close failed: window handle no longer valid");
+                    return;
+                }
                 // Drop the handle to the removed window's view tree. Keeping it
                 // retained the whole shell, editor rope, drafts and both log
                 // buffers for as long as the app sat in the tray.

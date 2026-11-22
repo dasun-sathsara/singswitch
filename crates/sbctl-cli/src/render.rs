@@ -133,10 +133,10 @@ impl Theme {
         }
 
         let mut body = self.kv_block(&rows);
-        if !view.placeholders.is_empty() {
+        if !view.missing.is_empty() {
             body.push_str(&self.warn(&format!(
                 "active profile still has placeholders: {}",
-                view.placeholders.join(", ")
+                sbctl_core::readiness::join_labels(&view.missing)
             )));
             body.push('\n');
         }
@@ -278,7 +278,7 @@ mod tests {
             tun: Some("tun0".into()),
             server: Some("1.2.3.4:443".into()),
             pid: Some(42),
-            placeholders: vec![],
+            missing: vec![],
             broken: None,
         };
         let rendered = theme.render_status(&view);

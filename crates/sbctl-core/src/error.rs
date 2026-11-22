@@ -10,7 +10,7 @@ pub enum ExitCode {
     Ok = 0,
     /// Generic failure: bad usage, missing profile, I/O, or network trouble.
     General = 1,
-    /// Configuration rejected: placeholders remain or `sing-box check` failed.
+    /// Configuration rejected: required fields are missing or `sing-box check` failed.
     Validation = 2,
     /// Service failure: failed to start, stop, or stay running after activation.
     Service = 3,
@@ -156,7 +156,7 @@ impl SbctlError {
         Self::permission("sbctl is not allowed to manage the sing-box service without a password")
             .with_hints([
                 "repair the scoped sudo rules with: sudo bash scripts/install-macos.sh",
-                "then confirm with: sbctl doctor",
+                "then confirm with: sbctl status",
             ])
             .with_cause(detail_str)
             .with_kind(CoreErrorKind::SudoNotConfigured { detail: suffix })
@@ -186,15 +186,13 @@ impl SbctlError {
             })
     }
 
-    pub fn placeholders(name: &str, markers: &[String]) -> Self {
-        Self::validation(format!(
-            "{name} still contains placeholder values: {}",
-            join_and(markers)
-        ))
-        .with_hints([
-            format!("fill them in with: sbctl edit {name}"),
-            "every TODO_ marker must be replaced before the profile can be used".to_string(),
-        ])
+    /// The profile is missing fields this outbound type needs.
+    ///
+    /// Names the fields rather than the old "replace TODO_ markers", which told
+    /// the user nothing they could act on.
+    pub fn profile_incomplete(name: &str, missing: &[crate::readiness::Field]) -> Self {
+        let labels = crate::readiness::join_labels(missing);
+        Self::validation(format!("{name} needs {labels} before it can connect"))
     }
 
     pub fn profile_not_found(name: &str, available: &[String]) -> Self {

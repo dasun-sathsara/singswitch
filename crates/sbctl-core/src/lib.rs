@@ -12,6 +12,7 @@ pub mod logs;
 pub mod net;
 pub mod notify;
 pub mod profile;
+pub mod readiness;
 pub mod remote;
 pub mod runner;
 pub mod service;

@@ -64,6 +64,54 @@ impl Default for ProfileFormModel {
 }
 
 impl ProfileFormModel {
+    /// Set one guided field by its CLI name. Used by `sbctl edit --set` so a
+    /// script can fill a profile without writing JSON or opening an editor.
+    pub fn set_field(&mut self, key: &str, value: &str) -> Result<()> {
+        let parse_u32 = |v: &str| {
+            v.trim().parse::<u32>().map_err(|_| {
+                crate::error::SbctlError::validation(format!("{key} must be a number, got {v:?}"))
+            })
+        };
+        let parse_bool = |v: &str| match v.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Ok(true),
+            "false" | "0" | "no" | "off" => Ok(false),
+            _ => Err(crate::error::SbctlError::validation(format!(
+                "{key} must be true or false, got {v:?}"
+            ))),
+        };
+        match key {
+            "type" | "outbound_type" => self.outbound_type = value.trim().to_string(),
+            "tag" | "outbound_tag" => self.outbound_tag = value.trim().to_string(),
+            "server" => self.server = value.trim().to_string(),
+            "port" | "server_port" => self.server_port = parse_u32(value)? as u16,
+            "uuid" => self.uuid = value.trim().to_string(),
+            "password" => self.password = value.to_string(),
+            "flow" => self.flow = value.trim().to_string(),
+            "tls" | "tls_enabled" => self.tls_enabled = parse_bool(value)?,
+            "server_name" | "sni" => self.server_name = value.trim().to_string(),
+            "utls" | "utls_enabled" => self.utls_enabled = parse_bool(value)?,
+            "fingerprint" | "utls_fingerprint" => self.utls_fingerprint = value.trim().to_string(),
+            "reality" | "reality_enabled" => self.reality_enabled = parse_bool(value)?,
+            "public_key" | "reality_public_key" => {
+                self.reality_public_key = value.trim().to_string()
+            }
+            "short_id" | "reality_short_id" => self.reality_short_id = value.trim().to_string(),
+            "tun_name" | "tun_interface_name" => self.tun_interface_name = value.trim().to_string(),
+            "stack" | "tun_stack" => self.tun_stack = value.trim().to_string(),
+            "mtu" | "tun_mtu" => self.tun_mtu = parse_u32(value)?,
+            "auto_route" | "tun_auto_route" => self.tun_auto_route = parse_bool(value)?,
+            "strict_route" | "tun_strict_route" => self.tun_strict_route = parse_bool(value)?,
+            "reject_ipv6" => self.reject_ipv6 = parse_bool(value)?,
+            "log_level" => self.log_level = value.trim().to_string(),
+            other => {
+                return Err(crate::error::SbctlError::validation(format!(
+                    "unknown field {other:?}; run `sbctl edit --help` for the list"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Parse a raw sing-box JSON document into a guided form model.
     pub fn from_json_str(raw: &str) -> Result<Self> {
         let root: Value = serde_json::from_str(raw)
@@ -72,6 +120,41 @@ impl ProfileFormModel {
     }
 
     /// Extract guided form values from a parsed JSON tree.
+    /// Fields this model leaves unfilled, for the current outbound type and
+    /// TLS/Reality switches. Empty means ready to connect.
+    ///
+    /// This is the only readiness predicate: it reads the document through the
+    /// same extraction the guided form uses, so the form and the file can never
+    /// disagree about what is missing.
+    pub fn missing(&self) -> Vec<crate::readiness::Field> {
+        use crate::readiness::{Field, is_set, required, required_tls};
+
+        let mut missing = Vec::new();
+        for field in required(&self.outbound_type) {
+            let filled = match field {
+                Field::Server => is_set(&self.server),
+                Field::Uuid => is_set(&self.uuid),
+                Field::Password => is_set(&self.password),
+                _ => true,
+            };
+            if !filled {
+                missing.push(field);
+            }
+        }
+        for field in required_tls(self.tls_enabled, self.reality_enabled) {
+            let filled = match field {
+                Field::ServerName => is_set(&self.server_name),
+                Field::RealityPublicKey => is_set(&self.reality_public_key),
+                Field::RealityShortId => is_set(&self.reality_short_id),
+                _ => true,
+            };
+            if !filled {
+                missing.push(field);
+            }
+        }
+        missing
+    }
+
     pub fn from_value(root: &Value) -> Self {
         let mut model = Self::default();
 
@@ -411,10 +494,66 @@ fn str_field(obj: &Map<String, Value>, key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::{SKELETON_JSON, placeholders_in};
+    use crate::profile::SKELETON_JSON;
 
     #[test]
-    fn round_trip_preserves_custom_sections_and_replaces_placeholders() {
+    fn set_field_fills_a_profile_without_touching_json() {
+        // `sbctl edit --set` writes through this path, so it must produce a
+        // ready profile from the skeleton.
+        let mut form = ProfileFormModel::from_json_str(SKELETON_JSON).expect("skeleton");
+        assert!(!form.missing().is_empty());
+        for (k, v) in [
+            ("server", "203.0.113.9"),
+            ("uuid", "11111111-1111-1111-1111-111111111111"),
+            ("server_name", "www.example.com"),
+            ("public_key", "PUBKEY"),
+            ("short_id", "ab"),
+        ] {
+            form.set_field(k, v).expect(k);
+        }
+        assert!(
+            form.missing().is_empty(),
+            "still missing: {:?}",
+            form.missing()
+        );
+        let out = form.apply_to_json_str(SKELETON_JSON).expect("apply");
+        assert!(
+            ProfileFormModel::from_json_str(&out)
+                .unwrap()
+                .missing()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn every_reported_missing_field_is_fillable_by_its_own_key() {
+        // The contract agents rely on: each `missing` key is accepted by
+        // `--set` and clears that field. If these drift apart, a script cannot
+        // fix what the tool tells it is broken.
+        let skeleton = ProfileFormModel::from_json_str(SKELETON_JSON).expect("skeleton");
+        for field in skeleton.missing() {
+            let mut form = ProfileFormModel::from_json_str(SKELETON_JSON).expect("skeleton");
+            form.set_field(field.key(), "x").expect(field.key());
+            assert!(
+                !form.missing().contains(&field),
+                "filling {} left it missing",
+                field.key()
+            );
+        }
+    }
+
+    #[test]
+    fn set_field_rejects_unknown_keys_and_bad_values() {
+        let mut form = ProfileFormModel::default();
+        assert!(form.set_field("nonsense", "x").is_err());
+        assert!(form.set_field("port", "not-a-number").is_err());
+        assert!(form.set_field("tls", "maybe").is_err());
+        // A rejected value must not have been partially applied.
+        assert_eq!(form.server_port, DEFAULT_SERVER_PORT);
+    }
+
+    #[test]
+    fn round_trip_preserves_custom_sections_and_fills_required_fields() {
         let input = r#"{
   "log": { "level": "info", "timestamp": true },
   "endpoints": [{ "type": "tailscale", "tag": "ts-ep", "state_directory": "tailscale" }],
@@ -459,7 +598,8 @@ mod tests {
         form.reject_ipv6 = false;
 
         let updated = form.apply_to_json_str(input).expect("apply");
-        assert!(placeholders_in(&updated).is_empty());
+        let applied: Value = serde_json::from_str(&updated).unwrap();
+        assert!(ProfileFormModel::from_value(&applied).missing().is_empty());
 
         let parsed: Value = serde_json::from_str(&updated).unwrap();
         assert_eq!(parsed["endpoints"][0]["tag"], "ts-ep");

@@ -19,7 +19,7 @@ use sbctl_core::error::{ExitCode, SbctlError};
 use sbctl_core::ip::fetch_ip_info;
 use sbctl_core::layout::PlatformKind;
 use sbctl_core::logs::{read_appended_lines, read_tail_lines};
-use sbctl_core::profile::{list_profiles, path_for, placeholders_in_file, validate_name};
+use sbctl_core::profile::{list_profiles, path_for, validate_name};
 use sbctl_core::runner::TraceHook;
 use sbctl_core::service::win_rpc::{PipeRequest, PipeResponse};
 
@@ -109,6 +109,14 @@ enum Commands {
     Edit {
         /// Profile name
         name: String,
+        /// Read the new configuration from a file ("-" for stdin) instead of
+        /// opening $EDITOR. Required for scripts and agents.
+        #[arg(long, value_name = "PATH")]
+        from: Option<String>,
+        /// Set a field as key=value (repeatable): server, port, uuid,
+        /// server_name, public_key, short_id, tun_mtu, ...
+        #[arg(long = "set", value_name = "KEY=VALUE")]
+        set: Vec<String>,
     },
     /// Delete a profile
     #[command(alias = "remove", alias = "delete")]
@@ -222,7 +230,9 @@ fn run(cli: &Cli, ctrl: &Controller, theme: &Theme) -> sbctl_core::error::Result
         Some(Commands::Add { name }) => cmd_add(cli, ctrl, theme, name),
         Some(Commands::Pull { name, url }) => cmd_pull(cli, ctrl, theme, name, url),
         Some(Commands::Sync { name }) => cmd_sync(cli, ctrl, theme, name.as_deref()),
-        Some(Commands::Edit { name }) => cmd_edit(cli, ctrl, theme, name),
+        Some(Commands::Edit { name, from, set }) => {
+            cmd_edit(cli, ctrl, theme, name, from.as_deref(), set)
+        }
         Some(Commands::Rm { name, force }) => cmd_rm(cli, ctrl, theme, name, *force),
         Some(Commands::Check { name }) => cmd_check(cli, ctrl, theme, name.as_deref()),
         Some(Commands::Ip) => cmd_ip(cli, theme),
@@ -246,7 +256,7 @@ fn run_root(cli: &Cli, ctrl: &Controller, theme: &Theme) -> sbctl_core::error::R
     println!("Profiles:");
     for (idx, p) in snap.profiles.iter().enumerate() {
         let marker = if !p.ready() {
-            "placeholders"
+            "missing"
         } else if snap.active.as_deref() == Some(p.name.as_str()) && snap.running {
             "active"
         } else if snap.active.as_deref() == Some(p.name.as_str()) {
@@ -294,7 +304,7 @@ fn cmd_list(cli: &Cli, ctrl: &Controller, theme: &Theme) -> sbctl_core::error::R
                     "name": p.name,
                     "active": snap.active.as_deref() == Some(p.name.as_str()) && snap.running,
                     "configured": snap.active.as_deref() == Some(p.name.as_str()),
-                    "placeholders": p.placeholders,
+                    "missing": field_keys(&p.missing),
                     "server": p.server,
                     "tun": p.tun,
                     "source_url": p.source_url,
@@ -339,7 +349,7 @@ fn print_status_view(
         payload.insert("running".into(), json!(view.running));
         payload.insert("tun".into(), json!(view.tun));
         payload.insert("server".into(), json!(view.server));
-        payload.insert("placeholders".into(), json!(view.placeholders));
+        payload.insert("missing".into(), json!(field_keys(&view.missing)));
         if let Some(pid) = view.pid {
             payload.insert("pid".into(), json!(pid));
         }
@@ -431,11 +441,16 @@ fn cmd_logs(
 
     let (initial, mut offset) = read_tail_lines(path, lines)?;
     if cli.json {
-        // Every other command honours the global flag; `logs` ignored it and
-        // emitted plain text while the README promised schema 1.
-        emit_json(&json!({ "lines": initial }))?;
         if !follow {
+            // One document for a bounded read.
+            emit_json(&json!({ "lines": initial }))?;
             return Ok(());
+        }
+        // Following is unbounded, so emit JSON Lines: one object per line, each
+        // a complete document. A single header plus raw lines would be
+        // unparseable.
+        for line in &initial {
+            emit_json(&json!({ "line": line }))?;
         }
     } else {
         for line in &initial {
@@ -451,7 +466,11 @@ fn cmd_logs(
         let (appended, new_offset, _) = read_appended_lines(path, offset)?;
         offset = new_offset;
         for line in appended {
-            println!("{line}");
+            if cli.json {
+                emit_json(&json!({ "line": line }))?;
+            } else {
+                println!("{line}");
+            }
         }
     }
 }
@@ -482,13 +501,17 @@ fn cmd_add(
     }
     if !cli.quiet {
         println!("{}", theme.ok(&format!("created {name}")));
-        let markers = placeholders_in_file(&path).unwrap_or_default();
-        if !markers.is_empty() {
+        let missing = list_profiles(&ctrl.layout.profiles_dir)
+            .ok()
+            .and_then(|ps| ps.into_iter().find(|p| p.name == name))
+            .map(|p| p.missing)
+            .unwrap_or_default();
+        if !missing.is_empty() {
             println!(
                 "{}",
                 theme.warn(&format!(
-                    "it still has placeholders: {}",
-                    markers.join(", ")
+                    "it still needs: {}",
+                    sbctl_core::readiness::join_labels(&missing)
                 ))
             );
             println!(
@@ -510,6 +533,8 @@ fn cmd_edit(
     ctrl: &Controller,
     theme: &Theme,
     name: &str,
+    from: Option<&str>,
+    set: &[String],
 ) -> sbctl_core::error::Result<()> {
     validate_name(name)?;
     let profiles = list_profiles(&ctrl.layout.profiles_dir)?;
@@ -520,6 +545,60 @@ fn cmd_edit(
 
     let path = path_for(&ctrl.layout.profiles_dir, name);
     let original = fs::read_to_string(&path)?;
+
+    // Non-interactive path: an agent supplies the whole document, or field
+    // values against the existing one. No $EDITOR, no prompt.
+    if from.is_some() || !set.is_empty() {
+        let mut content = match from {
+            Some("-") => {
+                use std::io::Read as _;
+                let mut buf = String::new();
+                io::stdin().read_to_string(&mut buf)?;
+                buf
+            }
+            Some(src) => fs::read_to_string(src)?,
+            None => original.clone(),
+        };
+        if !set.is_empty() {
+            let mut model = sbctl_core::form_model::ProfileFormModel::from_json_str(&content)?;
+            for pair in set {
+                let (key, value) = pair.split_once('=').ok_or_else(|| {
+                    SbctlError::validation(format!("--set expects key=value, got {pair:?}"))
+                })?;
+                model.set_field(key.trim(), value)?;
+            }
+            content = model.apply_to_json_str(&content)?;
+        }
+        let reloaded = ctrl.save_profile(name, &content, false)?;
+        if cli.json {
+            let p = list_profiles(&ctrl.layout.profiles_dir)?
+                .into_iter()
+                .find(|p| p.name == name);
+            return emit_json(&json!({
+                "profile": name,
+                "reloaded": reloaded,
+                "ready": p.as_ref().is_some_and(|p| p.ready()),
+                "missing": field_keys(&p.map(|p| p.missing).unwrap_or_default()),
+            }));
+        }
+        if !cli.quiet {
+            println!("{}", theme.ok(&format!("{name} is valid")));
+            if reloaded {
+                println!(
+                    "{}",
+                    theme.ok(&format!("reloaded sing-box with the updated {name}"))
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    if cli.json {
+        // Interactive editing cannot produce machine output.
+        return Err(SbctlError::validation(
+            "edit needs --from or --set when --json is used",
+        ));
+    }
 
     let kept = edit_loop(ctrl, theme, &path, || {
         let _ = fs::write(&path, &original);
@@ -631,7 +710,7 @@ fn cmd_pull(
         return emit_json(&json!({
             "profile": profile.name,
             "url": profile.source_url,
-            "placeholders": profile.placeholders,
+            "missing": field_keys(&profile.missing),
         }));
     }
     if !cli.quiet {
@@ -640,8 +719,8 @@ fn cmd_pull(
             println!(
                 "{}",
                 theme.warn(&format!(
-                    "it still has placeholders: {}",
-                    profile.placeholders.join(", ")
+                    "it still needs: {}",
+                    sbctl_core::readiness::join_labels(&profile.missing)
                 ))
             );
             println!(
@@ -778,7 +857,7 @@ fn cmd_check(
                 return emit_json(&json!({
                     "profile": checked_name,
                     "valid": true,
-                    "placeholders": [],
+                    "missing": [],
                 }));
             }
             if !cli.quiet {
@@ -921,6 +1000,12 @@ fn write_elevated_out(out_path: Option<&Path>, resp: &PipeResponse) {
     }
 }
 
+/// Machine names for the fields a profile still needs, so a script can map each
+/// back to the `--set` key that fills it.
+fn field_keys(fields: &[sbctl_core::readiness::Field]) -> Vec<&'static str> {
+    fields.iter().map(|f| f.key()).collect()
+}
+
 fn emit_json(val: &Value) -> sbctl_core::error::Result<()> {
     let mut obj = match val {
         Value::Object(map) => map.clone(),
@@ -1046,10 +1131,6 @@ fn run_agent_command(_foreground: bool) -> sbctl_core::error::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sbctl_core::checker::FakeChecker;
-    use sbctl_core::layout::Layout;
-    use sbctl_core::notify::NoopNotifier;
-    use sbctl_core::runner::{FakeResult, FakeRunner};
 
     #[test]
     fn cli_parses_subcommands_and_global_flags() {

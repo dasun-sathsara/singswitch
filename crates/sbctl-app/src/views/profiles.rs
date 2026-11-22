@@ -223,7 +223,16 @@ impl ProfilesView {
             .as_ref()
             .and_then(|n| snap.profiles.iter().find(|p| &p.name == n).cloned())
         else {
-            return render_setup(&setup, &self.store, cx).into_any_element();
+            // Setup is a stage too: actions that leave nothing selected
+            // (deleting the last profile, creating one) report into it.
+            return v_flex()
+                .size_full()
+                .when_some(
+                    crate::views::notice_strip(&self.store, NoticeOrigin::Stage, cx),
+                    |el, notice| el.child(div().px(px(20.0)).pt(px(12.0)).child(notice)),
+                )
+                .child(render_setup(&setup, &self.store, cx))
+                .into_any_element();
         };
 
         // Facts are parsed once when the snapshot is built; reading and parsing
@@ -330,7 +339,7 @@ impl ProfilesView {
                                     .tooltip(if ready {
                                         format!("Switch sing-box to {}", prof.name)
                                     } else {
-                                        format!("{} TODO values remaining", prof.placeholders.len())
+                                        format!("{} field(s) still to fill", prof.missing.len())
                                     })
                                     .on_click(move |_, _, cx| {
                                         let n = name_act.clone();
@@ -671,7 +680,7 @@ impl ProfilesView {
                     PopupMenuItem::new("Restart service")
                         .disabled(busy || !is_live)
                         .on_click(move |_, _, cx| {
-                            r.update(cx, |s, cx| s.restart_active(cx));
+                            r.update(cx, |s, cx| s.restart_active(NoticeOrigin::Stage, cx));
                         }),
                 )
                 .item(

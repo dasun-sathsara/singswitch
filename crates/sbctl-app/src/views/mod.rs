@@ -191,11 +191,7 @@ impl WorkspaceShell {
             } else {
                 (
                     None,
-                    Some(format!(
-                        "{} has {} TODO values",
-                        p.name,
-                        p.placeholders.len()
-                    )),
+                    Some(format!("{} has {} TODO values", p.name, p.missing.len())),
                 )
             };
         }
@@ -208,11 +204,7 @@ impl WorkspaceShell {
             } else {
                 (
                     None,
-                    Some(format!(
-                        "{} has {} TODO values",
-                        p.name,
-                        p.placeholders.len()
-                    )),
+                    Some(format!("{} has {} TODO values", p.name, p.missing.len())),
                 )
             };
         }
@@ -484,6 +476,12 @@ impl WorkspaceShell {
                         .prefix(Icon::new(IconName::Search).xsmall()),
                 ),
             )
+            // Rail actions report here. Without this, a Switch pressed on a row
+            // produced feedback no screen could draw.
+            .when_some(
+                notice_strip(&self.store, NoticeOrigin::Rail, cx),
+                |el, notice| el.child(div().px(px(8.0)).pb(px(6.0)).child(notice)),
+            )
             .child(
                 v_flex()
                     .id("rail-profiles")
@@ -497,7 +495,7 @@ impl WorkspaceShell {
                         let is_active = active.as_deref() == Some(p.name.as_str());
                         let is_running = is_active && running;
                         let ready = p.ready();
-                        let todo = p.placeholders.len();
+                        let todo = p.missing.len();
                         let name = p.name.clone();
                         let sub = p.server.clone().unwrap_or_else(|| "direct".to_string());
                         let st = store_select.clone();
