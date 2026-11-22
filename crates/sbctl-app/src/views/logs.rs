@@ -203,12 +203,9 @@ impl LogsView {
                     )
                     .child(div().flex_1())
                     .child(
-                        div().w(px(240.0)).child(
-                            Input::new(&self.search_input)
-                                .focus_bordered(false)
-                                .small()
-                                .cleanable(true),
-                        ),
+                        div()
+                            .w(px(240.0))
+                            .child(Input::new(&self.search_input).small().cleanable(true)),
                     ),
             )
             .child(
@@ -243,12 +240,10 @@ impl LogsView {
     /// three buttons and one menu and never wraps at 960px.
     fn render_controls_bar(
         &self,
-        follow: bool,
         count: usize,
         total_count: usize,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let _ = follow;
         let store_clear = self.store.clone();
         let store_reload = self.store.clone();
         let store_copy = self.store.clone();
@@ -261,7 +256,7 @@ impl LogsView {
             .items_center()
             .child(
                 Button::new("logs-severity")
-                    .outline()
+                    .secondary()
                     .small()
                     .label(match severity {
                         LogSeverityFilter::All => "All levels",
@@ -474,7 +469,8 @@ impl Render for LogsView {
 
         v_flex()
             .size_full()
-            .p(px(24.0))
+            .px(px(28.0))
+            .py(px(22.0))
             .gap(px(0.0))
             .child(
                 h_flex()
@@ -486,7 +482,7 @@ impl Render for LogsView {
                             .flex_1()
                             .min_w(px(0.0))
                             .gap(px(4.0))
-                            .child(div().text_size(px(20.0)).font_bold().child("Logs"))
+                            .child(div().text_size(px(25.0)).font_bold().child("Logs"))
                             .child(
                                 div()
                                     .font_family(crate::fonts::mono_family())
@@ -496,7 +492,7 @@ impl Render for LogsView {
                                     .child(log_path.display().to_string()),
                             ),
                     )
-                    .child(self.render_controls_bar(follow, count, total_count, cx)),
+                    .child(self.render_controls_bar(count, total_count, cx)),
             )
             .when_some(
                 crate::views::notice_strip(&self.store, NoticeOrigin::Logs, cx),
@@ -518,7 +514,7 @@ impl Render for LogsView {
                     .rounded(px(8.0))
                     .border_1()
                     .border_color(cx.theme().border)
-                    .bg(cx.theme().background)
+                    .bg(crate::theme::surface(cx))
                     .when(count > 0 && log_error.is_some(), |this| {
                         this.child(
                             h_flex()
@@ -575,7 +571,7 @@ impl Render for LogsView {
                                 .when(can_fix_permissions && cfg!(target_os = "macos"), |v| {
                                     v.child(
                                         Button::new("logs-fix-perms")
-                                            .outline()
+                                            .secondary()
                                             .small()
                                             .label("Fix permissions…")
                                             .disabled(is_busy)

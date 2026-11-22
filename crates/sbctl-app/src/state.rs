@@ -10,7 +10,6 @@ use sbctl_core::error::{ExitCode, Result as CoreResult, SbctlError};
 use sbctl_core::ip::{IpInfo, fetch_ip_info};
 use sbctl_core::layout::Layout;
 use sbctl_core::logs::{LogLevel, read_appended_lines, read_tail_lines};
-use sbctl_core::profile::Profile;
 use sbctl_core::service::{Health, RunState};
 
 use crate::actions::NavTab;
@@ -32,9 +31,7 @@ const WATCHER_DEBOUNCE: Duration = Duration::from_millis(150);
 /// Where a piece of feedback belongs on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoticeOrigin {
-    /// The profile rail and its switch actions.
-    Rail,
-    /// The stage header's Switch action.
+    /// The Connections page.
     Stage,
     /// The toolbar connection control.
     Toolbar,
@@ -52,21 +49,6 @@ pub struct Notice {
     pub origin: NoticeOrigin,
     pub tone: BannerTone,
     pub message: String,
-}
-
-/// What the setup region should say, if anything.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SetupCondition {
-    /// Nothing to resolve.
-    None,
-    /// The controller could not be created; the app cannot see the service.
-    InitFailed(String),
-    /// The active configuration is broken and is shown with its real reason.
-    Broken(String),
-    /// No profiles at all.
-    EmptyLibrary,
-    /// Profiles exist but none is ready; carries their names.
-    Unfinished(Vec<String>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,7 +324,10 @@ impl AppStore {
     pub fn tray_visual_state(&self) -> TrayVisualState {
         if self.busy_phase.is_some() {
             TrayVisualState::Transitioning
-        } else if self.snapshot.broken.is_some() || self.snapshot.health.state == RunState::Error {
+        } else if self.init_error.is_some()
+            || self.snapshot.broken.is_some()
+            || self.snapshot.health.state == RunState::Error
+        {
             TrayVisualState::Broken
         } else if self.snapshot.running {
             TrayVisualState::Connected
@@ -357,8 +342,8 @@ impl AppStore {
         const CAP: usize = 120;
         let text = if let Some(phase) = &self.busy_phase {
             format!("sbctl · {phase}")
-        } else if let Some(broken) = &self.snapshot.broken {
-            format!("sbctl · {broken}")
+        } else if let Some(issue) = self.init_error.as_ref().or(self.snapshot.broken.as_ref()) {
+            format!("sbctl · {issue}")
         } else if self.snapshot.health.state == RunState::Error {
             "sbctl · Service failed · Open Logs".to_string()
         } else if !self.snapshot.running {
@@ -394,7 +379,7 @@ impl AppStore {
         }
     }
 
-    /// Error and warning counts for the rail badge.
+    /// Error and warning counts for the navigation badge.
     ///
     /// Read on every shell render; it used to rescan up to 5000 records each
     /// time. The counts are refreshed when the buffer changes instead, so a
@@ -411,34 +396,6 @@ impl AppStore {
     fn sync_log_counts(&mut self) {
         self.error_log_counts
             .sync(&self.error_logs, |r| r.id, |r| r.level);
-    }
-
-    /// Which setup condition, if any, the user needs to resolve. Ordered by
-    /// severity: a failure always wins over a welcome, and none of these is
-    /// suppressed by `onboarding_dismissed` except the welcome itself.
-    pub fn setup_condition(&self) -> SetupCondition {
-        if let Some(err) = &self.init_error {
-            return SetupCondition::InitFailed(err.clone());
-        }
-        if let Some(reason) = &self.snapshot.broken {
-            return SetupCondition::Broken(reason.clone());
-        }
-        let has_profiles = !self.snapshot.profiles.is_empty();
-        let any_ready = self.snapshot.profiles.iter().any(Profile::ready);
-        if !has_profiles {
-            return SetupCondition::EmptyLibrary;
-        }
-        if !any_ready {
-            let names: Vec<String> = self
-                .snapshot
-                .profiles
-                .iter()
-                .filter(|p| !p.ready())
-                .map(|p| p.name.clone())
-                .collect();
-            return SetupCondition::Unfinished(names);
-        }
-        SetupCondition::None
     }
 
     pub fn set_window_open(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -662,18 +619,12 @@ impl AppStore {
         }
     }
 
-    /// Read a profile's text.
-    ///
-    /// Returns an empty string when the file cannot be read. Returning the
-    /// skeleton here made a transient read failure adoptable as the editor's
-    /// baseline, so the next save would overwrite a real profile with it.
-    pub fn read_profile_content(&self, name: &str) -> String {
+    pub fn read_profile_content(&self, name: &str) -> Option<String> {
         self.snapshot
             .profiles
             .iter()
             .find(|p| p.name == name)
             .and_then(|p| std::fs::read_to_string(&p.path).ok())
-            .unwrap_or_default()
     }
 
     fn apply_snapshot(&mut self, snap: Snapshot, bump_disk: bool) {
@@ -795,28 +746,28 @@ impl AppStore {
         }
     }
 
-    pub fn connect_active(&mut self, cx: &mut Context<Self>) {
-        // Prefer the selected profile, then the remembered active one, but never
-        // an unready profile: activating one replaces a working config with a
-        // broken half-finished document.
-        let ready = |name: &String| {
+    pub fn ready_connection_target(&self) -> Option<&str> {
+        let ready = |name: &&str| {
             self.snapshot
                 .profiles
                 .iter()
-                .any(|p| &p.name == name && p.ready())
+                .any(|p| p.name == *name && p.ready())
         };
-        let target = self
-            .selected_profile
-            .clone()
-            .filter(|n| ready(n))
-            .or_else(|| self.snapshot.active.clone().filter(|n| ready(n)))
+        self.selected_profile
+            .as_deref()
+            .filter(ready)
+            .or_else(|| self.snapshot.active.as_deref().filter(ready))
             .or_else(|| {
                 self.snapshot
                     .profiles
                     .iter()
                     .find(|p| p.ready())
-                    .map(|p| p.name.clone())
-            });
+                    .map(|p| p.name.as_str())
+            })
+    }
+
+    pub fn connect_active(&mut self, cx: &mut Context<Self>) {
+        let target = self.ready_connection_target().map(str::to_owned);
         let Some(name) = target else {
             self.selected_tab = NavTab::Profiles;
             self.set_notice(
@@ -1151,6 +1102,7 @@ impl AppStore {
                     Ok(()) => {
                         store.selected_profile = Some(name.clone());
                         store.selected_tab = NavTab::Profiles;
+                        store.editing = false;
                         store.editor_validation = None;
                         store.restart_file_watcher(cx);
                         store.notice = Some(Notice {

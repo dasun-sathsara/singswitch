@@ -91,12 +91,7 @@ impl UiSettings {
     }
 }
 
-/// Apply the selected light, dark, or system theme.
-///
-/// Colours follow macOS system appearance rather than a web palette: grouped
-/// window background, white cards, hairline separators, secondary label greys,
-/// and the system blue accent. Windows uses the same neutral scale, which also
-/// matches its Fluent surfaces closely enough to look native there.
+/// Apply the desktop palette to the window and GPUI components.
 pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut App) {
     let appearance = window
         .as_ref()
@@ -112,133 +107,86 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
         theme.font_family = crate::fonts::ui_family();
         theme.mono_font_family = crate::fonts::mono_family();
         if theme.mode.is_dark() {
-            // Cool neutral grey, the vocabulary macOS utilities use. No warm
-            // cream: a tool should look like a system surface, not paper.
-            theme.background = rgb(0x1A1A1C).into();
-            theme.foreground = rgb(0xEDEDEF).into();
-            theme.muted = rgb(0x2A2A2E).into();
-            theme.muted_foreground = rgb(0xB0B0B6).into();
-            // Hairlines recede (1.32:1); `input` is the *border* colour gpui-component
-            // paints on every field and outline button, so it must stay visible
-            // (3:1) rather than recede like a divider.
-            theme.border = rgb(0x303034).into();
-            theme.input = rgb(0x73737B).into();
-            theme.secondary = rgb(0x44444B).into();
-            theme.secondary_active = rgb(0x4A4A52).into();
-            theme.warning_foreground = rgb(0x0D1117).into();
-            theme.popover = rgb(0x242427).into();
-            theme.popover_foreground = rgb(0xEDEDEF).into();
-            theme.title_bar = rgb(0x1F1F22).into();
-            theme.title_bar_border = rgb(0x3A3A3E).into();
-            theme.sidebar = rgb(0x1F1F22).into();
-            theme.sidebar_border = rgb(0x3A3A3E).into();
-            theme.sidebar_accent = rgb(0x323238).into();
-            theme.sidebar_accent_foreground = rgb(0xEDEDEF).into();
-            // `accent` is the hover/selected fill for menu rows and ghost buttons.
-            // Left unset it fell back to the stock neutral-800 (#262626), which
-            // against our popover (#242427) is 1.02:1 and invisible. A hover fill
-            // is not a UI boundary, so the 3:1 non-text floor does not apply, but
-            // it has to be seen: this is 2.01:1 on the popover.
-            theme.accent = rgb(0x52525D).into();
-            // Explicit rather than depending on the library's fallback: this is
-            // the label colour drawn on the accent fill.
-            theme.accent_foreground = rgb(0xFAFAFA).into();
-            theme.primary = rgb(0x5AA2FF).into();
-            theme.primary_hover = rgb(0x74B1FF).into();
-            theme.primary_active = rgb(0x488FE6).into();
-            theme.primary_foreground = rgb(0x0D1117).into();
-            theme.success = rgb(0x5BC97E).into();
-            theme.warning = rgb(0xE0A33E).into();
-            theme.danger = rgb(0xFF7B72).into();
-            // The library builds its danger button from `danger` at 20% alpha
-            // with `danger` as the label, which measures ~3:1. Set the pair
-            // explicitly so the confirm button in a dialog is comfortably legible.
-            theme.button_danger = rgb(0x5A2420).into();
-            theme.button_danger_hover = rgb(0x6B2B26).into();
-            theme.button_danger_active = rgb(0x7C332C).into();
-            theme.button_danger_foreground = rgb(0xFFB4AD).into();
-            theme.ring = rgb(0x5AA2FF).into();
-            theme.selection = rgb(0x323238).into();
-            theme.caret = rgb(0x5AA2FF).into();
+            theme.background = rgb(0x151722).into();
+            theme.foreground = rgb(0xF1EFFA).into();
+            theme.muted = rgb(0x2A2C3C).into();
+            theme.muted_foreground = rgb(0xB5B5CC).into();
+            theme.border = rgb(0x35374B).into();
+            theme.input = rgb(0x72748B).into();
+            theme.secondary = rgb(0x36304F).into();
+            theme.secondary_foreground = rgb(0xF1EAFF).into();
+            theme.secondary_hover = rgb(0x443C65).into();
+            theme.secondary_active = rgb(0x504570).into();
+            theme.warning_foreground = rgb(0x1D1428).into();
+            theme.popover = rgb(0x222432).into();
+            theme.popover_foreground = rgb(0xF1EFFA).into();
+            theme.title_bar = rgb(0x1C1D2A).into();
+            theme.title_bar_border = rgb(0x35374B).into();
+            theme.accent = rgb(0x393451).into();
+            theme.accent_foreground = rgb(0xF1EAFF).into();
+            theme.primary = rgb(0xBCA9FF).into();
+            theme.primary_hover = rgb(0xCEBFFF).into();
+            theme.primary_active = rgb(0xAB94FC).into();
+            theme.primary_foreground = rgb(0x201634).into();
+            theme.success = rgb(0x7BDCB2).into();
+            theme.warning = rgb(0xEFC57D).into();
+            theme.danger = rgb(0xFF959E).into();
+            theme.button_danger = rgb(0x60293B).into();
+            theme.button_danger_hover = rgb(0x713248).into();
+            theme.button_danger_active = rgb(0x803950).into();
+            theme.button_danger_foreground = rgb(0xFFB7C0).into();
+            theme.ring = rgb(0xBCA9FF).into();
+            theme.selection = rgb(0x483963).into();
+            theme.caret = rgb(0xBCA9FF).into();
         } else {
-            theme.background = rgb(0xEFEFF1).into();
-            theme.foreground = rgb(0x1B1B1E).into();
-            theme.muted = rgb(0xE8E8EB).into();
-            theme.muted_foreground = rgb(0x5E5E64).into();
-            theme.border = rgb(0xD2D2D6).into();
-            theme.input = rgb(0x88888F).into();
-            theme.secondary = rgb(0xB8B8BE).into();
-            theme.secondary_active = rgb(0xA6A6AD).into();
+            theme.background = rgb(0xF2F2F8).into();
+            theme.foreground = rgb(0x222039).into();
+            theme.muted = rgb(0xEBEAF3).into();
+            theme.muted_foreground = rgb(0x5F5D76).into();
+            theme.border = rgb(0xDFDDEA).into();
+            theme.input = rgb(0x8884A1).into();
+            theme.secondary = rgb(0xE8E3F7).into();
+            theme.secondary_foreground = rgb(0x432E74).into();
+            theme.secondary_hover = rgb(0xE0D8F4).into();
+            theme.secondary_active = rgb(0xDAD0F1).into();
             theme.warning_foreground = rgb(0xFFFFFF).into();
             theme.popover = rgb(0xFFFFFF).into();
-            theme.popover_foreground = rgb(0x1B1B1E).into();
-            theme.title_bar = rgb(0xF0F0F2).into();
-            theme.title_bar_border = rgb(0xE1E1E4).into();
-            theme.sidebar = rgb(0xF5F5F7).into();
-            theme.sidebar_border = rgb(0xE1E1E4).into();
-            theme.sidebar_accent = rgb(0xE4E4E8).into();
-            theme.sidebar_accent_foreground = rgb(0x1B1B1E).into();
-            theme.accent = rgb(0xBFBFC7).into();
-            theme.accent_foreground = rgb(0x171717).into();
-            theme.primary = rgb(0x0B62C4).into();
-            theme.primary_hover = rgb(0x0A56AC).into();
-            theme.primary_active = rgb(0x084A94).into();
+            theme.popover_foreground = rgb(0x222039).into();
+            theme.title_bar = rgb(0xFFFFFF).into();
+            theme.title_bar_border = rgb(0xDFDDEA).into();
+            theme.accent = rgb(0xE9E4F6).into();
+            theme.accent_foreground = rgb(0x372766).into();
+            theme.primary = rgb(0x6344B5).into();
+            theme.primary_hover = rgb(0x5536A3).into();
+            theme.primary_active = rgb(0x4A308F).into();
             theme.primary_foreground = rgb(0xFFFFFF).into();
-            theme.success = rgb(0x1F7A3D).into();
-            theme.warning = rgb(0x8A4B00).into();
-            theme.danger = rgb(0xB3261E).into();
-            theme.button_danger = rgb(0xFBE9E7).into();
-            theme.button_danger_hover = rgb(0xF7DAD6).into();
-            theme.button_danger_active = rgb(0xF2C9C4).into();
-            theme.button_danger_foreground = rgb(0x8C1D18).into();
-            theme.ring = rgb(0x0B62C4).into();
-            theme.selection = rgb(0xE4E4E8).into();
-            theme.caret = rgb(0x0B62C4).into();
+            theme.success = rgb(0x126747).into();
+            theme.warning = rgb(0x875309).into();
+            theme.danger = rgb(0xA32C46).into();
+            theme.button_danger = rgb(0xFAE5E9).into();
+            theme.button_danger_hover = rgb(0xF5D6DD).into();
+            theme.button_danger_active = rgb(0xEFC6D0).into();
+            theme.button_danger_foreground = rgb(0x8D2440).into();
+            theme.ring = rgb(0x6344B5).into();
+            theme.selection = rgb(0xE0D7F8).into();
+            theme.caret = rgb(0x6344B5).into();
         }
     });
 }
 
-/// Background for content regions.
-///
-/// Deliberately identical to the window ground: the redesign removed raised
-/// white cards, so content is separated by hairlines and space instead of by a
-/// second surface colour. Kept as a named helper so the intent is explicit at
-/// each call site rather than implied by `background`.
-pub fn surface_card_bg(cx: &App) -> gpui_kit::Hsla {
-    cx.theme().background
+/// Fill for cards and panels.
+pub fn surface(cx: &App) -> gpui_kit::Hsla {
+    if cx.theme().is_dark() {
+        rgb(0x212332).into()
+    } else {
+        rgb(0xFFFFFF).into()
+    }
 }
 
-/// Background for recessed rows, hover states, and inline code.
+pub fn connection_surface(cx: &App, tone: gpui_kit::Hsla) -> gpui_kit::Hsla {
+    surface(cx).blend(tone.opacity(0.09))
+}
+
 pub fn subtle_pill_bg(cx: &App) -> gpui_kit::Hsla {
     cx.theme().muted
-}
-
-/// The edge of a control that must read as a control: a button outline or a
-/// field border. Structural hairlines use `theme.border`, which is deliberately
-/// faint enough to recede; this is the one place a visible line earns its keep.
-/// Fill for inputs and cards. `theme.input` is a *border* colour in
-/// gpui-component 0.10, so using it as a background painted a dark slab.
-pub fn surface(cx: &gpui_kit::App) -> gpui_kit::Hsla {
-    if cx.theme().is_dark() {
-        gpui_kit::rgb(0x242427).into()
-    } else {
-        gpui_kit::rgb(0xFFFFFF).into()
-    }
-}
-
-pub fn control_edge(cx: &gpui_kit::App) -> gpui_kit::Hsla {
-    if cx.theme().is_dark() {
-        gpui_kit::rgb(0x45454A).into()
-    } else {
-        gpui_kit::rgb(0xD2D2D8).into()
-    }
-}
-
-/// A neutral hover wash for rows and controls, one step above the ground.
-pub fn hover_wash(cx: &gpui_kit::App) -> gpui_kit::Hsla {
-    if cx.theme().is_dark() {
-        gpui_kit::rgb(0x2E2E33).into()
-    } else {
-        gpui_kit::rgb(0xDEDEE2).into()
-    }
 }

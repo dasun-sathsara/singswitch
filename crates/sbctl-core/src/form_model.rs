@@ -598,7 +598,8 @@ mod tests {
         let skeleton = ProfileFormModel::from_json_str(SKELETON_JSON).expect("skeleton");
         for field in skeleton.missing() {
             let mut form = ProfileFormModel::from_json_str(SKELETON_JSON).expect("skeleton");
-            form.set_field(field.key(), "x").expect(field.key());
+            form.set_field(field.key(), "x")
+                .unwrap_or_else(|err| panic!("filling {} failed: {err}", field.key()));
             assert!(
                 !form.missing().contains(&field),
                 "filling {} left it missing",

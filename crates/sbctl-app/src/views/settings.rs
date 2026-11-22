@@ -12,7 +12,7 @@ use gpui_kit::{
 use sbctl_core::layout::Layout;
 
 use crate::state::{AppStore, BannerTone, NoticeOrigin};
-use crate::theme::{ThemePreference, surface_card_bg};
+use crate::theme::{ThemePreference, surface};
 
 pub struct SettingsView {
     store: Entity<AppStore>,
@@ -34,8 +34,10 @@ impl Render for SettingsView {
         v_flex()
             .size_full()
             .overflow_y_scrollbar()
-            .p_6()
-            .gap_5()
+            .px(px(28.0))
+            .py(px(22.0))
+            .gap_4()
+            .child(div().text_size(px(25.0)).font_bold().child("Settings"))
             .when_some(notice, |el, notice| el.child(notice))
             .child(render_appearance_card(settings.theme, &self.store, cx))
             .child(render_behavior_card(&settings, &self.store, cx))
@@ -53,9 +55,7 @@ fn render_appearance_card(
         .p_5()
         .gap_4()
         .rounded(cx.theme().radius_lg)
-        .bg(surface_card_bg(cx))
-        .border_1()
-        .border_color(cx.theme().border)
+        .bg(surface(cx))
         .child(
             div()
                 .text_base()
@@ -129,7 +129,7 @@ fn theme_button(
         .small()
         .when_some(icon, Button::icon)
         .when(current == target, Button::primary)
-        .when(current != target, Button::outline)
+        .when(current != target, Button::secondary)
         .label(label)
         .on_click(move |_, _, cx| {
             st.update(cx, |s, cx| s.set_theme_preference(target, cx));
@@ -150,15 +150,13 @@ fn render_behavior_card(
         .p_5()
         .gap_4()
         .rounded(cx.theme().radius_lg)
-        .bg(surface_card_bg(cx))
-        .border_1()
-        .border_color(cx.theme().border)
+        .bg(surface(cx))
         .child(
             div()
                 .text_base()
                 .font_bold()
                 .text_color(cx.theme().foreground)
-                .child("Behaviour"),
+                .child("Startup and notifications"),
         )
         .child(setting_switch_row(
             "set-launch-login",
@@ -174,7 +172,7 @@ fn render_behavior_card(
         .child(setting_switch_row(
             "set-auto-ip",
             "Refresh the public IP after connect",
-            "One lookup at launch and after each switch. Never on a timer.",
+            "Look up the public IP at launch and after each switch.",
             settings.auto_refresh_ip,
             false,
             move |checked, _, cx| {
@@ -277,9 +275,7 @@ fn render_paths_card(
         .p_5()
         .gap_3()
         .rounded(cx.theme().radius_lg)
-        .bg(surface_card_bg(cx))
-        .border_1()
-        .border_color(cx.theme().border)
+        .bg(surface(cx))
         .child(
             div()
                 .text_base()

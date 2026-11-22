@@ -605,7 +605,16 @@ impl Controller {
             check_temp_bytes(self.checker.as_ref(), "sbctl-validate-", content.as_bytes())?;
         }
 
-        let (is_active, running) = self.is_active_and_running(name);
+        let (is_active, running) = if allow_invalid {
+            if self.activator.active_name()?.as_deref() == Some(name) {
+                return Err(SbctlError::validation(format!(
+                    "Cannot save the active profile {name} as a draft. Validate it before saving."
+                )));
+            }
+            (false, false)
+        } else {
+            self.is_active_and_running(name)
+        };
 
         let old_bytes = fs::read(&path).ok();
         write_file_atomic(&path, content.as_bytes(), 0o644)?;
@@ -1453,6 +1462,23 @@ mod tests {
         assert!(on_disk.contains("1.1.1.1"));
 
         srv.join().unwrap();
+    }
+
+    #[test]
+    fn draft_save_cannot_overwrite_the_active_profile() {
+        for platform in [PlatformKind::Darwin, PlatformKind::Windows] {
+            let (_dir, ctrl, _runner, _checker) = test_controller(platform);
+            let path = path_for(&ctrl.layout.profiles_dir, "work");
+            let original = r#"{"outbounds":[{"type":"direct"}]}"#;
+            fs::write(&path, original).unwrap();
+
+            // A draft dialog can open while this profile is inactive. The
+            // subsequent save must use the active name at the time of writing.
+            ctrl.activator.activate(&path).unwrap();
+            let error = ctrl.save_profile("work", "{", true).unwrap_err();
+            assert!(error.message.contains("active profile"));
+            assert_eq!(fs::read_to_string(path).unwrap(), original);
+        }
     }
 
     #[test]
