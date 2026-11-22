@@ -6,12 +6,11 @@ use std::time::{Duration, Instant};
 use gpui_kit::{AsyncApp, Context, SharedString, Task, WeakEntity};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use sbctl_core::controller::{Controller, Snapshot, StatusView};
-use sbctl_core::doctor::DiagnosticCheck;
 use sbctl_core::error::{ExitCode, Result as CoreResult, SbctlError};
 use sbctl_core::ip::{IpInfo, fetch_ip_info};
 use sbctl_core::layout::Layout;
 use sbctl_core::logs::{LogLevel, read_appended_lines, read_tail_lines};
-use sbctl_core::profile::{Profile, SKELETON_JSON};
+use sbctl_core::profile::Profile;
 use sbctl_core::service::{Health, RunState};
 
 use crate::actions::NavTab;
@@ -44,8 +43,6 @@ pub enum NoticeOrigin {
     Editor,
     /// The log screen controls.
     Logs,
-    /// The doctor screen.
-    Doctor,
     /// The settings rows.
     Settings,
 }
@@ -67,8 +64,6 @@ pub enum SetupCondition {
     InitFailed(String),
     /// The active configuration is broken and is shown with its real reason.
     Broken(String),
-    /// A blocking Doctor check, named as Doctor names it.
-    Blocked(String),
     /// No profiles at all.
     EmptyLibrary,
     /// Profiles exist but none is ready; carries their names.
@@ -167,9 +162,6 @@ pub struct AppStore {
     ip_generation: u64,
     /// A refresh was asked for while one was already running.
     ip_refresh_pending: bool,
-    /// Dispatch counter for Doctor runs; stale results are discarded so a slow
-    /// start-up pass cannot overwrite the checks a repair just produced.
-    doctor_generation: u64,
     /// Dispatch counter for live validation; a late reply for older content is
     /// dropped so "Configuration valid" can never describe text it never saw.
     validation_generation: u64,
@@ -179,8 +171,6 @@ pub struct AppStore {
     /// messages together.
     pub notice: Option<Notice>,
     pub editor_validation: Option<(String, EditorValidationState)>,
-    pub doctor_checks: Vec<DiagnosticCheck>,
-    pub doctor_running: bool,
     pub selected_tab: NavTab,
     pub selected_profile: Option<String>,
     /// True while the Connections stage is showing the editor for the selected profile.
@@ -225,7 +215,6 @@ pub struct AppStore {
     snapshot_task: Option<Task<()>>,
     log_poll_task: Option<Task<()>>,
     ip_task: Option<Task<()>>,
-    doctor_task: Option<Task<()>>,
     validation_task: Option<Task<()>>,
     mutation_task: Option<Task<()>>,
 }
@@ -300,7 +289,6 @@ impl AppStore {
             ip_error: None,
             ip_generation: 0,
             ip_refresh_pending: false,
-            doctor_generation: 0,
             validation_generation: 0,
             busy_phase: None,
             notice: init_error.map(|m| Notice {
@@ -309,8 +297,6 @@ impl AppStore {
                 message: m,
             }),
             editor_validation: None,
-            doctor_checks: Vec::new(),
-            doctor_running: false,
             selected_tab: NavTab::Profiles,
             editing: false,
             selected_profile,
@@ -340,7 +326,6 @@ impl AppStore {
             snapshot_task: None,
             log_poll_task: None,
             ip_task: None,
-            doctor_task: None,
             validation_task: None,
             mutation_task: None,
         };
@@ -353,7 +338,6 @@ impl AppStore {
         if store.settings.auto_refresh_ip {
             store.refresh_ip(cx);
         }
-        store.run_doctor(cx);
         store
     }
 
@@ -378,7 +362,7 @@ impl AppStore {
         } else if let Some(broken) = &self.snapshot.broken {
             format!("sbctl · {broken}")
         } else if self.snapshot.health.state == RunState::Error {
-            "sbctl · Service failed · Open Doctor".to_string()
+            "sbctl · Service failed · Open Logs".to_string()
         } else if !self.snapshot.running {
             let needs_setup = self
                 .selected_profile
@@ -444,14 +428,6 @@ impl AppStore {
         }
         let has_profiles = !self.snapshot.profiles.is_empty();
         let any_ready = self.snapshot.profiles.iter().any(Profile::ready);
-        let blocking = self
-            .doctor_checks
-            .iter()
-            .find(|c| (!c.ok && !c.warning) || (c.name == "helper service" && !c.ok));
-
-        if let Some(check) = blocking {
-            return SetupCondition::Blocked(check.name.clone());
-        }
         if !has_profiles {
             return SetupCondition::EmptyLibrary;
         }
@@ -686,13 +662,18 @@ impl AppStore {
         }
     }
 
+    /// Read a profile's text.
+    ///
+    /// Returns an empty string when the file cannot be read. Returning the
+    /// skeleton here made a transient read failure adoptable as the editor's
+    /// baseline, so the next save would overwrite a real profile with it.
     pub fn read_profile_content(&self, name: &str) -> String {
-        if let Some(p) = self.snapshot.profiles.iter().find(|p| p.name == name)
-            && let Ok(raw) = std::fs::read_to_string(&p.path)
-        {
-            return raw;
-        }
-        SKELETON_JSON.to_string()
+        self.snapshot
+            .profiles
+            .iter()
+            .find(|p| p.name == name)
+            .and_then(|p| std::fs::read_to_string(&p.path).ok())
+            .unwrap_or_default()
     }
 
     fn apply_snapshot(&mut self, snap: Snapshot, bump_disk: bool) {
@@ -774,13 +755,12 @@ impl AppStore {
                         store.was_running_expected = false;
                         ctrl.notify_error(
                             "sing-box disconnected",
-                            "sing-box stopped unexpectedly. Check Logs or Doctor.",
+                            "sing-box stopped unexpectedly. Check Logs.",
                         );
                         store.notice = Some(Notice {
                             origin: NoticeOrigin::Stage,
                             tone: BannerTone::Error,
-                            message: "sing-box stopped unexpectedly. Check Logs or Doctor."
-                                .to_string(),
+                            message: "sing-box stopped unexpectedly. Check Logs.".to_string(),
                         });
                     }
                     // Repaint only when something the window shows has changed.
@@ -1401,7 +1381,17 @@ impl AppStore {
         self.validation_task = Some(task);
     }
 
-    pub fn delete_profile(&mut self, name: String, force: bool, cx: &mut Context<Self>) {
+    /// Delete a profile, reporting the outcome where the request came from.
+    ///
+    /// The stage is unmounted while the editor is open, so a hard-coded origin
+    /// made a refusal (and a success) invisible from the editor.
+    pub fn delete_profile(
+        &mut self,
+        name: String,
+        force: bool,
+        origin: NoticeOrigin,
+        cx: &mut Context<Self>,
+    ) {
         if self.busy_phase.is_some() {
             return;
         }
@@ -1434,227 +1424,14 @@ impl AppStore {
                             });
                         }
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin,
                             tone: BannerTone::Info,
                             message: format!("Deleted {name}"),
                         });
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
-                            tone: BannerTone::Error,
-                            message: error_text(&err),
-                        });
-                    }
-                }
-                cx.notify();
-            });
-        });
-        self.mutation_task = Some(task);
-    }
-
-    pub fn ensure_profiles_dir(&mut self, cx: &mut Context<Self>) {
-        if self.busy_phase.is_some() {
-            return;
-        }
-        let Some(ctrl) = self.require_ctrl(cx) else {
-            return;
-        };
-        self.busy_phase = Some("Creating profiles directory...".to_string());
-        let doctor_generation = self.bump_doctor_generation();
-        cx.notify();
-
-        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let (res, snap, checks) = cx
-                .background_executor()
-                .spawn(async move {
-                    let res = ctrl.gui_ensure_profiles_dir();
-                    let snap = ctrl.snapshot().ok();
-                    let checks = ctrl.doctor();
-                    (res, snap, checks)
-                })
-                .await;
-
-            let _ = this.update(cx, |store, cx| {
-                store.busy_phase = None;
-                if let Some(s) = snap {
-                    store.apply_snapshot(s, true);
-                }
-                if store.doctor_generation == doctor_generation {
-                    store.doctor_checks = checks;
-                }
-                match res {
-                    Ok(()) => {
-                        store.restart_file_watcher(cx);
-                        store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
-                            tone: BannerTone::Success,
-                            message: format!("Created {}", store.layout().profiles_dir.display()),
-                        });
-                    }
-                    Err(err) => {
-                        store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
-                            tone: BannerTone::Error,
-                            message: error_text(&err),
-                        });
-                    }
-                }
-                cx.notify();
-            });
-        });
-        self.mutation_task = Some(task);
-    }
-
-    pub fn repair_macos_sudoers(&mut self, root_script: String, cx: &mut Context<Self>) {
-        self.run_macos_admin_script(
-            "Authorizing sudoers install...",
-            root_script,
-            "Installed /etc/sudoers.d/sbctl",
-            false,
-            NoticeOrigin::Doctor,
-            cx,
-        );
-    }
-
-    pub fn repair_macos_logs(&mut self, origin: NoticeOrigin, cx: &mut Context<Self>) {
-        let Some(root_script) = sbctl_core::doctor::macos_logs_root_script(&self.layout()) else {
-            return;
-        };
-        self.run_macos_admin_script(
-            "Authorizing log permissions...",
-            root_script,
-            "Updated /var/log/sing-box permissions",
-            true,
-            origin,
-            cx,
-        );
-    }
-
-    fn run_macos_admin_script(
-        &mut self,
-        phase: &'static str,
-        root_script: String,
-        success_msg: &'static str,
-        reload_logs_after: bool,
-        origin: NoticeOrigin,
-        cx: &mut Context<Self>,
-    ) {
-        if self.busy_phase.is_some() {
-            return;
-        }
-        let Some(ctrl) = self.require_ctrl(cx) else {
-            return;
-        };
-        self.busy_phase = Some(phase.to_string());
-        let doctor_generation = self.bump_doctor_generation();
-        cx.notify();
-
-        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let (res, checks, snap) = cx
-                .background_executor()
-                .spawn(async move {
-                    let apple_script = format!(
-                        "do shell script \"{}\" with administrator privileges",
-                        root_script.replace('\\', "\\\\").replace('"', "\\\"")
-                    );
-                    let out = std::process::Command::new("osascript")
-                        .args(["-e", &apple_script])
-                        .output();
-                    let checks = ctrl.doctor();
-                    let snap = ctrl.snapshot().ok();
-                    (out, checks, snap)
-                })
-                .await;
-
-            let _ = this.update(cx, |store, cx| {
-                store.busy_phase = None;
-                if store.doctor_generation == doctor_generation {
-                    store.doctor_checks = checks;
-                }
-                if let Some(s) = snap {
-                    store.apply_snapshot(s, false);
-                }
-                match res {
-                    Ok(out) if out.status.success() => {
-                        if reload_logs_after {
-                            store.reload_logs();
-                        }
-                        store.notice = Some(Notice {
                             origin,
-                            tone: BannerTone::Success,
-                            message: success_msg.to_string(),
-                        });
-                    }
-                    Ok(out) => {
-                        let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                        let banner = if msg.is_empty() {
-                            "Administrator authorization failed".to_string()
-                        } else {
-                            msg
-                        };
-                        store.notice = Some(Notice {
-                            origin,
-                            tone: BannerTone::Error,
-                            message: banner,
-                        });
-                    }
-                    Err(err) => {
-                        store.notice = Some(Notice {
-                            origin,
-                            tone: BannerTone::Error,
-                            message: err.to_string(),
-                        });
-                    }
-                }
-                cx.notify();
-            });
-        });
-        self.mutation_task = Some(task);
-    }
-
-    pub fn repair_windows_helper(&mut self, cx: &mut Context<Self>) {
-        if self.busy_phase.is_some() {
-            return;
-        }
-        let Some(ctrl) = self.require_ctrl(cx) else {
-            return;
-        };
-        self.busy_phase = Some("Starting sbctl-agent...".to_string());
-        let doctor_generation = self.bump_doctor_generation();
-        cx.notify();
-
-        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let (res, checks, snap) = cx
-                .background_executor()
-                .spawn(async move {
-                    let res = ctrl.gui_repair_windows_helper();
-                    let checks = ctrl.doctor();
-                    let snap = ctrl.snapshot().ok();
-                    (res, checks, snap)
-                })
-                .await;
-
-            let _ = this.update(cx, |store, cx| {
-                store.busy_phase = None;
-                if store.doctor_generation == doctor_generation {
-                    store.doctor_checks = checks;
-                }
-                if let Some(s) = snap {
-                    store.apply_snapshot(s, true);
-                }
-                match res {
-                    Ok(()) => {
-                        store.restart_file_watcher(cx);
-                        store.notice = Some(Notice {
-                            origin: NoticeOrigin::Doctor,
-                            tone: BannerTone::Success,
-                            message: "sbctl-agent and profiles directory ready".to_string(),
-                        });
-                    }
-                    Err(err) => {
-                        store.notice = Some(Notice {
-                            origin: NoticeOrigin::Doctor,
                             tone: BannerTone::Error,
                             message: error_text(&err),
                         });
@@ -1720,41 +1497,96 @@ impl AppStore {
         self.ip_task = Some(task);
     }
 
-    /// Next Doctor generation. Repair paths call this so their fresh checks
-    /// replace, and are not replaced by, anything already in flight.
-    fn bump_doctor_generation(&mut self) -> u64 {
-        self.doctor_generation = self.doctor_generation.wrapping_add(1);
-        self.doctor_generation
-    }
-
-    pub fn run_doctor(&mut self, cx: &mut Context<Self>) {
-        let Some(ctrl) = self.ctrl.clone() else {
+    pub fn repair_macos_logs(&mut self, origin: NoticeOrigin, cx: &mut Context<Self>) {
+        let Some(root_script) = sbctl_core::doctor::macos_logs_root_script(&self.layout()) else {
             return;
         };
-        if self.doctor_running {
+        self.run_macos_admin_script(
+            "Authorizing log permissions...",
+            root_script,
+            "Updated /var/log/sing-box permissions",
+            true,
+            origin,
+            cx,
+        );
+    }
+
+    fn run_macos_admin_script(
+        &mut self,
+        phase: &'static str,
+        root_script: String,
+        success_msg: &'static str,
+        reload_logs_after: bool,
+        origin: NoticeOrigin,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy_phase.is_some() {
             return;
         }
-        self.doctor_running = true;
-        let generation = self.bump_doctor_generation();
+        let Some(ctrl) = self.require_ctrl(cx) else {
+            return;
+        };
+        self.busy_phase = Some(phase.to_string());
         cx.notify();
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let checks = cx
+            let (res, snap) = cx
                 .background_executor()
-                .spawn(async move { ctrl.doctor() })
+                .spawn(async move {
+                    let apple_script = format!(
+                        "do shell script \"{}\" with administrator privileges",
+                        root_script.replace('\\', "\\\\").replace('"', "\\\"")
+                    );
+                    let out = std::process::Command::new("osascript")
+                        .args(["-e", &apple_script])
+                        .output();
+                    let snap = ctrl.snapshot().ok();
+                    (out, snap)
+                })
                 .await;
 
             let _ = this.update(cx, |store, cx| {
-                store.doctor_running = false;
-                if store.doctor_generation == generation {
-                    store.doctor_checks = checks;
+                store.busy_phase = None;
+                if let Some(s) = snap {
+                    store.apply_snapshot(s, false);
+                }
+                match res {
+                    Ok(out) if out.status.success() => {
+                        if reload_logs_after {
+                            store.reload_logs();
+                        }
+                        store.notice = Some(Notice {
+                            origin,
+                            tone: BannerTone::Success,
+                            message: success_msg.to_string(),
+                        });
+                    }
+                    Ok(out) => {
+                        let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        let banner = if msg.is_empty() {
+                            "Administrator authorization failed".to_string()
+                        } else {
+                            msg
+                        };
+                        store.notice = Some(Notice {
+                            origin,
+                            tone: BannerTone::Error,
+                            message: banner,
+                        });
+                    }
+                    Err(err) => {
+                        store.notice = Some(Notice {
+                            origin,
+                            tone: BannerTone::Error,
+                            message: err.to_string(),
+                        });
+                    }
                 }
                 cx.notify();
             });
         });
-        self.doctor_task = Some(task);
+        self.mutation_task = Some(task);
     }
-
     pub fn reload_logs(&mut self) {
         let layout = self.layout();
         self.error_logs.clear();

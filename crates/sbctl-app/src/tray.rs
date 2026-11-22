@@ -4,7 +4,7 @@ use sbctl_core::profile::Profile;
 use sbctl_core::service::RunState;
 
 use crate::actions::{
-    DisconnectService, EditProfile, Noop, OpenDoctorView, OpenMainWindow, QuitApp, SwitchProfile,
+    DisconnectService, EditProfile, Noop, OpenLogsView, OpenMainWindow, QuitApp, SwitchProfile,
 };
 use crate::icons::{TrayVisualState, build_tray_icon};
 use crate::state::AppStore;
@@ -173,8 +173,8 @@ const INLINE_PROFILE_LIMIT: usize = 8;
 
 /// The tray menu, deliberately small.
 ///
-/// Everything else that used to live here (restart, refresh IP, sync, doctor,
-/// logs, settings) is reachable from the window, which is one click away. The
+/// Everything else that used to live here (restart, refresh IP, sync,
+/// settings) is reachable from the window, which is one click away. The
 /// menu answers exactly two questions: is the tunnel up, and which profile is
 /// carrying it.
 fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
@@ -182,9 +182,10 @@ fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
     let is_busy = store.busy_phase.is_some();
     let failed = store.snapshot.broken.is_some() || store.snapshot.health.state == RunState::Error;
 
-    // A failure is the only thing that outranks the service control.
+    // A failure is the only thing that outranks the service control. With the
+    // diagnostics screen gone, the logs are where the reason actually lives.
     if failed {
-        items.push(MenuItem::action("Open Doctor", OpenDoctorView));
+        items.push(MenuItem::action("Open Logs", OpenLogsView));
         if store.snapshot.running {
             items.push(MenuItem::action("Disconnect", DisconnectService));
         }

@@ -99,4 +99,4 @@ PLIST_PATH="/Library/LaunchDaemons/app.lexiflix.singbox.plist"
 sudo launchctl bootout system/app.lexiflix.singbox >/dev/null 2>&1 || true
 sudo launchctl bootstrap system "$PLIST_PATH"
 
-echo "==> Done. Run 'sbctl doctor' or open /Applications/sbctl.app."
+echo "==> Done. Open /Applications/sbctl.app."

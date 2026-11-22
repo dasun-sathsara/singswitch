@@ -119,4 +119,4 @@ $Shortcut.WorkingDirectory = $InstallDir
 $Shortcut.Description = "Manage sing-box profiles and service"
 $Shortcut.Save()
 
-Write-Host "==> Installation complete. Launch sbctl from Start Menu or run 'sbctl doctor'."
+Write-Host "==> Installation complete. Launch sbctl from the Start Menu."

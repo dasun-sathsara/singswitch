@@ -34,7 +34,7 @@ mod desktop {
 
     use crate::actions::{
         CloseWindow, ConnectActive, DisconnectService, ImportUrlDialog, NavTab, NewProfileDialog,
-        Noop, OpenLogsView, OpenMainWindow, OpenSettingsView, QuitApp, RefreshIp, RunDoctor,
+        Noop, OpenLogsView, OpenMainWindow, OpenSettingsView, QuitApp, RefreshIp,
         SaveAndActivateProfile, SaveCurrentProfile, SelectTab, SwitchProfile, SyncAll, SyncProfile,
         ToggleService,
     };
@@ -138,13 +138,6 @@ mod desktop {
             KeyBinding::new(
                 "cmd-3",
                 SelectTab {
-                    tab: NavTab::Doctor,
-                },
-                None,
-            ),
-            KeyBinding::new(
-                "cmd-4",
-                SelectTab {
                     tab: NavTab::Settings,
                 },
                 None,
@@ -174,13 +167,6 @@ mod desktop {
             KeyBinding::new("ctrl-2", SelectTab { tab: NavTab::Logs }, None),
             KeyBinding::new(
                 "ctrl-3",
-                SelectTab {
-                    tab: NavTab::Doctor,
-                },
-                None,
-            ),
-            KeyBinding::new(
-                "ctrl-4",
                 SelectTab {
                     tab: NavTab::Settings,
                 },
@@ -314,15 +300,6 @@ mod desktop {
             store.update(cx, |s, cx| s.set_tab(action.tab, cx));
             open_or_focus_main_window(cx);
         });
-
-        cx.on_action(|_: &RunDoctor, cx: &mut App| {
-            let store = cx.global::<AppGlobalState>().store.clone();
-            store.update(cx, |s, cx| {
-                s.set_tab(NavTab::Doctor, cx);
-                s.run_doctor(cx);
-            });
-            open_or_focus_main_window(cx);
-        });
     }
 
     fn register_service_actions(cx: &mut App) {
@@ -373,15 +350,6 @@ mod desktop {
     }
 
     fn register_window_actions(cx: &mut App) {
-        cx.on_action(|_: &crate::actions::OpenDoctorView, cx: &mut App| {
-            let store = cx.global::<AppGlobalState>().store.clone();
-            store.update(cx, |s, cx| {
-                s.set_tab(NavTab::Doctor, cx);
-                s.run_doctor(cx);
-            });
-            open_or_focus_main_window(cx);
-        });
-
         cx.on_action(|action: &crate::actions::EditProfile, cx: &mut App| {
             let name = action.name.clone();
             let store = cx.global::<AppGlobalState>().store.clone();

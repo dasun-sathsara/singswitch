@@ -47,6 +47,12 @@ pub struct ProfileEditorPanel {
     /// `render` used to materialize the whole editor Rope three times, run a
     /// regex over it and parse it as JSON on every frame - twice a second while
     /// a caret blinked. Configs are small, but the work is O(document) per frame.
+    /// The exact text the last save submitted.
+    ///
+    /// The disk will become this text, not necessarily what the editor holds by
+    /// the time the save lands: a keystroke during the round trip would
+    /// otherwise look like an outside change and raise a false banner.
+    last_submitted: Option<String>,
     derived_json: SharedString,
     derived_todos: Vec<String>,
     derived_syntax: Option<String>,
@@ -87,6 +93,7 @@ impl ProfileEditorPanel {
             external_change_pending: false,
             validated_snapshot: None,
             drafts: std::collections::HashMap::new(),
+            last_submitted: None,
             derived_json: SharedString::default(),
             derived_todos: Vec::new(),
             derived_syntax: None,
@@ -122,19 +129,19 @@ impl ProfileEditorPanel {
         };
 
         if target != self.loaded_profile {
-            // Preserve unsaved work for the profile being left, including edits
-            // made only on the guided form. Those never touch the JSON buffer,
-            // so keying the draft on the buffer alone lost them.
+            // Stash whatever the profile being left holds. Fold the guided form
+            // into the buffer first: a form-only edit never touches the JSON
+            // buffer, so keying the stash on the buffer alone lost it. If the
+            // form cannot be converted (the file has nowhere to put a field),
+            // the buffer is still stashed when dirty rather than dropped.
             if let Some(prev) = self.loaded_profile.clone()
                 && !self.disk_json.is_empty()
             {
-                let mut current = self.json_editor.read(cx).value().to_string();
-                if self.active_tab == EditorTab::Guided
-                    && let Ok(converted) = self.apply_guided_to_json(window, cx)
-                {
-                    current = converted;
+                if self.active_tab == EditorTab::Guided {
+                    let _ = self.apply_guided_to_json(window, cx);
                 }
-                if current != self.disk_json {
+                let current = self.json_editor.read(cx).value().to_string();
+                if self.is_dirty_against(&current, cx) {
                     self.drafts.insert(prev, current);
                 } else {
                     self.drafts.remove(&prev);
@@ -147,6 +154,14 @@ impl ProfileEditorPanel {
             self.validated_snapshot = None;
             if let Some(name) = target {
                 let content = self.store.read(cx).read_profile_content(&name);
+                if content.is_empty() {
+                    // Unreadable: do not adopt anything as the baseline, or the
+                    // next save would overwrite the real file with it.
+                    self.disk_json.clear();
+                    self.disk_model = None;
+                    self.external_change_pending = true;
+                    return;
+                }
                 self.load_json_into_views(&content, window, cx);
                 if let Some(draft) = self.drafts.get(&name).cloned() {
                     self.json_editor
@@ -178,6 +193,14 @@ impl ProfileEditorPanel {
                 let latest = self.store.read(cx).read_profile_content(name);
                 let editor_now = self.json_editor.read(cx).value().to_string();
                 if latest == self.disk_json {
+                    self.external_change_pending = false;
+                } else if self.last_submitted.as_deref() == Some(latest.as_str()) {
+                    // Our own save landed. Adopt it as the baseline; the buffer
+                    // keeps any keystrokes typed while it was in flight, so they
+                    // stay dirty instead of being called an outside change.
+                    self.disk_json = latest.clone();
+                    self.disk_model = ProfileFormModel::from_json_str(&latest).ok();
+                    self.last_submitted = None;
                     self.external_change_pending = false;
                 } else if latest == editor_now {
                     // The disk now holds exactly what the editor shows, which is
@@ -409,6 +432,9 @@ impl ProfileEditorPanel {
         let allow_invalid = has_todos && !is_active;
 
         self.clear_draft(&name);
+        // Record what we submitted so the resulting disk change is recognised
+        // as ours rather than an outside edit.
+        self.last_submitted = Some(content.clone());
         self.store.update(cx, |s, cx| {
             s.save_profile_content(name, content, allow_invalid, cx);
         });

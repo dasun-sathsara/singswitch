@@ -1,43 +1,21 @@
+//! Privileged setup helpers that are not diagnostics.
+//!
+//! This module used to hold a full Doctor: a check engine, fix actions, and a
+//! desktop screen for them. That screen is gone. What remains is the small set
+//! of scripts and predicates that other code genuinely needs:
+//!
+//! - `diagnose_active`, used by `snapshot()` to explain a broken active config.
+//! - The macOS sudoers/log install scripts, used by the installer and repairs.
+//! - `real_sudo_probe`, used to verify a sudoers rule is actually in force.
+
 use std::process::Command;
-use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use crate::layout::Layout;
+use crate::profile::validate_name;
 
-use crate::activator::Activator;
-use crate::checker::Checker;
-use crate::error::first_line;
-use crate::layout::{Layout, PlatformKind};
-use crate::profile::{list_profiles, validate_name};
-use crate::runner::Runner;
-use crate::service::win_rpc::{HELPER_SERVICE_NAME, PipeRequest, try_send_pipe_request};
-use crate::service::{Manager, RunState, is_sudo_refusal};
-
-/// One-click remediation action offered by the desktop Doctor view for a diagnostic check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FixAction {
-    CreateProfilesDir,
-    RepairMacosSudoers,
-    RepairMacosLogs,
-    RepairWindowsHelper,
-    OpenProfiles,
-}
-
-/// Outcome of a single diagnostic check reported by `sbctl doctor` and the Doctor GUI view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DiagnosticCheck {
-    pub name: String,
-    pub ok: bool,
-    pub warning: bool,
-    pub detail: String,
-    pub hint: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fix: Option<FixAction>,
-}
-
-pub type SudoProbeFn = Arc<dyn Fn(&[String]) -> std::result::Result<(), String> + Send + Sync>;
-
-/// Run `sudo -n -l <argv>` to confirm whether a command rule matches without executing it.
+/// Probe a sudoers rule with `sudo -n -l <argv>`, returning why it is refused.
+///
+/// `sudo -n -l` lists what the rule permits without running the command.
 pub fn real_sudo_probe(argv: &[String]) -> std::result::Result<(), String> {
     let mut probe_args = Vec::with_capacity(argv.len() + 2);
     probe_args.push("-n");
@@ -63,398 +41,11 @@ pub fn real_sudo_probe(argv: &[String]) -> std::result::Result<(), String> {
     }
 }
 
-/// Run the full diagnostic suite across dependencies, profiles, privileges, service, and lock.
-pub fn run_doctor_checks(
-    layout: &Layout,
-    checker: &dyn Checker,
-    manager: &dyn Manager,
-    activator: &dyn Activator,
-    runner: &dyn Runner,
-    sudo_probe: Option<&SudoProbeFn>,
-) -> Vec<DiagnosticCheck> {
-    let mut checks = Vec::new();
-    checks.push(check_singbox(layout, checker));
-    checks.push(check_profiles_dir(layout));
-
-    if layout.uses_sudo() {
-        checks.extend(check_sudo_rules(layout, sudo_probe));
-    } else if layout.platform == PlatformKind::Windows {
-        checks.push(check_windows_helper_service(layout, runner));
-    }
-
-    checks.push(check_service(layout, manager));
-    checks.push(check_active_config(layout, activator));
-    checks.push(check_logs(layout));
-    checks.push(check_concurrency());
-    checks
-}
-
-fn check_singbox(layout: &Layout, checker: &dyn Checker) -> DiagnosticCheck {
-    let resolved = crate::layout::resolve_singbox_binary(None);
-    let managed = layout.managed_singbox_bin();
-    let bundled = crate::layout::bundled_singbox_binary();
-
-    // Both the copy shipped inside the app and the privileged copy the installer
-    // stages are ours, so neither is worth a warning. Anything else is some other
-    // package manager's binary on PATH and the service could break on its next update.
-    let shipped = |path: &std::path::Path| {
-        bundled.as_deref().is_some_and(|b| b == path) || managed.as_path() == path
-    };
-
-    match checker.version() {
-        Ok(version) => {
-            let location = resolved
-                .as_deref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "an unknown location".to_string());
-            let ours = resolved.as_deref().is_some_and(&shipped);
-            let is_managed = resolved.as_deref() == Some(managed.as_path());
-            DiagnosticCheck {
-                name: "sing-box".to_string(),
-                ok: true,
-                warning: !ours,
-                detail: match (ours, is_managed) {
-                    (true, true) => format!("version {version}, managed copy at {location}"),
-                    (true, false) => {
-                        format!(
-                            "version {version}, bundled copy at {location}; run the installer to stage it at {}",
-                            managed.display()
-                        )
-                    }
-                    (false, _) => format!("version {version}, unmanaged copy at {location}"),
-                },
-                hint: if ours {
-                    String::new()
-                } else {
-                    format!(
-                        "reinstall sbctl.app so the service runs its own signed copy instead of this one, expected at {}",
-                        managed.display()
-                    )
-                },
-                fix: None,
-            }
-        }
-        Err(_) => DiagnosticCheck {
-            name: "sing-box".to_string(),
-            ok: false,
-            warning: false,
-            detail: format!(
-                "not found in the app bundle, at {}, or on PATH",
-                managed.display()
-            ),
-            hint: "reinstall sbctl.app so the installer copies its bundled binary".to_string(),
-            fix: None,
-        },
-    }
-}
-
-fn check_profiles_dir(layout: &Layout) -> DiagnosticCheck {
-    let Ok(meta) = std::fs::metadata(&layout.profiles_dir) else {
-        return DiagnosticCheck {
-            name: "profiles".to_string(),
-            ok: false,
-            warning: false,
-            detail: format!("{} does not exist", layout.profiles_dir.display()),
-            hint: "create it with the platform installer".to_string(),
-            fix: Some(FixAction::CreateProfilesDir),
-        };
-    };
-    if !meta.is_dir() {
-        return DiagnosticCheck {
-            name: "profiles".to_string(),
-            ok: false,
-            warning: false,
-            detail: format!("{} is not a directory", layout.profiles_dir.display()),
-            hint: "move it aside and re-run the platform installer".to_string(),
-            fix: None,
-        };
-    }
-
-    let profiles = match list_profiles(&layout.profiles_dir) {
-        Ok(list) => list,
-        Err(err) => {
-            return DiagnosticCheck {
-                name: "profiles".to_string(),
-                ok: false,
-                warning: false,
-                detail: err.to_string(),
-                hint: "repair directory ownership with the platform installer".to_string(),
-                fix: None,
-            };
-        }
-    };
-
-    let incomplete = profiles.iter().filter(|p| !p.ready()).count();
-    let detail = format!("{} in {}", profiles.len(), layout.profiles_dir.display());
-    if incomplete > 0 {
-        DiagnosticCheck {
-            name: "profiles".to_string(),
-            ok: true,
-            warning: true,
-            detail: format!("{detail}, {incomplete} incomplete"),
-            hint: "replace all TODO_ placeholders before activating".to_string(),
-            fix: Some(FixAction::OpenProfiles),
-        }
-    } else {
-        DiagnosticCheck {
-            name: "profiles".to_string(),
-            ok: true,
-            warning: false,
-            detail,
-            hint: String::new(),
-            fix: None,
-        }
-    }
-}
-
-fn check_sudo_rules(layout: &Layout, custom_probe: Option<&SudoProbeFn>) -> Vec<DiagnosticCheck> {
-    let commands = layout.sudo_commands();
-    let mut checks = Vec::with_capacity(commands.len());
-
-    for cmd in commands {
-        let argv = cmd.probe_argv();
-        let result = match custom_probe {
-            Some(probe) => probe(&argv),
-            None => real_sudo_probe(&argv),
-        };
-        match result {
-            Ok(()) => checks.push(DiagnosticCheck {
-                name: format!("sudo: {}", cmd.name),
-                ok: true,
-                warning: false,
-                detail: "permitted".to_string(),
-                hint: String::new(),
-                fix: None,
-            }),
-            Err(err) => checks.push(DiagnosticCheck {
-                name: format!("sudo: {}", cmd.name),
-                ok: false,
-                warning: false,
-                detail: summarise_sudo(&err),
-                hint: "reinstall scoped sudo rules with: sudo bash scripts/install-macos.sh"
-                    .to_string(),
-                fix: Some(FixAction::RepairMacosSudoers),
-            }),
-        }
-    }
-    checks
-}
-
-fn summarise_sudo(output: &str) -> String {
-    let trimmed = output.trim();
-    if trimmed.is_empty() {
-        return "not permitted".to_string();
-    }
-    if is_sudo_refusal(trimmed) {
-        return "not permitted without a password".to_string();
-    }
-    first_line(trimmed).to_string()
-}
-
-fn check_windows_helper_service(layout: &Layout, runner: &dyn Runner) -> DiagnosticCheck {
-    if let Ok(Some(_)) = try_send_pipe_request(&layout.pipe_name, &PipeRequest::Probe) {
-        return DiagnosticCheck {
-            name: "helper service".to_string(),
-            ok: true,
-            warning: false,
-            detail: format!("{HELPER_SERVICE_NAME} pipe ready"),
-            hint: String::new(),
-            fix: None,
-        };
-    }
-
-    match runner.run("sc.exe", &["queryex", HELPER_SERVICE_NAME]) {
-        Ok(out) if out.success && out.combined.to_ascii_uppercase().contains("RUNNING") => {
-            DiagnosticCheck {
-                name: "helper service".to_string(),
-                ok: true,
-                warning: true,
-                detail: format!("{HELPER_SERVICE_NAME} is running, pipe not reachable"),
-                hint: "restart the sbctl-agent service or check permissions".to_string(),
-                fix: Some(FixAction::RepairWindowsHelper),
-            }
-        }
-        _ => DiagnosticCheck {
-            name: "helper service".to_string(),
-            ok: true,
-            warning: true,
-            detail: format!("{HELPER_SERVICE_NAME} is stopped; switches prompt for UAC"),
-            hint: "run scripts\\install.ps1 as Administrator for passwordless tray switches"
-                .to_string(),
-            fix: Some(FixAction::RepairWindowsHelper),
-        },
-    }
-}
-
-fn check_service(layout: &Layout, manager: &dyn Manager) -> DiagnosticCheck {
-    let install_hint = match layout.platform {
-        PlatformKind::Darwin => {
-            "register the LaunchDaemon with: sudo bash scripts/install-macos.sh"
-        }
-        PlatformKind::Windows => "register the WinSW service with: scripts\\install.ps1",
-    };
-
-    match manager.probe() {
-        Ok(health) => {
-            let mut detail = health.state.to_string();
-            if let Some(pid) = health.pid
-                && pid > 0
-            {
-                detail.push_str(&format!(", pid {pid}"));
-            }
-            DiagnosticCheck {
-                name: "service".to_string(),
-                ok: health.state != RunState::Error,
-                warning: false,
-                detail,
-                hint: if health.state == RunState::Error {
-                    install_hint.to_string()
-                } else {
-                    String::new()
-                },
-                fix: None,
-            }
-        }
-        Err(err) => DiagnosticCheck {
-            name: "service".to_string(),
-            ok: false,
-            warning: false,
-            detail: err.to_string(),
-            hint: install_hint.to_string(),
-            fix: None,
-        },
-    }
-}
-
-fn check_active_config(layout: &Layout, activator: &dyn Activator) -> DiagnosticCheck {
-    let active = match activator.active_name() {
-        Ok(name) => name,
-        Err(err) => {
-            return DiagnosticCheck {
-                name: "active config".to_string(),
-                ok: false,
-                warning: false,
-                detail: err.to_string(),
-                hint: "select a valid profile with: sbctl use <name>".to_string(),
-                fix: Some(FixAction::OpenProfiles),
-            };
-        }
-    };
-
-    let Some(active_name) = active else {
-        return DiagnosticCheck {
-            name: "active config".to_string(),
-            ok: true,
-            warning: true,
-            detail: "no profile selected".to_string(),
-            hint: "choose a profile with: sbctl use <name>".to_string(),
-            fix: Some(FixAction::OpenProfiles),
-        };
-    };
-
-    let profiles = list_profiles(&layout.profiles_dir).unwrap_or_default();
-    if let Some(problem) = diagnose_active(layout, &active_name, &profiles) {
-        return DiagnosticCheck {
-            name: "active config".to_string(),
-            ok: false,
-            warning: false,
-            detail: problem,
-            hint: "point it at a valid profile with: sbctl use <name>".to_string(),
-            fix: Some(FixAction::OpenProfiles),
-        };
-    }
-
-    DiagnosticCheck {
-        name: "active config".to_string(),
-        ok: true,
-        warning: false,
-        detail: active_name,
-        hint: String::new(),
-        fix: None,
-    }
-}
-
-/// Warn once a log file is large enough that rotation is not keeping up.
-const LOG_SIZE_WARN_BYTES: u64 = 50 * 1024 * 1024;
-
-fn check_logs(layout: &Layout) -> DiagnosticCheck {
-    let oversized = [
-        (&layout.error_log_path, "error"),
-        (&layout.access_log_path, "access"),
-    ]
-    .into_iter()
-    .find_map(|(path, label)| {
-        let len = std::fs::metadata(path).ok()?.len();
-        (len > LOG_SIZE_WARN_BYTES).then_some((label, len))
-    });
-    if let Some((label, len)) = oversized {
-        return DiagnosticCheck {
-            name: "logs".to_string(),
-            ok: true,
-            // A warning, not a failure: logging works, it is just unrotated.
-            warning: true,
-            detail: format!(
-                "{label} log is {:.0} MB; rotation may not be configured",
-                len as f64 / (1024.0 * 1024.0)
-            ),
-            hint: "re-run scripts/install-macos.sh to install /etc/newsyslog.d/sbctl.conf"
-                .to_string(),
-            fix: None,
-        };
-    }
-    match std::fs::File::open(&layout.error_log_path) {
-        Ok(_) => DiagnosticCheck {
-            name: "logs".to_string(),
-            ok: true,
-            warning: false,
-            detail: layout.error_log_path.display().to_string(),
-            hint: String::new(),
-            fix: None,
-        },
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => DiagnosticCheck {
-            name: "logs".to_string(),
-            ok: true,
-            warning: false,
-            detail: format!("{} not created yet", layout.error_log_path.display()),
-            hint: String::new(),
-            fix: None,
-        },
-        Err(err)
-            if err.kind() == std::io::ErrorKind::PermissionDenied
-                && layout.platform == PlatformKind::Darwin =>
-        {
-            DiagnosticCheck {
-                name: "logs".to_string(),
-                ok: true,
-                warning: true,
-                detail: format!("cannot read {}", layout.error_log_path.display()),
-                hint: "grant read access with: sudo chmod 755 /var/log/sing-box && sudo chmod 644 /var/log/sing-box/*.log".to_string(),
-                fix: Some(FixAction::RepairMacosLogs),
-            }
-        }
-        Err(err) => DiagnosticCheck {
-            name: "logs".to_string(),
-            ok: true,
-            warning: true,
-            detail: format!("cannot read {}: {err}", layout.error_log_path.display()),
-            hint: String::new(),
-            fix: None,
-        },
-    }
-}
-
-fn check_concurrency() -> DiagnosticCheck {
-    DiagnosticCheck {
-        name: "concurrency lock".to_string(),
-        ok: true,
-        warning: false,
-        detail: "sbctl.lock serializes profile switches".to_string(),
-        hint: String::new(),
-        fix: None,
-    }
-}
-
-/// Diagnose whether the configured active profile points at a deleted or missing file.
+/// Explain why the active profile cannot be loaded, if it cannot.
+///
+/// `None` means the active config looks usable. This is the only diagnostic the
+/// app still needs: it turns a broken active symlink into a sentence in the
+/// snapshot rather than a silent failure to connect.
 pub fn diagnose_active(
     layout: &Layout,
     active: &str,
@@ -480,41 +71,27 @@ pub fn diagnose_active(
     None
 }
 
-/// Generate a shell command that stages `/etc/sudoers.d/sbctl` to a temporary file,
-/// validates it with `visudo -cf`, and installs it atomically with `0440` root:wheel.
+/// Shell command that stages `/etc/sudoers.d/sbctl`, validates it with
+/// `visudo -cf`, and installs it atomically as `0440 root:wheel`.
 pub fn macos_sudoers_install_command(layout: &Layout, user: &str) -> crate::error::Result<String> {
     let body = macos_sudoers_root_script(layout, user)?;
     Ok(format!("sudo sh -c '{}'", body.replace('\'', "'\"'\"'")))
 }
 
-/// Generate a shell command granting console read access to `/var/log/sing-box` on macOS.
+/// Shell command granting console-user read access to `/var/log/sing-box`.
 pub fn macos_logs_root_script(layout: &Layout) -> Option<String> {
-    if layout.platform != PlatformKind::Darwin {
+    let dir = layout.error_log_path.parent()?;
+    let access_dir = layout.access_log_path.parent()?;
+    if dir != access_dir {
         return None;
     }
-    let dir = layout
-        .error_log_path
-        .parent()?
-        .display()
-        .to_string()
-        .replace('\'', "'\"'\"'");
-    let err = layout
-        .error_log_path
-        .display()
-        .to_string()
-        .replace('\'', "'\"'\"'");
-    let acc = layout
-        .access_log_path
-        .display()
-        .to_string()
-        .replace('\'', "'\"'\"'");
+    let quoted = dir.display();
     Some(format!(
-        "/bin/chmod 0755 '{dir}' && /bin/chmod 0644 '{err}' '{acc}' 2>/dev/null || /bin/chmod 0755 '{dir}'"
+        "/bin/chmod 0755 '{quoted}' && /bin/chmod 0644 '{quoted}'/error.log '{quoted}'/access.log"
     ))
 }
 
-/// Generate a self-contained root shell script suitable for `osascript ... with administrator privileges`
-/// that stages rules to a temp file, validates with `visudo -cf`, and installs `/etc/sudoers.d/sbctl`.
+/// The root script body behind [`macos_sudoers_install_command`].
 pub fn macos_sudoers_root_script(layout: &Layout, user: &str) -> crate::error::Result<String> {
     let rules = layout.sudoers(user)?;
     let encoded = rules.replace('\'', "'\"'\"'");
@@ -529,23 +106,6 @@ pub fn macos_sudoers_root_script(layout: &Layout, user: &str) -> crate::error::R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::activator::CopyActivator;
-    use crate::checker::FakeChecker;
-    use crate::runner::{FakeResult, FakeRunner};
-    use crate::service::Health;
-
-    struct StaticManager;
-    impl Manager for StaticManager {
-        fn probe(&self) -> crate::error::Result<Health> {
-            Ok(Health::unknown(RunState::Stopped))
-        }
-        fn restart(&self) -> crate::error::Result<()> {
-            Ok(())
-        }
-        fn stop(&self) -> crate::error::Result<()> {
-            Ok(())
-        }
-    }
 
     #[test]
     fn sudoers_commands_stage_and_validate_with_visudo_before_install() {
@@ -562,30 +122,30 @@ mod tests {
     }
 
     #[test]
-    fn doctor_assigns_expected_fix_actions() {
+    fn diagnose_active_reports_missing_profile_and_config() {
         let dir = tempfile::tempdir().unwrap();
-        let mut layout = Layout::windows();
-        layout.profiles_dir = dir.path().join("missing-profiles");
-        layout.active_config_path = dir.path().join("missing-active.json");
-        layout.active_name_path = Some(dir.path().join("active-name"));
-        layout.pipe_name = r"\\.\pipe\sbctl-test-nonexistent".to_string();
+        let mut layout = Layout::darwin();
+        layout.active_config_path = dir.path().join("config.json");
 
-        let checker = FakeChecker::default();
-        let runner = FakeRunner::new(FakeResult::err(1060, "service does not exist"));
-        let activator = CopyActivator::new(
-            layout.active_config_path.clone(),
-            layout.active_name_path.clone().unwrap(),
-        );
+        // No such profile.
+        assert!(diagnose_active(&layout, "gone", &[]).is_some());
 
-        let checks =
-            run_doctor_checks(&layout, &checker, &StaticManager, &activator, &runner, None);
-        let prof_chk = checks.iter().find(|c| c.name == "profiles").unwrap();
-        assert_eq!(prof_chk.fix, Some(FixAction::CreateProfilesDir));
+        // Profile exists but the active config does not.
+        let profiles = vec![crate::profile::Profile {
+            name: "work".to_string(),
+            path: dir.path().join("work.json"),
+            placeholders: Vec::new(),
+            server: None,
+            tun: None,
+            source_url: None,
+            config_parsed: true,
+            facts: Default::default(),
+        }];
+        let msg = diagnose_active(&layout, "work", &profiles).expect("missing config is reported");
+        assert!(msg.contains("missing") || msg.contains("deleted"));
 
-        let helper_chk = checks.iter().find(|c| c.name == "helper service").unwrap();
-        assert_eq!(helper_chk.fix, Some(FixAction::RepairWindowsHelper));
-
-        let active_chk = checks.iter().find(|c| c.name == "active config").unwrap();
-        assert_eq!(active_chk.fix, Some(FixAction::OpenProfiles));
+        // Now it exists and the active name resolves.
+        std::fs::write(&layout.active_config_path, "{}").unwrap();
+        assert!(diagnose_active(&layout, "work", &profiles).is_none());
     }
 }
