@@ -172,17 +172,22 @@ impl SbctlError {
     pub fn invalid_config(path: impl Into<String>, output: impl Into<String>) -> Self {
         let path_str = path.into();
         let raw = output.into();
-        let trimmed = raw.trim();
+        // sing-box colours its own stderr, so the escapes land in the message.
+        // They are noise in a terminal and corrupt JSON output for scripts, which
+        // is where these errors are read most.
+        let cleaned = crate::logs::strip_ansi(&raw);
+        let trimmed = cleaned.trim();
         let msg = if trimmed.is_empty() {
             format!("sing-box rejected {path_str}")
         } else {
             format!("sing-box rejected {path_str}:\n{}", indent(trimmed, "  "))
         };
+        let detail = trimmed.to_string();
         Self::validation(msg)
             .with_hint("fix the configuration, then run: sbctl check <name>")
             .with_kind(CoreErrorKind::InvalidConfig {
                 path: path_str,
-                detail: trimmed.to_string(),
+                detail,
             })
     }
 
