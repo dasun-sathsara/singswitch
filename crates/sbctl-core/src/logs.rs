@@ -14,10 +14,20 @@ pub fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     if needle.len() > haystack.len() {
         return false;
     }
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+    // Compare the first byte before slicing a window. Log lines are mostly
+    // ASCII and the needle's first byte rarely matches, so this rejects almost
+    // every position for the cost of an indexed load instead of a memcmp.
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    let first = n[0].to_ascii_lowercase();
+    let mut i = 0;
+    while i + n.len() <= h.len() {
+        if h[i].to_ascii_lowercase() == first && h[i..i + n.len()].eq_ignore_ascii_case(n) {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Remove ANSI SGR/VT escape sequences from a log line.

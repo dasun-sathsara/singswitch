@@ -38,6 +38,10 @@ pub struct LogsView {
     cached_stream: LogStreamKind,
     cached_severity: LogSeverityFilter,
     cached_query: String,
+    /// Records already tested against the current filters.
+    scanned: usize,
+    /// Id of the buffer's first record when `scanned` was recorded.
+    cached_front: Option<u64>,
     filtered_indices: Rc<Vec<usize>>,
     item_sizes: Rc<Vec<GpuiSize<Pixels>>>,
 
@@ -73,6 +77,8 @@ impl LogsView {
             cached_stream: LogStreamKind::Error,
             cached_severity: LogSeverityFilter::All,
             cached_query: String::new(),
+            scanned: 0,
+            cached_front: None,
             filtered_indices: Rc::new(Vec::new()),
             item_sizes: Rc::new(Vec::new()),
             _sub: sub,
@@ -90,15 +96,53 @@ impl LogsView {
         }
 
         let records = store.active_log_records();
-        let indices: Vec<usize> = records
-            .iter()
-            .enumerate()
-            .filter(|(_, rec)| store.log_severity.matches(rec.level))
-            .filter(|(_, rec)| contains_ignore_ascii_case(rec.line.as_ref(), query))
-            .map(|(idx, _)| idx)
-            .collect();
+        let filters_changed = self.cached_stream != store.log_stream
+            || self.cached_severity != store.log_severity
+            || self.cached_query != query;
+
+        // A poll appends and leaves earlier records untouched, so only the new
+        // tail needs testing. Rebuilding all 5000 indices on every poll was the
+        // dominant cost of a live view. Reuse is only safe while the front of
+        // the buffer has not moved: ids are monotonic, so a changed first id
+        // means an eviction shifted every recorded index down by one.
+        let front = records.first().map(|r| r.id);
+        let reusable = filter_prefix_reusable(
+            filters_changed,
+            self.cached_front,
+            front,
+            records.len(),
+            self.scanned,
+        );
+        let mut indices: Vec<usize> = if reusable {
+            Rc::try_unwrap(std::mem::replace(
+                &mut self.filtered_indices,
+                Rc::new(Vec::new()),
+            ))
+            .unwrap_or_else(|rc| (*rc).clone())
+        } else {
+            Vec::new()
+        };
+        let from = if reusable {
+            self.scanned.min(records.len())
+        } else {
+            0
+        };
+        if !reusable {
+            indices.clear();
+        }
+        indices.extend(
+            records
+                .iter()
+                .enumerate()
+                .skip(from)
+                .filter(|(_, rec)| store.log_severity.matches(rec.level))
+                .filter(|(_, rec)| contains_ignore_ascii_case(rec.line.as_ref(), query))
+                .map(|(idx, _)| idx),
+        );
 
         let count = indices.len();
+        self.scanned = records.len();
+        self.cached_front = front;
         self.filtered_indices = Rc::new(indices);
         // Reuse the existing size buffer when it is uniquely ours. This is one
         // entry per row and all entries are identical (rows are a fixed height),
@@ -650,4 +694,41 @@ fn render_log_rows(
             )
         })
         .collect()
+}
+
+/// Whether a cached filter prefix can be extended instead of rebuilt.
+///
+/// Reuse needs the same filters, a front record that has not moved (ids are
+/// monotonic, so a changed first id means an eviction shifted every index), a
+/// non-empty buffer, and a buffer that has not shrunk below what was scanned.
+fn filter_prefix_reusable(
+    filters_changed: bool,
+    cached_front: Option<u64>,
+    front: Option<u64>,
+    len: usize,
+    scanned: usize,
+) -> bool {
+    !filters_changed && cached_front == front && front.is_some() && len >= scanned
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::filter_prefix_reusable;
+
+    #[test]
+    fn reuse_only_while_the_prefix_is_stable() {
+        // Steady append: reuse.
+        assert!(filter_prefix_reusable(false, Some(1), Some(1), 5, 3));
+        // Eviction moved the front: rebuild.
+        assert!(!filter_prefix_reusable(false, Some(1), Some(2), 5, 5));
+        // Filters changed: rebuild.
+        assert!(!filter_prefix_reusable(true, Some(1), Some(1), 5, 3));
+        // Empty buffer has no trustworthy prefix.
+        assert!(!filter_prefix_reusable(false, None, None, 0, 0));
+        // Shrank below what was scanned (truncation): rebuild.
+        assert!(!filter_prefix_reusable(false, Some(1), Some(1), 2, 7));
+        // Fresh cache mid-stream (first draw): no cached front, so rebuild.
+        // `scanned` is 0, so the rebuild starts from the first record anyway.
+        assert!(!filter_prefix_reusable(false, None, Some(5), 4, 0));
+    }
 }
