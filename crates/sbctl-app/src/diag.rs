@@ -7,6 +7,7 @@
 
 use std::io::Write as _;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Path of the diagnostic log for this platform.
@@ -42,14 +43,31 @@ pub fn log(message: &str) {
     let Some(path) = log_path() else {
         return;
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     // One generation of rotation keeps this bounded; it is append-only and
     // otherwise grows for the life of the install.
     const MAX_LOG_BYTES: u64 = 256 * 1024;
-    if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_LOG_BYTES) {
+    // Track the size ourselves instead of stat-ing on every line. `log` is
+    // called from hot paths (the poll loops), and a metadata syscall per line
+    // buys nothing when this process is the only writer.
+    static APPROX_BYTES: AtomicU64 = AtomicU64::new(0);
+    static DIR_READY: AtomicBool = AtomicBool::new(false);
+    if !DIR_READY.swap(true, Ordering::Relaxed) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        // Seed from the file that is already there, once per process. Starting
+        // at zero would let a log from an earlier session grow a whole extra
+        // cap before rotating.
+        if let Ok(meta) = std::fs::metadata(&path) {
+            APPROX_BYTES.store(meta.len(), Ordering::Relaxed);
+        }
+    }
+    let over_limit = APPROX_BYTES.load(Ordering::Relaxed) > MAX_LOG_BYTES;
+    if over_limit {
         let _ = std::fs::rename(&path, path.with_extension("log.1"));
+        // A rename leaves the live file absent, so the next append starts it
+        // again from zero.
+        APPROX_BYTES.store(0, Ordering::Relaxed);
     }
     let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
@@ -58,7 +76,10 @@ pub fn log(message: &str) {
     else {
         return;
     };
-    let _ = writeln!(file, "{} {}", utc_timestamp(), message);
+    let line = format!("{} {}\n", utc_timestamp(), message);
+    if file.write_all(line.as_bytes()).is_ok() {
+        APPROX_BYTES.fetch_add(line.len() as u64, Ordering::Relaxed);
+    }
 }
 
 /// Record panics before the process dies.
