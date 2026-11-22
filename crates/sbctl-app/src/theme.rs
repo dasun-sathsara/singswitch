@@ -116,8 +116,16 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.foreground = rgb(0xEDEDEF).into();
             theme.muted = rgb(0x2A2A2E).into();
             theme.muted_foreground = rgb(0xB0B0B6).into();
-            theme.border = rgb(0x3A3A3E).into();
-            theme.input = rgb(0x242427).into();
+            // Hairlines recede (1.32:1); `input` is the *border* colour gpui-component
+            // paints on every field and outline button, so it must stay visible
+            // (3:1) rather than recede like a divider.
+            theme.border = rgb(0x303034).into();
+            theme.input = rgb(0x73737B).into();
+            theme.secondary = rgb(0x44444B).into();
+            theme.secondary_active = rgb(0x4A4A52).into();
+            theme.warning_foreground = rgb(0x0D1117).into();
+            theme.popover = rgb(0x242427).into();
+            theme.popover_foreground = rgb(0xEDEDEF).into();
             theme.title_bar = rgb(0x1F1F22).into();
             theme.title_bar_border = rgb(0x3A3A3E).into();
             theme.sidebar = rgb(0x1F1F22).into();
@@ -139,8 +147,13 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.foreground = rgb(0x1B1B1E).into();
             theme.muted = rgb(0xE8E8EB).into();
             theme.muted_foreground = rgb(0x5E5E64).into();
-            theme.border = rgb(0xE1E1E4).into();
-            theme.input = rgb(0xFFFFFF).into();
+            theme.border = rgb(0xD2D2D6).into();
+            theme.input = rgb(0x88888F).into();
+            theme.secondary = rgb(0xB8B8BE).into();
+            theme.secondary_active = rgb(0xA6A6AD).into();
+            theme.warning_foreground = rgb(0xFFFFFF).into();
+            theme.popover = rgb(0xFFFFFF).into();
+            theme.popover_foreground = rgb(0x1B1B1E).into();
             theme.title_bar = rgb(0xF0F0F2).into();
             theme.title_bar_border = rgb(0xE1E1E4).into();
             theme.sidebar = rgb(0xF5F5F7).into();
@@ -184,17 +197,17 @@ pub const INPUT_RADIUS: f32 = 6.0;
 /// box; the component's own frame covers the rest with the same tokens.
 #[allow(dead_code)]
 ///
-/// The component paints a border and, when focused, an outer ring that extends
-/// past the field's bounds; any ancestor that clips then cuts the ring in half.
-/// So the resting border is used for the frame and focus is drawn *inside* the
-/// field, which cannot be clipped and never shifts layout.
+/// Target size for the field frame. Retained for reference: the shipped inputs
+/// use the component's own border, which is painted at full alpha and therefore
+/// meets the 3:1 non-text contrast floor. The component's 50%-alpha focus ring
+/// topped out at 2.8:1 and is not relied on.
 pub fn input_frame(focused: bool, cx: &gpui_kit::App) -> gpui_kit::Div {
     use gpui_kit::Styled as _;
     let theme = cx.theme();
     gpui_kit::div()
         .h(gpui_kit::px(INPUT_HEIGHT))
         .rounded(gpui_kit::px(INPUT_RADIUS))
-        .bg(theme.input)
+        .bg(surface(cx))
         .border_1()
         .border_color(if focused { theme.ring } else { theme.border })
 }
@@ -202,6 +215,16 @@ pub fn input_frame(focused: bool, cx: &gpui_kit::App) -> gpui_kit::Div {
 /// The edge of a control that must read as a control: a button outline or a
 /// field border. Structural hairlines use `theme.border`, which is deliberately
 /// faint enough to recede; this is the one place a visible line earns its keep.
+/// Fill for inputs and cards. `theme.input` is a *border* colour in
+/// gpui-component 0.10, so using it as a background painted a dark slab.
+pub fn surface(cx: &gpui_kit::App) -> gpui_kit::Hsla {
+    if cx.theme().is_dark() {
+        gpui_kit::rgb(0x242427).into()
+    } else {
+        gpui_kit::rgb(0xFFFFFF).into()
+    }
+}
+
 pub fn control_edge(cx: &gpui_kit::App) -> gpui_kit::Hsla {
     if cx.theme().is_dark() {
         gpui_kit::rgb(0x45454A).into()
@@ -213,8 +236,8 @@ pub fn control_edge(cx: &gpui_kit::App) -> gpui_kit::Hsla {
 /// A neutral hover wash for rows and controls, one step above the ground.
 pub fn hover_wash(cx: &gpui_kit::App) -> gpui_kit::Hsla {
     if cx.theme().is_dark() {
-        gpui_kit::rgb(0x2A2A2E).into()
+        gpui_kit::rgb(0x2E2E33).into()
     } else {
-        gpui_kit::rgb(0xE8E8EB).into()
+        gpui_kit::rgb(0xDEDEE2).into()
     }
 }

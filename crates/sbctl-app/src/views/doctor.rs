@@ -434,7 +434,9 @@ fn render_fix_button(
                 window,
                 cx,
             ),
-            FixAction::RepairMacosLogs => st.update(cx, AppStore::repair_macos_logs),
+            FixAction::RepairMacosLogs => {
+                st.update(cx, |s, cx| s.repair_macos_logs(NoticeOrigin::Doctor, cx))
+            }
             FixAction::RepairWindowsHelper => st.update(cx, AppStore::repair_windows_helper),
             FixAction::OpenProfiles => {
                 st.update(cx, |s, cx| s.set_tab(NavTab::Profiles, cx));
@@ -478,7 +480,7 @@ fn render_macos_sudoers_card(
                         .child(
                             div()
                                 .text_sm()
-                                .font_semibold()
+                                .font_bold()
                                 .text_color(cx.theme().foreground)
                                 .child("macOS sudoers"),
                         )
@@ -572,7 +574,7 @@ fn render_windows_helper_card(
                         .child(
                             div()
                                 .text_sm()
-                                .font_semibold()
+                                .font_bold()
                                 .text_color(cx.theme().foreground)
                                 .child("Windows helper service"),
                         )

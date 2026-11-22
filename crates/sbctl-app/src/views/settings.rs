@@ -59,7 +59,7 @@ fn render_appearance_card(
         .child(
             div()
                 .text_base()
-                .font_semibold()
+                .font_bold()
                 .text_color(cx.theme().foreground)
                 .child("Appearance"),
         )
@@ -74,7 +74,7 @@ fn render_appearance_card(
                         .child(
                             div()
                                 .text_sm()
-                                .font_medium()
+                                .font_normal()
                                 .text_color(cx.theme().foreground)
                                 .child("Theme"),
                         )
@@ -156,7 +156,7 @@ fn render_behavior_card(
         .child(
             div()
                 .text_base()
-                .font_semibold()
+                .font_bold()
                 .text_color(cx.theme().foreground)
                 .child("Behaviour"),
         )
@@ -214,7 +214,7 @@ fn setting_switch_row(
                 .child(
                     div()
                         .text_sm()
-                        .font_medium()
+                        .font_normal()
                         .text_color(cx.theme().foreground)
                         .child(title),
                 )
@@ -283,7 +283,7 @@ fn render_paths_card(
         .child(
             div()
                 .text_base()
-                .font_semibold()
+                .font_bold()
                 .text_color(cx.theme().foreground)
                 .child("System paths"),
         )

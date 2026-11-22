@@ -25,8 +25,13 @@ pub struct LogsView {
     store: Entity<AppStore>,
     search_input: Entity<InputState>,
     scroll_handle: VirtualListScrollHandle,
-    selected_line: Option<SharedString>,
-    last_count: usize,
+    selected_id: Option<u64>,
+    /// Identity of the last record we scrolled to.
+    ///
+    /// Counting rows cannot work once the buffer is at its cap: each poll adds
+    /// and drains the same number, so the count never changes and following
+    /// silently stops while the switch still reads "Following".
+    last_tail: Option<u64>,
 
     // Cached filtered row indices rebuilt only when logs, stream, severity, or search change.
     cached_revision: u64,
@@ -62,8 +67,8 @@ impl LogsView {
             store,
             search_input,
             scroll_handle: VirtualListScrollHandle::new(),
-            selected_line: None,
-            last_count: 0,
+            selected_id: None,
+            last_tail: None,
             cached_revision: u64::MAX,
             cached_stream: LogStreamKind::Error,
             cached_severity: LogSeverityFilter::All,
@@ -95,7 +100,7 @@ impl LogsView {
 
         let count = indices.len();
         self.filtered_indices = Rc::new(indices);
-        self.item_sizes = Rc::new(vec![size(px(1400.0), px(26.0)); count]);
+        self.item_sizes = Rc::new(vec![size(px(1400.0), px(22.0)); count]);
         self.cached_revision = store.log_revision;
         self.cached_stream = store.log_stream;
         self.cached_severity = store.log_severity;
@@ -130,7 +135,7 @@ impl LogsView {
                                 LogStreamKind::Error => 0,
                                 LogStreamKind::Access => 1,
                             })
-                            .child(Tab::new().label("Errors"))
+                            .child(Tab::new().label("Service"))
                             .child(Tab::new().label("Access"))
                             .on_click(cx.listener(move |this, idx, _, cx| {
                                 let next = if *idx == 1 {
@@ -138,7 +143,7 @@ impl LogsView {
                                 } else {
                                     LogStreamKind::Error
                                 };
-                                this.selected_line = None;
+                                this.selected_id = None;
                                 store_tab.update(cx, |s, cx| s.set_log_stream(next, cx));
                             })),
                     )
@@ -241,7 +246,7 @@ impl LogsView {
                     .disabled(total_count == 0)
                     .tooltip("Clears this view only; the log file is untouched")
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.selected_line = None;
+                        this.selected_id = None;
                         store_clear.update(cx, AppStore::clear_logs);
                     })),
             )
@@ -252,7 +257,7 @@ impl LogsView {
                     .icon(IconName::RefreshCw)
                     .tooltip("Reload from disk")
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.selected_line = None;
+                        this.selected_id = None;
                         store_reload.update(cx, |s, cx| {
                             s.reload_logs();
                             cx.notify();
@@ -347,7 +352,7 @@ impl LogsView {
                             .icon(IconName::Close)
                             .tooltip("Dismiss")
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.selected_line = None;
+                                this.selected_id = None;
                                 cx.notify();
                             })),
                     ),
@@ -385,12 +390,33 @@ impl Render for LogsView {
             )
         };
 
+        // Only a permission failure is something `chmod` can fix; offering the
+        // button for "is a directory" or "too many open files" is a dead end.
+        let can_fix_permissions = log_error
+            .as_deref()
+            .is_some_and(|e| e.to_ascii_lowercase().contains("permission denied"));
+        let records = {
+            let s = self.store.read(cx);
+            s.active_log_records()
+        };
+        let selected_detail = {
+            let s = self.store.read(cx);
+            let records = s.active_log_records();
+            self.selected_id
+                .and_then(|id| records.iter().find(|r| r.id == id))
+                .map(|r| r.line.clone())
+        };
         let count = self.filtered_indices.len();
-        if follow && count != self.last_count && count > 0 {
+        let tail_id = self
+            .filtered_indices
+            .last()
+            .and_then(|ix| records.get(*ix))
+            .map(|r| r.id);
+        if follow && tail_id.is_some() && tail_id != self.last_tail && count > 0 {
             self.scroll_handle
                 .scroll_to_item(count - 1, gpui_kit::ScrollStrategy::Bottom);
         }
-        self.last_count = count;
+        self.last_tail = tail_id;
 
         v_flex()
             .size_full()
@@ -439,7 +465,44 @@ impl Render for LogsView {
                     .border_1()
                     .border_color(cx.theme().border)
                     .bg(cx.theme().background)
+                    .when(count > 0 && log_error.is_some(), |this| {
+                        this.child(
+                            h_flex()
+                                .w_full()
+                                .flex_none()
+                                .px(px(10.0))
+                                .py(px(6.0))
+                                .gap(px(8.0))
+                                .items_center()
+                                .border_b_1()
+                                .border_color(cx.theme().border)
+                                .bg(cx.theme().danger.opacity(0.08))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .text_size(px(11.5))
+                                        .text_color(cx.theme().danger)
+                                        .child(format!(
+                                            "Reading this log failed; the lines below are stale. {}",
+                                            log_error.clone().unwrap_or_default()
+                                        )),
+                                ),
+                        )
+                    })
                     .when(count == 0, |this| {
+                        // Three distinct states, never collapsed into one line
+                        // of copy: nothing written, nothing matching, unreadable.
+                        let (title, detail) = match (&log_error, total_count) {
+                            (Some(err), _) => ("Cannot read the log file", err.clone()),
+                            (None, 0) => (
+                                "Nothing logged yet.",
+                                format!("{}", log_path.display()),
+                            ),
+                            (None, _) => (
+                                "No lines match this filter.",
+                                format!("{} line(s) hidden by the current search or level.", total_count),
+                            ),
+                        };
                         this.child(
                             v_flex()
                                 .size_full()
@@ -447,25 +510,15 @@ impl Render for LogsView {
                                 .justify_center()
                                 .gap(px(6.0))
                                 .px(px(24.0))
-                                .child(div().text_sm().text_color(cx.theme().foreground).child(
-                                    if log_error.is_some() {
-                                        "Cannot read the log file"
-                                    } else {
-                                        "Nothing logged yet."
-                                    },
-                                ))
+                                .child(div().text_sm().text_color(cx.theme().foreground).child(title))
                                 .child(
                                     div()
                                         .text_size(px(12.0))
                                         .font_family(crate::fonts::mono_family())
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(
-                                            log_error.clone().unwrap_or_else(|| {
-                                                format!("{}", log_path.display())
-                                            }),
-                                        ),
+                                        .child(detail),
                                 )
-                                .when(log_error.is_some() && cfg!(target_os = "macos"), |v| {
+                                .when(can_fix_permissions && cfg!(target_os = "macos"), |v| {
                                     v.child(
                                         Button::new("logs-fix-perms")
                                             .outline()
@@ -473,7 +526,8 @@ impl Render for LogsView {
                                             .label("Fix permissions…")
                                             .disabled(is_busy)
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.store.update(cx, AppStore::repair_macos_logs);
+                                                this.store
+                                    .update(cx, |s, cx| s.repair_macos_logs(NoticeOrigin::Logs, cx));
                                             })),
                                     )
                                 }),
@@ -498,7 +552,7 @@ impl Render for LogsView {
                                         .size_full(),
                                     ),
                                 )
-                                .when_some(self.selected_line.clone(), |v, line| {
+                                .when_some(selected_detail, |v, line| {
                                     v.child(self.render_selected_line_panel(line, cx))
                                 }),
                         )
@@ -523,7 +577,7 @@ fn render_log_rows(
     let danger = cx.theme().danger;
     let warn = cx.theme().warning;
     let hover_bg = subtle_pill_bg(cx);
-    let selected_ref = this.selected_line.clone();
+    let selected_ref = this.selected_id;
 
     range
         .filter_map(|vis_idx| {
@@ -536,8 +590,8 @@ fn render_log_rows(
                 LogLevel::Debug => ("DBG", muted),
                 LogLevel::Other => ("LOG", muted),
             };
-            let is_selected = selected_ref.as_ref() == Some(&rec.line);
-            let line_for_click = rec.line.clone();
+            let is_selected = selected_ref == Some(rec.id);
+            let rec_id = rec.id;
 
             Some(
                 h_flex()
@@ -551,7 +605,7 @@ fn render_log_rows(
                     .when(is_selected, |d| d.bg(hover_bg))
                     .hover(|d| d.bg(hover_bg))
                     .on_click(cx.listener(move |view, _, _, cx| {
-                        view.selected_line = Some(line_for_click.clone());
+                        view.selected_id = Some(rec_id);
                         cx.notify();
                     }))
                     .child(

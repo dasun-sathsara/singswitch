@@ -227,7 +227,10 @@ impl ProfilesView {
             return render_setup(&setup, &self.store, cx).into_any_element();
         };
 
-        let facts = sbctl_core::profile::config_facts_from_file(&prof.path);
+        // Facts are parsed once when the snapshot is built; reading and parsing
+        // the profile here meant one file read per drawn frame.
+        let facts = prof.facts.clone();
+        let parsed_ok = prof.config_parsed;
         let is_live = snap.running && snap.active.as_deref() == Some(prof.name.as_str());
         let ready = prof.ready();
         let name_act = prof.name.clone();
@@ -257,13 +260,10 @@ impl ProfilesView {
         let cfg_path = prof.path.display().to_string();
         let path_for_copy = cfg_path.clone();
 
-        let endpoint = facts
-            .as_ref()
-            .and_then(|f| f.endpoint.clone())
-            .or_else(|| prof.server.clone());
+        let endpoint = facts.endpoint.clone().or_else(|| prof.server.clone());
         let transport = facts
-            .as_ref()
-            .and_then(|f| f.outbound_type.clone())
+            .outbound_type
+            .clone()
             .unwrap_or_else(|| "unknown".to_string());
 
         v_flex()
@@ -406,12 +406,12 @@ impl ProfilesView {
                     .rounded(px(9.0))
                     .border_1()
                     .border_color(crate::theme::control_edge(cx))
-                    .bg(cx.theme().input)
+                    .bg(crate::theme::surface(cx))
                     .child(prov_row(
                         "Outbound",
-                        match facts.as_ref() {
-                            None => "unavailable · config could not be parsed".to_string(),
-                            Some(f) => match (&f.outbound_type, &f.endpoint) {
+                        {
+                            let f = &facts;
+                            match (&f.outbound_type, &f.endpoint) {
                                 (Some(kind), Some(ep)) => {
                                     let tag = f
                                         .outbound_tag
@@ -421,16 +421,16 @@ impl ProfilesView {
                                     format!("{kind}{tag} · {ep}")
                                 }
                                 _ => "none · no outbound declares a server".to_string(),
-                            },
+                            }
                         },
-                        facts.is_some(),
+                        parsed_ok,
                         cx,
                     ))
                     .child(prov_row(
                         "Tunnel",
-                        match facts.as_ref() {
-                            None => "unavailable".to_string(),
-                            Some(f) => match f.tun_state() {
+                        {
+                            let f = &facts;
+                            match f.tun_state() {
                                 sbctl_core::profile::TunState::Named => format!(
                                     "{} · from the profile",
                                     f.tun_interface.clone().unwrap_or_default()
@@ -441,9 +441,9 @@ impl ProfilesView {
                                 sbctl_core::profile::TunState::Absent => {
                                     "none · no TUN inbound in this config".to_string()
                                 }
-                            },
+                            }
                         },
-                        facts.is_some(),
+                        parsed_ok,
                         cx,
                     )),
             )

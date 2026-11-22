@@ -34,7 +34,10 @@ echo "==> Bundling the managed sing-box binary..."
 echo "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 
 if command -v codesign >/dev/null 2>&1; then
-    codesign --force --deep --sign - "$APP_BUNDLE" || true
+    # A failed ad-hoc signature leaves an app that macOS refuses to launch, so
+    # this must fail the build rather than print a success line over it.
+    codesign --force --deep --sign - "$APP_BUNDLE"
+    codesign --verify --deep --strict "$APP_BUNDLE"
 fi
 
 echo "Built bundle: $APP_BUNDLE"

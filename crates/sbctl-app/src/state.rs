@@ -105,7 +105,9 @@ impl LogSeverityFilter {
             Self::All => true,
             Self::Error => level == LogLevel::Error,
             Self::Warn => matches!(level, LogLevel::Error | LogLevel::Warn),
-            Self::Info => level == LogLevel::Info,
+            // "and up" must include the levels above Info, or the menu item
+            // hides the very lines it claims to show.
+            Self::Info => matches!(level, LogLevel::Error | LogLevel::Warn | LogLevel::Info),
         }
     }
 }
@@ -121,6 +123,9 @@ pub enum EditorValidationState {
 
 #[derive(Clone, Debug)]
 pub struct LogRecord {
+    /// Stable identity for selection. Two identical lines are two records, and
+    /// a filtered index renumbers while the buffer drains.
+    pub id: u64,
     pub line: SharedString,
     pub level: LogLevel,
 }
@@ -733,7 +738,12 @@ impl AppStore {
                                 .to_string(),
                         });
                     }
-                    cx.notify();
+                    // Repaint only when something the window shows has changed.
+                    // Notifying on every poll re-ran every render body (and, until
+                    // the profile facts were cached, re-read a file) for nothing.
+                    if changed || force_disk_bump || unexpected_drop || confirmed_stop {
+                        cx.notify();
+                    }
                 }
             });
         });
@@ -858,7 +868,7 @@ impl AppStore {
                         store.notice = Some(Notice {
                             origin,
                             tone: BannerTone::Error,
-                            message: format!("{err}"),
+                            message: error_text(&err),
                         });
                     }
                 }
@@ -940,12 +950,12 @@ impl AppStore {
                         }
                         store.editor_validation = Some((
                             name.clone(),
-                            EditorValidationState::Invalid(format!("{err}")),
+                            EditorValidationState::Invalid(error_text(&err)),
                         ));
                         store.notice = Some(Notice {
                             origin: NoticeOrigin::Stage,
                             tone: BannerTone::Error,
-                            message: format!("{err}"),
+                            message: error_text(&err),
                         });
                     }
                 }
@@ -1006,7 +1016,7 @@ impl AppStore {
                         store.notice = Some(Notice {
                             origin,
                             tone: BannerTone::Error,
-                            message: format!("{err}"),
+                            message: error_text(&err),
                         });
                     }
                 }
@@ -1089,7 +1099,7 @@ impl AppStore {
                         store.notice = Some(Notice {
                             origin: NoticeOrigin::Stage,
                             tone: BannerTone::Error,
-                            message: format!("{err}"),
+                            message: error_text(&err),
                         });
                     }
                 }
@@ -1142,7 +1152,7 @@ impl AppStore {
                         store.notice = Some(Notice {
                             origin: NoticeOrigin::Stage,
                             tone: BannerTone::Error,
-                            message: format!("{err}"),
+                            message: error_text(&err),
                         });
                     }
                 }
@@ -1212,7 +1222,7 @@ impl AppStore {
                         store.notice = Some(Notice {
                             origin: NoticeOrigin::Stage,
                             tone: BannerTone::Error,
-                            message: format!("{err}"),
+                            message: error_text(&err),
                         });
                     }
                 }
@@ -1277,12 +1287,12 @@ impl AppStore {
                     Err(err) => {
                         store.editor_validation = Some((
                             name.clone(),
-                            EditorValidationState::Invalid(format!("{err}")),
+                            EditorValidationState::Invalid(error_text(&err)),
                         ));
                         store.notice = Some(Notice {
                             origin,
                             tone: BannerTone::Error,
-                            message: format!("{err}"),
+                            message: error_text(&err),
                         });
                     }
                 }
@@ -1323,7 +1333,7 @@ impl AppStore {
                         });
                     }
                     Err(err) => {
-                        let msg = format!("{err}");
+                        let msg = error_text(&err);
                         store.editor_validation =
                             Some((name, EditorValidationState::Invalid(msg.clone())));
                         store.notice = Some(Notice {
@@ -1381,7 +1391,7 @@ impl AppStore {
                         store.notice = Some(Notice {
                             origin: NoticeOrigin::Stage,
                             tone: BannerTone::Error,
-                            message: format!("{err}"),
+                            message: error_text(&err),
                         });
                     }
                 }
@@ -1434,7 +1444,7 @@ impl AppStore {
                         store.notice = Some(Notice {
                             origin: NoticeOrigin::Stage,
                             tone: BannerTone::Error,
-                            message: format!("{err}"),
+                            message: error_text(&err),
                         });
                     }
                 }
@@ -1450,11 +1460,12 @@ impl AppStore {
             root_script,
             "Installed /etc/sudoers.d/sbctl",
             false,
+            NoticeOrigin::Doctor,
             cx,
         );
     }
 
-    pub fn repair_macos_logs(&mut self, cx: &mut Context<Self>) {
+    pub fn repair_macos_logs(&mut self, origin: NoticeOrigin, cx: &mut Context<Self>) {
         let Some(root_script) = sbctl_core::doctor::macos_logs_root_script(&self.layout()) else {
             return;
         };
@@ -1463,6 +1474,7 @@ impl AppStore {
             root_script,
             "Updated /var/log/sing-box permissions",
             true,
+            origin,
             cx,
         );
     }
@@ -1473,6 +1485,7 @@ impl AppStore {
         root_script: String,
         success_msg: &'static str,
         reload_logs_after: bool,
+        origin: NoticeOrigin,
         cx: &mut Context<Self>,
     ) {
         if self.busy_phase.is_some() {
@@ -1516,7 +1529,7 @@ impl AppStore {
                             store.reload_logs();
                         }
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Doctor,
+                            origin,
                             tone: BannerTone::Success,
                             message: success_msg.to_string(),
                         });
@@ -1529,14 +1542,14 @@ impl AppStore {
                             msg
                         };
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Doctor,
+                            origin,
                             tone: BannerTone::Error,
                             message: banner,
                         });
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Doctor,
+                            origin,
                             tone: BannerTone::Error,
                             message: err.to_string(),
                         });
@@ -1591,7 +1604,7 @@ impl AppStore {
                         store.notice = Some(Notice {
                             origin: NoticeOrigin::Doctor,
                             tone: BannerTone::Error,
-                            message: format!("{err}"),
+                            message: error_text(&err),
                         });
                     }
                 }
@@ -2039,25 +2052,40 @@ fn apply_log_delta(
     changed
 }
 
+/// An error message for the window, including the hints the CLI also prints.
+///
+/// `Display` is the message alone, so rollback outcomes ("no previous profile",
+/// "could not restore X", "reverted to X but restart failed") all reached the UI
+/// as the same generic line.
+fn error_text(err: &sbctl_core::error::SbctlError) -> String {
+    if err.hints.is_empty() {
+        return err.message.clone();
+    }
+    format!("{} — {}", err.message, err.hints.join("; "))
+}
+
+fn next_log_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 fn into_log_record(line: String) -> LogRecord {
     // sing-box writes coloured output even to a file, so strip escapes once here
     // and every consumer (list, search, copy, detail) sees clean text.
     let line = sbctl_core::logs::strip_ansi(&line);
     let level = LogLevel::classify(&line);
     LogRecord {
+        id: next_log_id(),
         line: SharedString::from(line),
         level,
     }
 }
 
 fn push_bounded_logs(buf: &mut Vec<LogRecord>, lines: Vec<String>) {
-    for line in lines {
-        buf.push(into_log_record(line));
-    }
-    if buf.len() > MAX_LOG_ENTRIES {
-        let overflow = buf.len() - MAX_LOG_ENTRIES;
-        buf.drain(..overflow);
-    }
+    // Delegated to core so the eviction logic is covered by tests that run on
+    // every platform, not only where the GUI crate compiles.
+    sbctl_core::logs::append_bounded(buf, lines, MAX_LOG_ENTRIES, into_log_record);
 }
 
 pub(crate) fn count_noun(n: usize, singular: &str, plural: &str) -> String {

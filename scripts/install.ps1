@@ -3,7 +3,10 @@
 param(
     [string]$BinDir = "$PSScriptRoot\..\target\x86_64-pc-windows-msvc\release",
     [string]$SingBoxExe = "$env:ProgramData\sbctl\bin\sing-box.exe",
-    [string]$WinSwExe = "$env:ProgramFiles\sing-box\winsw.exe"
+    [string]$WinSwExe = "$env:ProgramFiles\sing-box\winsw.exe",
+    # Install the app without registering the sing-box service. Documented in
+    # the failure path above, so it has to exist.
+    [switch]$SkipService
 )
 
 $ErrorActionPreference = "Stop"
@@ -56,7 +59,9 @@ if ($machinePath -notlike "*$InstallDir*") {
 }
 
 # Register WinSW sing-box service when WinSW and sing-box binaries are present.
-if ((Test-Path $WinSwExe) -and (Test-Path $SingBoxExe)) {
+if ($SkipService) {
+    Write-Host "Skipping sing-box service registration (-SkipService)."
+} elseif ((Test-Path $WinSwExe) -and (Test-Path $SingBoxExe)) {
     $ServiceDir = Split-Path -Parent $WinSwExe
     $WinSwXml = Join-Path $ServiceDir "sing-box.xml"
     $EscSingBoxExe = [System.Security.SecurityElement]::Escape($SingBoxExe)
@@ -80,8 +85,13 @@ if ((Test-Path $WinSwExe) -and (Test-Path $SingBoxExe)) {
 "@ | Set-Content -Encoding UTF8 $WinSwXml
 
     & $WinSwExe install "$WinSwXml" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "WinSW failed to install the sing-box service (exit $LASTEXITCODE)."
+    }
 } else {
-    Write-Warning "WinSW ($WinSwExe) or sing-box ($SingBoxExe) not found; skipping sing-box Windows service setup."
+    # Reporting success over a missing service is worse than stopping: Doctor
+    # then advises re-running this script, which would "succeed" again.
+    throw "WinSW ($WinSwExe) or sing-box ($SingBoxExe) not found. Install both, or run with -SkipService."
 }
 
 # Register privileged sbctl named-pipe helper service (allows unprivileged tray/GUI control without UAC prompts).
@@ -92,7 +102,13 @@ if (Get-Service -Name $AgentService -ErrorAction SilentlyContinue) {
     Start-Sleep -Seconds 1
 }
 sc.exe create $AgentService binPath= "`"$InstallDir\sbctl.exe`" agent" start= auto DisplayName= "sbctl Helper" | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "sc.exe could not create the $AgentService service (exit $LASTEXITCODE)."
+}
 sc.exe start $AgentService | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "sc.exe could not start the $AgentService service (exit $LASTEXITCODE)."
+}
 
 # Create Start Menu shortcut.
 $ShortcutPath = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\sbctl.lnk"

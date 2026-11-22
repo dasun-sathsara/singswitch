@@ -35,6 +35,14 @@ pub struct Profile {
     pub server: Option<String>,
     pub tun: Option<String>,
     pub source_url: Option<String>,
+    /// Whether the config parsed at all. Distinguishes "no outbound declares a
+    /// server" from "this file is not valid JSON".
+    pub config_parsed: bool,
+    /// Facts parsed from the config this profile was built from.
+    ///
+    /// Carried here so rendering never re-reads and re-parses the file: that
+    /// happened once per frame on the Profiles stage before.
+    pub facts: ConfigFacts,
 }
 
 impl Profile {
@@ -138,6 +146,9 @@ pub fn list_profiles(profiles_dir: &Path) -> std::io::Result<Vec<Profile>> {
             .map(extract_server_and_tun)
             .unwrap_or((None, None));
         let source_url = read_source(profiles_dir, &name).ok().flatten();
+        let parsed_facts = raw.as_deref().and_then(extract_config_facts);
+        let config_parsed = parsed_facts.is_some();
+        let facts = parsed_facts.unwrap_or_default();
 
         profiles.push(Profile {
             name,
@@ -146,6 +157,8 @@ pub fn list_profiles(profiles_dir: &Path) -> std::io::Result<Vec<Profile>> {
             server,
             tun,
             source_url,
+            config_parsed,
+            facts,
         });
     }
     profiles.sort_by(|a, b| a.name.cmp(&b.name));

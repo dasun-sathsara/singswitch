@@ -19,7 +19,7 @@ if [[ ! -d "$APP_SRC" ]]; then
 fi
 if [[ ! -x "$SING_BOX_SRC" ]]; then
     echo "error: missing sing-box inside the app bundle at ${SING_BOX_SRC}" >&2
-    echo "hint: rebuild the bundle with scripts/build-macos.sh" >&2
+    echo "hint: rebuild the bundle with scripts/build-mac.sh" >&2
     exit 1
 fi
 
@@ -81,5 +81,12 @@ chmod 0440 "$SUDOERS_TMP"
 visudo -cf "$SUDOERS_TMP"
 sudo install -m 0440 -o root -g wheel "$SUDOERS_TMP" /etc/sudoers.d/sbctl
 rm -f "$SUDOERS_TMP"
+
+echo "==> Registering the LaunchDaemon..."
+PLIST_PATH="/Library/LaunchDaemons/app.lexiflix.singbox.plist"
+# Writing the plist does not register the service; without this the daemon is
+# never loaded and re-running the installer cannot fix anything.
+sudo launchctl bootout system/app.lexiflix.singbox >/dev/null 2>&1 || true
+sudo launchctl bootstrap system "$PLIST_PATH"
 
 echo "==> Done. Run 'sbctl doctor' or open /Applications/sbctl.app."
