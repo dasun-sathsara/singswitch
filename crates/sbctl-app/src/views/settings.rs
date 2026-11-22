@@ -11,7 +11,6 @@ use gpui_kit::{
 };
 use sbctl_core::layout::Layout;
 
-use crate::actions::NavTab;
 use crate::state::{AppStore, BannerTone, NoticeOrigin};
 use crate::theme::{ThemePreference, surface_card_bg};
 
@@ -27,6 +26,7 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let notice = crate::views::notice_strip(&self.store, NoticeOrigin::Settings, cx);
         let s = self.store.read(cx);
         let settings = s.settings.clone();
         let layout = s.layout();
@@ -36,6 +36,7 @@ impl Render for SettingsView {
             .overflow_y_scrollbar()
             .p_6()
             .gap_5()
+            .when_some(notice, |el, notice| el.child(notice))
             .child(render_appearance_card(settings.theme, &self.store, cx))
             .child(render_behavior_card(&settings, &self.store, cx))
             .child(render_paths_card(&layout, &self.store, cx))
@@ -141,10 +142,8 @@ fn render_behavior_card(
     cx: &gpui_kit::App,
 ) -> impl IntoElement {
     let store_login = store.clone();
-    let store_menubar = store.clone();
     let store_ip = store.clone();
     let store_notify = store.clone();
-    let store_guide = store.clone();
 
     v_flex()
         .w_full()
@@ -173,20 +172,9 @@ fn render_behavior_card(
             cx,
         ))
         .child(setting_switch_row(
-            "set-menubar-title",
-            "Show the connected profile name",
-            "Use the profile name as the menu bar title on macOS.",
-            settings.show_profile_in_menubar,
-            !cfg!(target_os = "macos"),
-            move |checked, _, cx| {
-                store_menubar.update(cx, |s, cx| s.set_show_profile_in_menubar(*checked, cx));
-            },
-            cx,
-        ))
-        .child(setting_switch_row(
             "set-auto-ip",
             "Refresh the public IP after connect",
-            "One lookup at launch and after each switch, never on a timer.",
+            "One lookup at launch and after each switch. Never on a timer.",
             settings.auto_refresh_ip,
             false,
             move |checked, _, cx| {
@@ -205,44 +193,6 @@ fn render_behavior_card(
             },
             cx,
         ))
-        .child(
-            h_flex()
-                .w_full()
-                .justify_between()
-                .items_center()
-                .child(
-                    v_flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_medium()
-                                .text_color(cx.theme().foreground)
-                                .child("Setup"),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(
-                                    "Show the welcome steps again on a healthy install. \
-                                 Failures always show, whatever this setting says.",
-                                ),
-                        ),
-                )
-                .child(
-                    Button::new("set-show-onboarding")
-                        .outline()
-                        .small()
-                        .label("Show setup again")
-                        .on_click(move |_, _, cx| {
-                            store_guide.update(cx, |s, cx| {
-                                s.set_onboarding_dismissed(false, cx);
-                                s.set_tab(NavTab::Profiles, cx);
-                            });
-                        }),
-                ),
-        )
 }
 
 fn setting_switch_row(
@@ -302,11 +252,22 @@ fn render_paths_card(
         ("Error log", layout.error_log_path.display().to_string()),
         ("Access log", layout.access_log_path.display().to_string()),
         (
-            "Service target",
+            // Two different identifiers, never fused into one un-copyable
+            // string: the macOS service label, or the Windows service name plus
+            // the control pipe as its own row.
+            "Service",
             if layout.launchd_label.is_empty() {
-                format!("{} ({})", layout.service_name, layout.pipe_name)
+                layout.service_name.clone()
             } else {
                 layout.launchd_label.clone()
+            },
+        ),
+        (
+            "Control pipe",
+            if layout.pipe_name.is_empty() {
+                "—".to_string()
+            } else {
+                layout.pipe_name.clone()
             },
         ),
     ];

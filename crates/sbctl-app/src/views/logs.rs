@@ -418,6 +418,10 @@ impl Render for LogsView {
                     )
                     .child(self.render_controls_bar(follow, count, total_count, cx)),
             )
+            .when_some(
+                crate::views::notice_strip(&self.store, NoticeOrigin::Logs, cx),
+                |el, notice| el.child(div().mt(px(10.0)).child(notice)),
+            )
             .child(div().mt(px(16.0)).child(self.render_tabs(
                 stream,
                 follow,

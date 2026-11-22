@@ -39,10 +39,8 @@ impl ThemePreference {
 pub struct UiSettings {
     pub theme: ThemePreference,
     pub launch_at_login: bool,
-    pub show_profile_in_menubar: bool,
     pub auto_refresh_ip: bool,
     pub desktop_notifications: bool,
-    pub onboarding_dismissed: bool,
     pub window_width: f32,
     pub window_height: f32,
 }
@@ -52,10 +50,8 @@ impl Default for UiSettings {
         Self {
             theme: ThemePreference::Light,
             launch_at_login: false,
-            show_profile_in_menubar: true,
             auto_refresh_ip: true,
             desktop_notifications: true,
-            onboarding_dismissed: false,
             window_width: DEFAULT_WINDOW_WIDTH,
             window_height: DEFAULT_WINDOW_HEIGHT,
         }
