@@ -198,6 +198,14 @@ pub struct AppStore {
     stop_requested: bool,
     log_poll_in_flight: bool,
     snapshot_poll_in_flight: bool,
+    /// A refresh was requested while a poll was running.
+    ///
+    /// `cx.spawn` cancellation stops the await, not the blocking probe already
+    /// handed to the background executor, so letting forced refreshes through
+    /// stacked concurrent `launchctl` probes and full profile scans.
+    snapshot_poll_pending: bool,
+    /// Whether the queued refresh needs the disk revision bumped too.
+    snapshot_poll_force_pending: bool,
     _watcher: Option<RecommendedWatcher>,
     watcher_task: Option<Task<()>>,
     _daemon_tasks: Vec<Task<()>>,
@@ -303,6 +311,8 @@ impl AppStore {
             stop_requested: false,
             log_poll_in_flight: false,
             snapshot_poll_in_flight: false,
+            snapshot_poll_pending: false,
+            snapshot_poll_force_pending: false,
             _watcher: None,
             watcher_task: None,
             _daemon_tasks: Vec::new(),
@@ -703,7 +713,11 @@ impl AppStore {
         let Some(ctrl) = self.ctrl.clone() else {
             return;
         };
-        if self.snapshot_poll_in_flight && !force_disk_bump {
+        if self.snapshot_poll_in_flight {
+            // Queue rather than stack. The queued bump still lands: it runs when
+            // the poll already in flight completes.
+            self.snapshot_poll_pending = true;
+            self.snapshot_poll_force_pending |= force_disk_bump;
             return;
         }
         self.snapshot_poll_in_flight = true;
@@ -751,6 +765,13 @@ impl AppStore {
                     if changed || force_disk_bump || unexpected_drop || confirmed_stop {
                         cx.notify();
                     }
+                }
+                // Drain a queued refresh whatever the outcome, or a failed poll
+                // would strand a pending forced bump forever.
+                if store.snapshot_poll_pending {
+                    store.snapshot_poll_pending = false;
+                    let force = std::mem::take(&mut store.snapshot_poll_force_pending);
+                    store.refresh_snapshot(force, cx);
                 }
             });
         });
@@ -1737,6 +1758,15 @@ impl AppStore {
         self.log_revision = self.log_revision.wrapping_add(1);
     }
 
+    /// Whether the logs on screen are worth polling.
+    ///
+    /// Reading the files for a pane nobody is looking at wasted IO: the watcher
+    /// used `window_open || tab == Logs`, which is true for a hidden window with
+    /// Logs still selected.
+    fn should_poll_logs(&self) -> bool {
+        self.window_open && self.selected_tab == NavTab::Logs && self.log_follow
+    }
+
     pub fn poll_logs_async(&mut self, cx: &mut Context<Self>) {
         if self.log_poll_in_flight {
             return;
@@ -1909,8 +1939,7 @@ impl AppStore {
                                 store.refresh_snapshot(true, cx);
                             }
                             if matches!(combined, WatchEventKind::Logs | WatchEventKind::Both)
-                                && (store.window_open || store.selected_tab == NavTab::Logs)
-                                && store.log_follow
+                                && store.should_poll_logs()
                             {
                                 store.poll_logs_async(cx);
                             }
@@ -1957,7 +1986,7 @@ impl AppStore {
                             if store.busy_phase.is_none() && last_poll.elapsed() >= interval {
                                 last_poll = Instant::now();
                                 store.refresh_snapshot(false, cx);
-                                if store.window_open && store.log_follow {
+                                if store.should_poll_logs() {
                                     store.poll_logs_async(cx);
                                 }
                             }
