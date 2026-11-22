@@ -124,7 +124,7 @@ impl DoctorView {
 impl Render for DoctorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let s = self.store.read(cx);
-        let checks = s.doctor_checks.clone();
+        let checks = &s.doctor_checks;
         let running = s.doctor_running;
         let is_busy = s.busy_phase.is_some();
         let layout = s.layout();
@@ -151,7 +151,6 @@ impl Render for DoctorView {
                         checks
                             .iter()
                             .filter(|c| Self::needs_attention(c))
-                            .cloned()
                             .enumerate()
                             .map(|(ix, chk)| {
                                 render_check_card(ix, chk, &layout, is_busy, &self.store, cx)
@@ -209,7 +208,6 @@ impl Render for DoctorView {
                         checks
                             .iter()
                             .filter(|c| Self::is_clean_pass(c))
-                            .cloned()
                             .enumerate()
                             .map(|(ix, chk)| {
                                 render_check_card(ix + 100, chk, &layout, is_busy, &self.store, cx)
@@ -233,7 +231,7 @@ impl Render for DoctorView {
 
 fn render_check_card(
     ix: usize,
-    chk: DiagnosticCheck,
+    chk: &DiagnosticCheck,
     layout: &Layout,
     is_busy: bool,
     store: &Entity<AppStore>,
@@ -259,8 +257,9 @@ fn render_check_card(
         )
     };
 
-    let hint = chk.hint;
+    let hint = chk.hint.clone();
     let fix = chk.fix;
+    let status_name = chk.name.clone();
     let store_hint = store.clone();
     let store_detail = store.clone();
     let mono_font = cx.theme().mono_font_family.clone();
@@ -288,7 +287,7 @@ fn render_check_card(
                                 .text_sm()
                                 .font_bold()
                                 .text_color(cx.theme().foreground)
-                                .child(chk.name),
+                                .child(status_name),
                         )
                         .child(
                             h_flex()

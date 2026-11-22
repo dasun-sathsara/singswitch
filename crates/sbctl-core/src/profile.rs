@@ -149,12 +149,17 @@ pub fn list_profiles(profiles_dir: &Path) -> std::io::Result<Vec<Profile>> {
         }
         let raw = fs::read_to_string(&path).ok();
         let placeholders = raw.as_deref().map(placeholders_in).unwrap_or_default();
-        let (server, tun) = raw
+        // One parse per profile. This used to parse the same text twice, once
+        // for the server/tun summary and once for the display facts.
+        let tree: Option<Value> = raw
             .as_deref()
-            .map(extract_server_and_tun)
+            .and_then(|text| serde_json::from_str(text).ok());
+        let (server, tun) = tree
+            .as_ref()
+            .map(extract_server_and_tun_value)
             .unwrap_or((None, None));
         let source_url = read_source(profiles_dir, &name).ok().flatten();
-        let parsed_facts = raw.as_deref().and_then(extract_config_facts);
+        let parsed_facts = tree.as_ref().and_then(extract_config_facts_value);
         let config_parsed = parsed_facts.is_some();
         let facts = parsed_facts.unwrap_or_default();
 
@@ -195,10 +200,12 @@ pub fn extract_server_and_tun(json_text: &str) -> (Option<String>, Option<String
     let Ok(val) = serde_json::from_str::<Value>(json_text) else {
         return (None, None);
     };
-    (
-        extract_server_value(&val),
-        extract_interface_name_value(&val),
-    )
+    extract_server_and_tun_value(&val)
+}
+
+/// As [`extract_server_and_tun`], for callers that already hold a parsed tree.
+pub fn extract_server_and_tun_value(val: &Value) -> (Option<String>, Option<String>) {
+    (extract_server_value(val), extract_interface_name_value(val))
 }
 
 fn extract_interface_name_value(val: &Value) -> Option<String> {
@@ -301,6 +308,11 @@ pub enum TunState {
 /// mean different things to the user.
 pub fn extract_config_facts(json_text: &str) -> Option<ConfigFacts> {
     let val: Value = serde_json::from_str(json_text).ok()?;
+    extract_config_facts_value(&val)
+}
+
+/// As [`extract_config_facts`], for callers that already hold a parsed tree.
+pub fn extract_config_facts_value(val: &Value) -> Option<ConfigFacts> {
     let (outbound_type, outbound_tag, endpoint) = val
         .get("outbounds")
         .and_then(Value::as_array)

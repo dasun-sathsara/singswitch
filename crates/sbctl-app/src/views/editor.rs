@@ -10,8 +10,8 @@ use gpui_kit::component::{
     ActiveTheme as _, IconName, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    Window, div, prelude::FluentBuilder as _, px, relative,
+    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
+    Styled as _, Window, div, prelude::FluentBuilder as _, px, relative,
 };
 use sbctl_core::form_model::{DEFAULT_SERVER_PORT, DEFAULT_TUN_MTU, ProfileFormModel};
 use sbctl_core::profile::placeholders_in;
@@ -42,6 +42,14 @@ pub struct ProfileEditorPanel {
     /// the draft means leaving is never destructive, without a modal the user
     /// has to answer.
     drafts: std::collections::HashMap<String, String>,
+    /// Derived render state, recomputed only when the document changes.
+    ///
+    /// `render` used to materialize the whole editor Rope three times, run a
+    /// regex over it and parse it as JSON on every frame - twice a second while
+    /// a caret blinked. Configs are small, but the work is O(document) per frame.
+    derived_json: SharedString,
+    derived_todos: Vec<String>,
+    derived_syntax: Option<String>,
 
     json_editor: Entity<EditorState>,
 
@@ -79,6 +87,9 @@ impl ProfileEditorPanel {
             external_change_pending: false,
             validated_snapshot: None,
             drafts: std::collections::HashMap::new(),
+            derived_json: SharedString::default(),
+            derived_todos: Vec::new(),
+            derived_syntax: None,
             active_tab: EditorTab::Guided,
             json_editor,
             model: ProfileFormModel::default(),
@@ -292,7 +303,12 @@ impl ProfileEditorPanel {
     }
 
     fn is_dirty(&self, cx: &App) -> bool {
-        if self.json_editor.read(cx).value().as_ref() != self.disk_json {
+        self.is_dirty_against(&self.json_editor.read(cx).value(), cx)
+    }
+
+    /// As [`is_dirty`], for callers that already hold the materialized text.
+    fn is_dirty_against(&self, text: &str, cx: &App) -> bool {
+        if text != self.disk_json {
             return true;
         }
         if self.active_tab == EditorTab::Guided
@@ -890,16 +906,22 @@ impl Render for ProfileEditorPanel {
                 .into_any_element();
         };
 
-        let live_json = self.json_editor.read(cx).value().to_string();
-        let live_todos = placeholders_in(&live_json);
-        let syntax_status = if self.active_tab == EditorTab::Json {
-            serde_json::from_str::<serde_json::Value>(&live_json)
-                .map(|_| ())
-                .map_err(|err| format!("JSON syntax error: {err}"))
-        } else {
-            Ok(())
+        // Materialize once. Todos and syntax are cached against the text, so a
+        // repaint for an unrelated reason reuses them instead of re-scanning.
+        let live_json = self.json_editor.read(cx).value();
+        if live_json != self.derived_json {
+            self.derived_todos = placeholders_in(&live_json);
+            self.derived_syntax = serde_json::from_str::<serde_json::Value>(&live_json)
+                .err()
+                .map(|err| format!("JSON syntax error: {err}"));
+            self.derived_json = live_json.clone();
+        }
+        let live_todos = self.derived_todos.clone();
+        let syntax_status = match (&self.derived_syntax, self.active_tab) {
+            (Some(err), EditorTab::Json) => Err(err.clone()),
+            _ => Ok(()),
         };
-        let dirty = self.is_dirty(cx);
+        let dirty = self.is_dirty_against(&live_json, cx);
         let validation = self.active_validation_state(&profile_name, cx);
 
         let (is_busy, is_active, is_active_running) = {
