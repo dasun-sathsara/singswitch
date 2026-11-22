@@ -16,13 +16,31 @@ struct TrayIcons {
     broken: Icon,
 }
 
+/// Build one state's icon, falling back to `fallback` when it cannot be built.
+///
+/// Failing the whole tray for one unavailable SF Symbol downgraded the app to a
+/// plain window on an older OS.
+fn fallback_icon(state: TrayVisualState, fallback: &Icon) -> Icon {
+    build_tray_icon(state).unwrap_or_else(|err| {
+        crate::diag::log(&format!("tray icon unavailable for {state:?}: {err}"));
+        fallback.clone()
+    })
+}
+
 impl TrayIcons {
     fn build_all() -> gpui_tray::Result<Self> {
+        // A state whose icon cannot be built falls back to the disconnected
+        // icon rather than failing the whole tray: an unavailable SF Symbol on
+        // an older OS would otherwise downgrade the app to a plain window.
+        let disconnected = build_tray_icon(TrayVisualState::Disconnected)?;
+        let connected = fallback_icon(TrayVisualState::Connected, &disconnected);
+        let transitioning = fallback_icon(TrayVisualState::Transitioning, &disconnected);
+        let broken = fallback_icon(TrayVisualState::Broken, &disconnected);
         Ok(Self {
-            connected: build_tray_icon(TrayVisualState::Connected)?,
-            disconnected: build_tray_icon(TrayVisualState::Disconnected)?,
-            transitioning: build_tray_icon(TrayVisualState::Transitioning)?,
-            broken: build_tray_icon(TrayVisualState::Broken)?,
+            connected,
+            disconnected,
+            transitioning,
+            broken,
         })
     }
 

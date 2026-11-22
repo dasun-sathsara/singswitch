@@ -57,8 +57,15 @@ impl WorkspaceShell {
         store.update(cx, |s, cx| s.set_window_open(true, cx));
 
         let store_close = store.clone();
-        // Closing the window hides the app to the menu bar / tray rather than quitting.
+        // Closing hides the app to the menu bar / tray rather than quitting,
+        // but only when there is a tray to come back from: with no tray and no
+        // Dock icon the window would be unreachable.
         window.on_window_should_close(cx, move |window, cx| {
+            let has_tray = store_close.read(cx).tray_available;
+            if !has_tray {
+                crate::diag::log("close ignored: no tray to restore the window from");
+                return false;
+            }
             let b = window.bounds().size;
             store_close.update(cx, |s, cx| {
                 // Closing is a final write point: persist here, or the size is lost.

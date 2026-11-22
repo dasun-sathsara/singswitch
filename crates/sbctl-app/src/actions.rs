@@ -31,10 +31,7 @@ actions!(
         BackToConnections,
         EditSelectedProfile,
         DeleteSelectedProfile,
-        CopyPublicIp,
         RestartService,
-        RefreshStatus,
-        SyncSelectedProfile,
         OpenDoctorView,
     ]
 );
