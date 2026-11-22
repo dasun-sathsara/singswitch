@@ -353,10 +353,14 @@ impl WorkspaceShell {
                     })
                     .tooltip("Switch appearance")
                     .on_click(move |_, _, cx| {
-                        let next = if is_dark {
-                            ThemePreference::Light
-                        } else {
-                            ThemePreference::Dark
+                        // Cycle through all three, so a one-click toggle can no
+                        // longer silently overwrite a System preference that
+                        // only Settings can restore.
+                        let current = store_theme.read(cx).settings.theme;
+                        let next = match current {
+                            ThemePreference::System => ThemePreference::Light,
+                            ThemePreference::Light => ThemePreference::Dark,
+                            ThemePreference::Dark => ThemePreference::System,
                         };
                         store_theme.update(cx, |s, cx| s.set_theme_preference(next, cx));
                     }),
@@ -731,4 +735,47 @@ impl Render for WorkspaceShell {
                     ),
             )
     }
+}
+
+/// Inline feedback for one origin, rendered by the screen that owns it.
+///
+/// The banner this replaces sat at the top of the window and scrolled out of
+/// view; feedback belongs next to the control that produced it.
+pub fn notice_strip(
+    store: &Entity<AppStore>,
+    origin: crate::state::NoticeOrigin,
+    cx: &gpui_kit::App,
+) -> Option<gpui_kit::AnyElement> {
+    use gpui_kit::IntoElement as _;
+    let notice = store.read(cx).notice_for(origin)?.clone();
+    let color = match notice.tone {
+        BannerTone::Error => cx.theme().danger,
+        BannerTone::Warning => cx.theme().warning,
+        BannerTone::Success => cx.theme().success,
+        BannerTone::Info => cx.theme().muted_foreground,
+    };
+    let store_dismiss = store.clone();
+    Some(
+        h_flex()
+            .gap(px(8.0))
+            .items_center()
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(color)
+                    .child(notice.message),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new(SharedString::from(format!("notice-dismiss-{origin:?}")))
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Close)
+                    .tooltip("Dismiss")
+                    .on_click(move |_, _, cx| {
+                        store_dismiss.update(cx, |s, cx| s.dismiss_notice(cx));
+                    }),
+            )
+            .into_any_element(),
+    )
 }

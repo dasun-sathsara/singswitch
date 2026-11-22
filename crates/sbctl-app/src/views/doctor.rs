@@ -33,9 +33,18 @@ impl DoctorView {
         }
     }
 
-    /// Titles that need attention, in the order Doctor lists them.
-    fn problem_count(checks: &[DiagnosticCheck]) -> usize {
-        checks.iter().filter(|c| !c.ok).count()
+    /// True when a check needs the user's attention.
+    ///
+    /// Core sets `warning: true` only alongside `ok: true` (a check that passed
+    /// but has something worth saying, such as an unmanaged sing-box binary),
+    /// so bucketing on `!ok` alone silently hides every warning.
+    fn needs_attention(check: &DiagnosticCheck) -> bool {
+        !check.ok || check.warning
+    }
+
+    /// A check that genuinely passed with nothing to report.
+    fn is_clean_pass(check: &DiagnosticCheck) -> bool {
+        check.ok && !check.warning
     }
 
     fn render_summary_bar(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -44,8 +53,9 @@ impl DoctorView {
         let running = s.doctor_running;
         let init_error = &s.init_error;
 
-        let failed_count = checks.iter().filter(|c| !c.ok && !c.warning).count();
-        let warn_count = checks.iter().filter(|c| !c.ok && c.warning).count();
+        let failed_count = checks.iter().filter(|c| !c.ok).count();
+        let warn_count = checks.iter().filter(|c| c.warning).count();
+        let passed_count = checks.iter().filter(|c| Self::is_clean_pass(c)).count();
         let store_rerun = self.store.clone();
 
         h_flex()
@@ -67,6 +77,10 @@ impl DoctorView {
                             .text_color(cx.theme().foreground)
                             .child("Doctor"),
                     )
+                    .when_some(
+                        crate::views::notice_strip(&self.store, NoticeOrigin::Doctor, cx),
+                        |el, notice| el.child(notice),
+                    )
                     .child(
                         div()
                             .text_sm()
@@ -79,12 +93,11 @@ impl DoctorView {
                                 "Check sing-box, profiles, permissions, and service state."
                                     .to_string()
                             } else if failed_count == 0 && warn_count == 0 {
-                                format!("All {} checks passed.", checks.len())
+                                format!("All {passed_count} checks passed.")
                             } else {
                                 // Passes, warnings, and failures are exclusive buckets; a
                                 // warning is never counted as a pass.
-                                let passed = checks.iter().filter(|c| c.ok && !c.warning).count();
-                                let mut parts = vec![format!("{passed} passed")];
+                                let mut parts = vec![format!("{passed_count} passed")];
                                 if warn_count > 0 {
                                     parts.push(count_noun(warn_count, "warning", "warnings"));
                                 }
@@ -134,11 +147,18 @@ impl Render for DoctorView {
             .child(
                 v_flex()
                     .w_full()
-                    .children(checks.iter().filter(|c| !c.ok).cloned().enumerate().map(
-                        |(ix, chk)| render_check_card(ix, chk, &layout, is_busy, &self.store, cx),
-                    ))
+                    .children(
+                        checks
+                            .iter()
+                            .filter(|c| Self::needs_attention(c))
+                            .cloned()
+                            .enumerate()
+                            .map(|(ix, chk)| {
+                                render_check_card(ix, chk, &layout, is_busy, &self.store, cx)
+                            }),
+                    )
                     .when(
-                        Self::problem_count(&checks) == 0 && !checks.is_empty(),
+                        !checks.is_empty() && !checks.iter().any(Self::needs_attention),
                         |el| {
                             el.child(
                                 div()
@@ -151,7 +171,7 @@ impl Render for DoctorView {
                     ),
             )
             .when(!checks.is_empty(), |el| {
-                let passed = checks.iter().filter(|c| c.ok && !c.warning).count();
+                let passed = checks.iter().filter(|c| Self::is_clean_pass(c)).count();
                 el.child(
                     h_flex()
                         .id("doctor-passed-toggle")
@@ -188,7 +208,7 @@ impl Render for DoctorView {
                     v_flex().w_full().children(
                         checks
                             .iter()
-                            .filter(|c| c.ok)
+                            .filter(|c| Self::is_clean_pass(c))
                             .cloned()
                             .enumerate()
                             .map(|(ix, chk)| {
@@ -242,6 +262,7 @@ fn render_check_card(
     let hint = chk.hint;
     let fix = chk.fix;
     let store_hint = store.clone();
+    let store_detail = store.clone();
     let mono_font = cx.theme().mono_font_family.clone();
 
     v_flex()
@@ -270,12 +291,47 @@ fn render_check_card(
                                 .child(chk.name),
                         )
                         .child(
-                            div()
-                                .text_size(px(12.0))
-                                .font_family(crate::fonts::mono_family())
-                                .text_color(cx.theme().muted_foreground)
-                                .truncate()
-                                .child(chk.detail),
+                            h_flex()
+                                .gap(px(4.0))
+                                .items_center()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .text_size(px(12.0))
+                                        .font_family(crate::fonts::mono_family())
+                                        .text_color(cx.theme().muted_foreground)
+                                        .truncate()
+                                        .child(chk.detail.clone()),
+                                )
+                                .when(!chk.detail.is_empty(), |el| {
+                                    let detail = chk.detail.clone();
+                                    let st = store_detail.clone();
+                                    el.child(
+                                        Button::new(SharedString::from(format!(
+                                            "copy-detail-{ix}"
+                                        )))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Copy)
+                                        .tooltip("Copy detail")
+                                        .on_click(
+                                            move |_, _, cx| {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    detail.clone(),
+                                                ));
+                                                st.update(cx, |s, cx| {
+                                                    s.set_notice(
+                                                        NoticeOrigin::Doctor,
+                                                        BannerTone::Success,
+                                                        "Detail copied",
+                                                        cx,
+                                                    );
+                                                });
+                                            },
+                                        ),
+                                    )
+                                }),
                         ),
                 )
                 .when_some(fix, |row, action| {
@@ -316,6 +372,7 @@ fn render_check_card(
                             .ghost()
                             .small()
                             .icon(IconName::Copy)
+                            .tooltip("Copy command")
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(hint_copy.clone()));
                                 store_hint.update(cx, |s, cx| {
@@ -551,7 +608,7 @@ fn render_windows_helper_card(
                             Button::new("doctor-repair-win-helper")
                                 .primary()
                                 .small()
-                                .label("Repair Helper")
+                                .label("Start Helper")
                                 .disabled(is_busy)
                                 .on_click(move |_, _, cx| {
                                     store_repair.update(cx, AppStore::repair_windows_helper);

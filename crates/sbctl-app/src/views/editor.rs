@@ -824,6 +824,10 @@ impl Render for ProfileEditorPanel {
                 this.child(self.render_disk_change_banner(cx))
             })
             .child(self.render_toolbar(dirty, is_busy, is_active_running, cx))
+            .when_some(
+                crate::views::notice_strip(&self.store, crate::state::NoticeOrigin::Editor, cx),
+                |el, notice| el.child(notice),
+            )
             .when_some(validation, |this, val| {
                 this.child(self.render_validation_banner(
                     &profile_name,

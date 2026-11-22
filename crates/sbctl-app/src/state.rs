@@ -168,6 +168,8 @@ pub struct AppStore {
     pub access_log_err: Option<String>,
     error_log_offset: u64,
     access_log_offset: u64,
+    error_log_id: Option<sbctl_core::logs::LogFileId>,
+    access_log_id: Option<sbctl_core::logs::LogFileId>,
     was_running_expected: bool,
     log_poll_in_flight: bool,
     snapshot_poll_in_flight: bool,
@@ -265,6 +267,8 @@ impl AppStore {
             access_log_err: None,
             error_log_offset: 0,
             access_log_offset: 0,
+            error_log_id: None,
+            access_log_id: None,
             was_running_expected: initially_running,
             log_poll_in_flight: false,
             snapshot_poll_in_flight: false,
@@ -282,7 +286,11 @@ impl AppStore {
         store.reload_logs();
         store.restart_file_watcher(cx);
         store.start_background_pollers(cx);
-        store.refresh_ip(cx);
+        // Respect the setting at launch too, not only after a switch; the
+        // toggle's own description promises this.
+        if store.settings.auto_refresh_ip {
+            store.refresh_ip(cx);
+        }
         store.run_doctor(cx);
         store
     }
@@ -414,6 +422,8 @@ impl AppStore {
         {
             self.settings.window_width = w;
             self.settings.window_height = h;
+            // Window geometry is not a user action; a failure here should not
+            // raise a notice mid-interaction.
             let _ = self.settings.save();
         }
     }
@@ -538,22 +548,33 @@ impl AppStore {
         self.notice.as_ref().filter(|n| n.origin == origin)
     }
 
-    pub fn set_theme_preference(&mut self, pref: ThemePreference, cx: &mut Context<Self>) {
-        self.settings.theme = pref;
-        let _ = self.settings.save();
-        apply_theme(pref, None, cx);
-        cx.notify();
+    /// Persist the current settings and report a write failure.
+    ///
+    /// A read-only config directory used to swallow every toggle silently: the
+    /// switch stayed flipped while nothing was written, and the next launch
+    /// reverted it. The in-memory value is kept so the session behaves as the
+    /// user asked, but the failure is stated next to the setting.
+    fn persist_settings(&mut self, cx: &mut Context<Self>) {
+        if let Err(err) = self.settings.save() {
+            self.set_notice(
+                NoticeOrigin::Settings,
+                BannerTone::Error,
+                format!("Could not save settings: {err}"),
+                cx,
+            );
+        }
     }
 
-    pub fn set_show_profile_in_menubar(&mut self, show: bool, cx: &mut Context<Self>) {
-        self.settings.show_profile_in_menubar = show;
-        let _ = self.settings.save();
+    pub fn set_theme_preference(&mut self, pref: ThemePreference, cx: &mut Context<Self>) {
+        self.settings.theme = pref;
+        self.persist_settings(cx);
+        apply_theme(pref, None, cx);
         cx.notify();
     }
 
     pub fn set_auto_refresh_ip(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.settings.auto_refresh_ip = enabled;
-        let _ = self.settings.save();
+        self.persist_settings(cx);
         cx.notify();
     }
 
@@ -562,13 +583,7 @@ impl AppStore {
         if let Some(ctrl) = &self.ctrl {
             ctrl.set_notifications_enabled(enabled);
         }
-        let _ = self.settings.save();
-        cx.notify();
-    }
-
-    pub fn set_onboarding_dismissed(&mut self, dismissed: bool, cx: &mut Context<Self>) {
-        self.settings.onboarding_dismissed = dismissed;
-        let _ = self.settings.save();
+        self.persist_settings(cx);
         cx.notify();
     }
 
@@ -576,7 +591,7 @@ impl AppStore {
         match set_launch_at_login(enabled) {
             Ok(()) => {
                 self.settings.launch_at_login = enabled;
-                let _ = self.settings.save();
+                self.persist_settings(cx);
                 self.set_notice(
                     NoticeOrigin::Settings,
                     BannerTone::Success,
@@ -1436,7 +1451,7 @@ impl AppStore {
                             store.reload_logs();
                         }
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: NoticeOrigin::Doctor,
                             tone: BannerTone::Success,
                             message: success_msg.to_string(),
                         });
@@ -1449,14 +1464,14 @@ impl AppStore {
                             msg
                         };
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: NoticeOrigin::Doctor,
                             tone: BannerTone::Error,
                             message: banner,
                         });
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: NoticeOrigin::Doctor,
                             tone: BannerTone::Error,
                             message: err.to_string(),
                         });
@@ -1499,14 +1514,14 @@ impl AppStore {
                     Ok(()) => {
                         store.restart_file_watcher(cx);
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: NoticeOrigin::Doctor,
                             tone: BannerTone::Success,
                             message: "sbctl-agent and profiles directory ready".to_string(),
                         });
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: NoticeOrigin::Stage,
+                            origin: NoticeOrigin::Doctor,
                             tone: BannerTone::Error,
                             message: format!("{err}"),
                         });
@@ -1580,6 +1595,10 @@ impl AppStore {
         self.access_logs.clear();
         self.error_log_offset = 0;
         self.access_log_offset = 0;
+        // Refresh identity so the next poll compares against the file we just
+        // read rather than the one that existed before a rotation.
+        self.error_log_id = sbctl_core::logs::log_file_id(&layout.error_log_path);
+        self.access_log_id = sbctl_core::logs::log_file_id(&layout.access_log_path);
 
         load_tail_stream(
             &layout.error_log_path,
@@ -1607,17 +1626,34 @@ impl AppStore {
         let acc_path = layout.access_log_path.clone();
         let err_off = self.error_log_offset;
         let acc_off = self.access_log_offset;
+        let err_id = self.error_log_id;
+        let acc_id = self.access_log_id;
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let (err_res, acc_res) = cx
+            let (err_res, acc_res, err_id_now, acc_id_now) = cx
                 .background_executor()
                 .spawn({
                     let err_path = err_path.clone();
                     let acc_path = acc_path.clone();
                     async move {
+                        let err_id_now = sbctl_core::logs::log_file_id(&err_path);
+                        let acc_id_now = sbctl_core::logs::log_file_id(&acc_path);
+                        // A replaced file must be read from the start even when
+                        // it is longer than the previous offset, otherwise the
+                        // first bytes of the new file are skipped.
+                        let err_from = match (err_id, err_id_now) {
+                            (Some(prev), Some(now)) if prev.is_different_file(&now) => 0,
+                            _ => err_off,
+                        };
+                        let acc_from = match (acc_id, acc_id_now) {
+                            (Some(prev), Some(now)) if prev.is_different_file(&now) => 0,
+                            _ => acc_off,
+                        };
                         (
-                            read_appended_lines(&err_path, err_off),
-                            read_appended_lines(&acc_path, acc_off),
+                            read_appended_lines(&err_path, err_from),
+                            read_appended_lines(&acc_path, acc_from),
+                            err_id_now,
+                            acc_id_now,
                         )
                     }
                 })
@@ -1625,7 +1661,25 @@ impl AppStore {
 
             let _ = this.update(cx, |store, cx| {
                 store.log_poll_in_flight = false;
-                let mut changed = false;
+                let err_rotated = matches!(
+                    (store.error_log_id, err_id_now),
+                    (Some(prev), Some(now)) if prev.is_different_file(&now)
+                );
+                let acc_rotated = matches!(
+                    (store.access_log_id, acc_id_now),
+                    (Some(prev), Some(now)) if prev.is_different_file(&now)
+                );
+                if err_rotated {
+                    store.error_logs.clear();
+                    store.error_log_offset = 0;
+                }
+                if acc_rotated {
+                    store.access_logs.clear();
+                    store.access_log_offset = 0;
+                }
+                store.error_log_id = err_id_now;
+                store.access_log_id = acc_id_now;
+                let mut changed = err_rotated || acc_rotated;
                 changed |= apply_log_delta(
                     &mut store.error_logs,
                     &mut store.error_log_offset,
