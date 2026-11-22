@@ -385,11 +385,13 @@ impl AppStore {
         }
     }
 
-    pub fn layout(&self) -> Layout {
-        self.ctrl
-            .as_ref()
-            .map(|c| c.layout.clone())
-            .unwrap_or_else(|| self.fallback_layout.clone())
+    /// Borrowed, not cloned: callers were copying every path in the layout on
+    /// each call, and the settings and logs views call it on every render.
+    pub fn layout(&self) -> &Layout {
+        match self.ctrl.as_ref() {
+            Some(c) => &c.layout,
+            None => &self.fallback_layout,
+        }
     }
 
     /// Error and warning counts for the rail badge.
@@ -1501,7 +1503,7 @@ impl AppStore {
     }
 
     pub fn repair_macos_logs(&mut self, origin: NoticeOrigin, cx: &mut Context<Self>) {
-        let Some(root_script) = sbctl_core::doctor::macos_logs_root_script(&self.layout()) else {
+        let Some(root_script) = sbctl_core::doctor::macos_logs_root_script(self.layout()) else {
             return;
         };
         self.run_macos_admin_script(
@@ -1591,7 +1593,10 @@ impl AppStore {
         self.mutation_task = Some(task);
     }
     pub fn reload_logs(&mut self) {
-        let layout = self.layout();
+        // The borrowed layout cannot be held across the buffer mutation below,
+        // so clone the two paths rather than the whole layout.
+        let error_log_path = self.layout().error_log_path.clone();
+        let access_log_path = self.layout().access_log_path.clone();
         self.error_logs.clear();
         self.access_logs.clear();
         self.error_log_offset = 0;
@@ -1599,18 +1604,18 @@ impl AppStore {
         self.log_generation = self.log_generation.wrapping_add(1);
         // Refresh identity so the next poll compares against the file we just
         // read rather than the one that existed before a rotation.
-        self.error_log_id = sbctl_core::logs::log_file_id(&layout.error_log_path);
-        self.access_log_id = sbctl_core::logs::log_file_id(&layout.access_log_path);
+        self.error_log_id = sbctl_core::logs::log_file_id(&error_log_path);
+        self.access_log_id = sbctl_core::logs::log_file_id(&access_log_path);
 
         self.sync_log_counts();
         load_tail_stream(
-            &layout.error_log_path,
+            &error_log_path,
             &mut self.error_logs,
             &mut self.error_log_offset,
             &mut self.error_log_err,
         );
         load_tail_stream(
-            &layout.access_log_path,
+            &access_log_path,
             &mut self.access_logs,
             &mut self.access_log_offset,
             &mut self.access_log_err,
@@ -1633,9 +1638,8 @@ impl AppStore {
         }
         self.log_poll_in_flight = true;
 
-        let layout = self.layout();
-        let err_path = layout.error_log_path.clone();
-        let acc_path = layout.access_log_path.clone();
+        let err_path = self.layout().error_log_path.clone();
+        let acc_path = self.layout().access_log_path.clone();
         let err_off = self.error_log_offset;
         let acc_off = self.access_log_offset;
         let err_id = self.error_log_id;

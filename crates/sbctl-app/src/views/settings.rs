@@ -39,7 +39,7 @@ impl Render for SettingsView {
             .when_some(notice, |el, notice| el.child(notice))
             .child(render_appearance_card(settings.theme, &self.store, cx))
             .child(render_behavior_card(&settings, &self.store, cx))
-            .child(render_paths_card(&layout, &self.store, cx))
+            .child(render_paths_card(layout, &self.store, cx))
     }
 }
 
