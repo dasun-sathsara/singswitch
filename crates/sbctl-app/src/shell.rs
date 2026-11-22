@@ -63,6 +63,8 @@ pub fn install_app_menus(cx: &mut App) {
                 MenuItem::action("Save Profile", SaveCurrentProfile),
                 MenuItem::action("Save & Reconnect", SaveAndActivateProfile),
                 MenuItem::separator(),
+                MenuItem::action("Delete Profile...", crate::actions::DeleteSelectedProfile),
+                MenuItem::separator(),
                 MenuItem::action("Close Window", CloseWindow),
             ],
             disabled: false,

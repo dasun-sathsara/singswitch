@@ -512,8 +512,10 @@ impl AppStore {
     }
 
     pub fn select_profile(&mut self, name: Option<String>, cx: &mut Context<Self>) {
+        // Do not drop out of the editor on a selection change. Changing which
+        // profile you are looking at is not the same as leaving the editor, and
+        // unmounting it mid-edit made a rail click destructive.
         self.selected_profile = name;
-        self.editing = false;
         self.editor_validation = None;
         cx.notify();
     }

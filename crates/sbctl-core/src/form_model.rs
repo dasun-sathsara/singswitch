@@ -182,21 +182,31 @@ impl ProfileFormModel {
     pub fn apply_to_json_str(&self, raw: &str) -> Result<String> {
         let mut root: Value = serde_json::from_str(raw)
             .map_err(|e| SbctlError::validation(format!("invalid JSON: {e}")))?;
-        self.apply_to_value(&mut root);
+        let _skipped = self.apply_to_value(&mut root);
         serde_json::to_string_pretty(&root)
             .map(|s| format!("{s}\n"))
             .map_err(|e| SbctlError::general(format!("could not serialize JSON: {e}")))
     }
 
-    /// Mutate `root` in place for all fields controlled by the form model.
-    pub fn apply_to_value(&self, root: &mut Value) {
+    /// Write this model into `root`, returning the sections that could not be
+    /// applied because the config has no place to put them.
+    ///
+    /// Guided fields used to be dropped silently in that case while Save still
+    /// reported success, so the user's edits vanished behind a success message.
+    pub fn apply_to_value(&self, root: &mut Value) -> Vec<&'static str> {
+        let mut skipped = Vec::new();
         let Some(root_obj) = root.as_object_mut() else {
-            return;
+            return vec!["the config is not a JSON object"];
         };
         self.apply_log_section(root_obj);
-        self.apply_tun_section(root_obj);
-        self.apply_outbound_section(root_obj);
+        if !self.apply_tun_section(root_obj) {
+            skipped.push("Tunnel");
+        }
+        if !self.apply_outbound_section(root_obj) {
+            skipped.push("Outbound");
+        }
         self.apply_ipv6_route_section(root_obj);
+        skipped
     }
 
     fn apply_log_section(&self, root_obj: &mut Map<String, Value>) {
@@ -204,7 +214,7 @@ impl ProfileFormModel {
         log_obj.insert("level".to_string(), Value::String(self.log_level.clone()));
     }
 
-    fn apply_tun_section(&self, root_obj: &mut Map<String, Value>) {
+    fn apply_tun_section(&self, root_obj: &mut Map<String, Value>) -> bool {
         if let Some(tun) = find_tun_inbound_mut(root_obj) {
             tun.insert(
                 "interface_name".to_string(),
@@ -217,12 +227,15 @@ impl ProfileFormModel {
                 "strict_route".to_string(),
                 Value::Bool(self.tun_strict_route),
             );
+            true
+        } else {
+            false
         }
     }
 
-    fn apply_outbound_section(&self, root_obj: &mut Map<String, Value>) {
+    fn apply_outbound_section(&self, root_obj: &mut Map<String, Value>) -> bool {
         let Some(out) = find_primary_outbound_mut(root_obj) else {
-            return;
+            return false;
         };
         out.insert(
             "type".to_string(),
@@ -238,6 +251,7 @@ impl ProfileFormModel {
         set_or_remove_if_present(out, "password", &self.password);
         set_or_remove_if_present(out, "flow", &self.flow);
         self.apply_tls_section(out);
+        true
     }
 
     fn apply_tls_section(&self, out: &mut Map<String, Value>) {
