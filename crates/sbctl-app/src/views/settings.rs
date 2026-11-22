@@ -34,10 +34,10 @@ impl Render for SettingsView {
         v_flex()
             .size_full()
             .overflow_y_scrollbar()
-            .px(px(28.0))
-            .py(px(22.0))
-            .gap_4()
-            .child(div().text_size(px(25.0)).font_bold().child("Settings"))
+            .px(px(14.0))
+            .py(px(10.0))
+            .gap_2()
+            .child(div().text_size(px(19.0)).font_bold().child("Settings"))
             .when_some(notice, |el, notice| el.child(notice))
             .child(render_appearance_card(settings.theme, &self.store, cx))
             .child(render_behavior_card(&settings, &self.store, cx))
@@ -52,8 +52,8 @@ fn render_appearance_card(
 ) -> impl IntoElement {
     v_flex()
         .w_full()
-        .p_5()
-        .gap_4()
+        .p_3()
+        .gap_2()
         .rounded(cx.theme().radius_lg)
         .bg(surface(cx))
         .child(
@@ -147,8 +147,8 @@ fn render_behavior_card(
 
     v_flex()
         .w_full()
-        .p_5()
-        .gap_4()
+        .p_3()
+        .gap_2()
         .rounded(cx.theme().radius_lg)
         .bg(surface(cx))
         .child(
@@ -272,7 +272,7 @@ fn render_paths_card(
 
     v_flex()
         .w_full()
-        .p_5()
+        .p_3()
         .gap_3()
         .rounded(cx.theme().radius_lg)
         .bg(surface(cx))
