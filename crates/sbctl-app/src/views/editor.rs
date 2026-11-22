@@ -111,11 +111,18 @@ impl ProfileEditorPanel {
         };
 
         if target != self.loaded_profile {
-            // Preserve unsaved work for the profile being left.
+            // Preserve unsaved work for the profile being left, including edits
+            // made only on the guided form. Those never touch the JSON buffer,
+            // so keying the draft on the buffer alone lost them.
             if let Some(prev) = self.loaded_profile.clone()
                 && !self.disk_json.is_empty()
             {
-                let current = self.json_editor.read(cx).value().to_string();
+                let mut current = self.json_editor.read(cx).value().to_string();
+                if self.active_tab == EditorTab::Guided
+                    && let Ok(converted) = self.apply_guided_to_json(window, cx)
+                {
+                    current = converted;
+                }
                 if current != self.disk_json {
                     self.drafts.insert(prev, current);
                 } else {
@@ -159,8 +166,9 @@ impl ProfileEditorPanel {
                     self.load_json_into_views(&latest, window, cx);
                     self.external_change_pending = false;
                 } else {
-                    self.disk_json = latest.clone();
-                    self.disk_model = ProfileFormModel::from_json_str(&latest).ok();
+                    // Keep the baseline the user is editing against. Adopting
+                    // the outside version here silently redefined "Revert" as
+                    // "discard my work and take theirs".
                     self.external_change_pending = true;
                 }
             }
@@ -300,10 +308,20 @@ impl ProfileEditorPanel {
         let next = self.build_model_from_inputs(cx)?;
         self.model = next;
         let current = self.json_editor.read(cx).value().to_string();
-        let updated = self
-            .model
-            .apply_to_json_str(&current)
-            .map_err(|e| e.to_string())?;
+        let mut root: serde_json::Value =
+            serde_json::from_str(&current).map_err(|e| format!("invalid JSON: {e}"))?;
+        let skipped = self.model.apply_to_value(&mut root);
+        if !skipped.is_empty() {
+            // Say so rather than accepting the edit and dropping it: Save would
+            // otherwise report success over a field the file cannot hold.
+            return Err(format!(
+                "This config has no {} section to write to. Edit the JSON directly.",
+                skipped.join(" or ")
+            ));
+        }
+        let updated = serde_json::to_string_pretty(&root)
+            .map(|s| format!("{s}\n"))
+            .map_err(|e| format!("could not serialize JSON: {e}"))?;
         self.json_editor
             .update(cx, |s, cx| s.set_value(updated.clone(), window, cx));
         Ok(updated)
@@ -330,6 +348,10 @@ impl ProfileEditorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Re-sync first. `loaded_profile` is otherwise only refreshed inside
+        // render, so a keyboard save straight after changing the selection wrote
+        // the previous profile's buffer over the newly selected file.
+        self.sync_with_store(window, cx);
         let Some(name) = self.loaded_profile.clone() else {
             return;
         };
@@ -573,8 +595,22 @@ impl ProfileEditorPanel {
                                     }
                                     this.active_tab = EditorTab::Guided;
                                 } else {
-                                    let _ = this.apply_guided_to_json(window, cx);
-                                    this.active_tab = EditorTab::Json;
+                                    // Stay on the form when it cannot be converted:
+                                    // switching anyway leaves the two tabs
+                                    // disagreeing and hides the reason.
+                                    match this.apply_guided_to_json(window, cx) {
+                                        Ok(_) => this.active_tab = EditorTab::Json,
+                                        Err(err) => {
+                                            this.store.update(cx, |s, cx| {
+                                                s.set_notice(
+                                                    NoticeOrigin::Editor,
+                                                    BannerTone::Error,
+                                                    err,
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    }
                                 }
                                 cx.notify();
                             })),
@@ -591,19 +627,24 @@ impl ProfileEditorPanel {
                                 cx.notify();
                             })),
                     )
-                    .when(!is_active_running, |el| {
-                        el.child(
-                            Button::new("editor-save")
-                                .outline()
-                                .small()
-                                .label("Save")
-                                .disabled(is_busy || !dirty)
-                                .tooltip("Save without touching the running service")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.trigger_save(false, window, cx);
-                                })),
-                        )
-                    })
+                    // Always present, disabled rather than removed: hiding it
+                    // made the same slot mean "write the file" on one profile
+                    // and "write and restart the service" on the live one.
+                    .child(
+                        Button::new("editor-save")
+                            .outline()
+                            .small()
+                            .label("Save")
+                            .disabled(is_busy || !dirty || is_active_running)
+                            .tooltip(if is_active_running {
+                                "Save & Reconnect writes the file and reloads sing-box"
+                            } else {
+                                "Save without touching the running service"
+                            })
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.trigger_save(false, window, cx);
+                            })),
+                    )
                     .child(
                         Button::new("editor-save-live")
                             .primary()

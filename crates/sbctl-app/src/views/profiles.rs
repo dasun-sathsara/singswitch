@@ -456,7 +456,7 @@ impl ProfilesView {
                     .gap(px(18.0))
                     .items_baseline()
                     .border_t_1()
-                    .border_color(cx.theme().muted)
+                    .border_color(cx.theme().border)
                     .child(
                         div()
                             .w(px(118.0))
@@ -960,8 +960,12 @@ fn open_delete_dialog(
             .ok_text("Delete")
             .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
             .on_ok(move |_, _, cx| {
+                // `force` is never derived from the cached snapshot: a stale
+                // snapshot would delete a running profile without the warning
+                // this dialog exists to give. Core decides, and its refusal
+                // comes back as a notice.
                 s_ok.update(cx, |s, cx| {
-                    s.delete_profile(n_ok.clone(), is_connected, cx);
+                    s.delete_profile(n_ok.clone(), false, cx);
                 });
                 true
             })
