@@ -139,6 +139,14 @@ pub fn list_profiles(profiles_dir: &Path) -> std::io::Result<Vec<Profile>> {
             continue;
         }
         let name = name_for(&path);
+        // Entries whose name the rest of the app would reject (spaces, a leading
+        // dash, an uppercase extension) can never be activated, edited or
+        // deleted, so listing them only creates ghosts.
+        if validate_name(&name).is_err()
+            || path.extension().and_then(|e| e.to_str()) != Some("json")
+        {
+            continue;
+        }
         let raw = fs::read_to_string(&path).ok();
         let placeholders = raw.as_deref().map(placeholders_in).unwrap_or_default();
         let (server, tun) = raw

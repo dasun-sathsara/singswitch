@@ -445,7 +445,10 @@ impl AppStore {
         }
     }
 
-    pub fn update_window_size(&mut self, width: f32, height: f32) {
+    /// Record the window size. `persist` is false while a resize is in flight:
+    /// AppKit emits continuous bounds events, and a synchronous write per step
+    /// put up to ~100 blocking disk writes per second on the UI thread.
+    pub fn update_window_size(&mut self, width: f32, height: f32, persist: bool) {
         let w = width.max(MIN_WINDOW_WIDTH);
         let h = height.max(MIN_WINDOW_HEIGHT);
         if (w - self.settings.window_width).abs() >= WINDOW_SIZE_EPSILON
@@ -453,9 +456,11 @@ impl AppStore {
         {
             self.settings.window_width = w;
             self.settings.window_height = h;
-            // Window geometry is not a user action; a failure here should not
-            // raise a notice mid-interaction.
-            let _ = self.settings.save();
+            if persist {
+                // Window geometry is not a user action; a failure here should
+                // not raise a notice mid-interaction.
+                let _ = self.settings.save();
+            }
         }
     }
 

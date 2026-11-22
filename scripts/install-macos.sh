@@ -41,6 +41,16 @@ sudo touch /var/log/sing-box/error.log /var/log/sing-box/access.log
 sudo chown root:wheel /var/log/sing-box/error.log /var/log/sing-box/access.log
 sudo chmod 644 /var/log/sing-box/error.log /var/log/sing-box/access.log
 
+# Rotate the service logs. sing-box writes at info level with no output cap, so
+# without this they grow without bound for as long as the daemon runs.
+NEWSYSLOG=/etc/newsyslog.d/sbctl.conf
+sudo tee "$NEWSYSLOG" >/dev/null <<'NEWSYSLOG_EOF'
+# Managed by sbctl. sing-box service logs, rotated weekly or at 10 MB, 5 kept.
+/var/log/sing-box/error.log   root:wheel  644  5  10240  *  J
+/var/log/sing-box/access.log  root:wheel  644  5  10240  *  J
+NEWSYSLOG_EOF
+sudo chmod 644 "$NEWSYSLOG"
+
 echo "==> Installing LaunchDaemon /Library/LaunchDaemons/app.lexiflix.singbox.plist..."
 PLIST_TMP="$(mktemp)"
 cat > "$PLIST_TMP" <<PLIST

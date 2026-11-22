@@ -89,8 +89,11 @@ impl ProfileFormModel {
             if !stack.is_empty() {
                 model.tun_stack = stack;
             }
+            // Saturating conversion, not `as`: an out-of-range MTU would
+            // otherwise wrap to a small number and be written back on save,
+            // corrupting a config the user only opened.
             if let Some(mtu) = tun.get("mtu").and_then(Value::as_u64) {
-                model.tun_mtu = mtu as u32;
+                model.tun_mtu = u32::try_from(mtu).unwrap_or(model.tun_mtu);
             }
             if let Some(ar) = tun.get("auto_route").and_then(Value::as_bool) {
                 model.tun_auto_route = ar;
@@ -111,7 +114,8 @@ impl ProfileFormModel {
             }
             model.server = str_field(out, "server");
             if let Some(port) = out.get("server_port").and_then(Value::as_u64) {
-                model.server_port = port as u16;
+                // 70000 used to become 4464 and then be saved back.
+                model.server_port = u16::try_from(port).unwrap_or(model.server_port);
             }
             model.uuid = str_field(out, "uuid");
             model.password = str_field(out, "password");

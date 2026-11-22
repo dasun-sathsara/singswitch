@@ -45,17 +45,13 @@ impl Layout {
         if !self.uses_sudo() {
             return Vec::new();
         }
-        let profile_glob = format!("{}/{}", slash_path(&self.profiles_dir), "*.json");
+        // No `activate` rule: swapping the active symlink needs no root, because
+        // the installer hands the whole config directory to the target user
+        // (they already write the profile contents it points at). The old rule
+        // granted `ln -sfn <profiles>/*.json <config>`, and sudo matches the
+        // whole argv as one string, so the `*` crossed `/` and the grant covered
+        // `../` traversal to any file on the machine.
         vec![
-            SudoCommand {
-                name: "activate",
-                argv: vec![
-                    slash_path(&self.ln_bin),
-                    "-sfn".to_string(),
-                    profile_glob,
-                    slash_path(&self.active_config_path),
-                ],
-            },
             SudoCommand {
                 name: "probe",
                 argv: vec![
@@ -181,40 +177,42 @@ mod tests {
     use crate::profile::validate_name;
 
     #[test]
-    fn sudoers_blocks_traversal_and_matches_valid_profiles() {
+    fn no_rule_grants_a_globbed_or_traversable_path() {
         let layout = Layout::darwin();
-        let activate = &layout.sudo_commands()[0];
+        let rendered = layout.sudoers("dasun").expect("sudoers should render");
 
-        let valid = layout.activate_argv(std::path::Path::new(
-            "/usr/local/etc/sing-box/profiles/aws-sg.json",
-        ));
-        assert!(activate.matches(&valid));
-
-        let traversal = layout.activate_argv(std::path::Path::new(
-            "/usr/local/etc/sing-box/profiles/../../../etc/shadow.json",
-        ));
-        assert!(!activate.matches(&traversal));
-
-        let wrong_dest = vec![
-            layout.ln_bin.to_string_lossy().into_owned(),
-            "-sfn".to_string(),
-            "/usr/local/etc/sing-box/profiles/aws-sg.json".to_string(),
-            "/etc/hosts".to_string(),
-        ];
-        assert!(!activate.matches(&wrong_dest));
+        // sudo matches the whole argv as one space-joined string, so a `*` in a
+        // rule also matches `/` and `..`. No rule may contain a wildcard, and
+        // the activate grant is gone entirely rather than made "safe".
+        assert!(
+            !rendered.contains("*.json"),
+            "a globbed rule permits traversal:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains(".."),
+            "a rule may not name a parent path:\n{rendered}"
+        );
+        assert!(
+            !layout.sudo_commands().iter().any(|c| c.name == "activate"),
+            "activating needs no root: the installer hands over the config dir"
+        );
     }
 
     #[test]
-    fn sudoers_renders_expected_five_rules() {
+    fn sudoers_renders_the_expected_rules() {
         let layout = Layout::darwin();
         let rendered = layout.sudoers("dasun").expect("sudoers should render");
         let lines: Vec<_> = rendered
             .lines()
             .filter(|l| !l.starts_with('#') && !l.is_empty())
             .collect();
-        assert_eq!(lines.len(), 5);
-        assert!(lines[0].starts_with("dasun ALL=(root) NOPASSWD: "));
-        assert!(lines[0].contains("/usr/local/etc/sing-box/profiles/*.json"));
+        assert_eq!(lines.len(), layout.sudo_commands().len());
+        assert_eq!(lines.len(), 4, "activate is no longer privileged");
+        assert!(
+            lines
+                .iter()
+                .all(|l| l.starts_with("dasun ALL=(root) NOPASSWD: "))
+        );
         assert!(validate_name("aws-sg").is_ok());
     }
 

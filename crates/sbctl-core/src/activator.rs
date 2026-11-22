@@ -21,6 +21,9 @@ pub trait Activator: Send + Sync {
     fn active_name(&self) -> Result<Option<String>>;
     fn active_path(&self) -> Result<Option<PathBuf>>;
     fn activate(&self, target: &Path) -> Result<Box<dyn Rollback>>;
+    /// Forget the active profile. Called when the active profile is deleted, so
+    /// the marker never names a file that no longer exists.
+    fn clear(&self) -> Result<()>;
 }
 
 /// Hook type for performing a privileged symlink swap (for example via `sudo ln -sfn`).
@@ -73,6 +76,14 @@ impl SymlinkActivator {
 }
 
 impl Activator for SymlinkActivator {
+    fn clear(&self) -> Result<()> {
+        match fs::remove_file(&self.active_config_path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     fn active_path(&self) -> Result<Option<PathBuf>> {
         let target = match fs::read_link(&self.active_config_path) {
             Ok(target) => target,
@@ -178,6 +189,10 @@ impl CopyActivator {
 }
 
 impl Activator for CopyActivator {
+    fn clear(&self) -> Result<()> {
+        CopyActivator::clear(self)
+    }
+
     fn active_name(&self) -> Result<Option<String>> {
         match fs::read_to_string(&self.active_name_path) {
             Ok(text) => {

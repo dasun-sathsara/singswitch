@@ -374,7 +374,34 @@ fn check_active_config(layout: &Layout, activator: &dyn Activator) -> Diagnostic
     }
 }
 
+/// Warn once a log file is large enough that rotation is not keeping up.
+const LOG_SIZE_WARN_BYTES: u64 = 50 * 1024 * 1024;
+
 fn check_logs(layout: &Layout) -> DiagnosticCheck {
+    let oversized = [
+        (&layout.error_log_path, "error"),
+        (&layout.access_log_path, "access"),
+    ]
+    .into_iter()
+    .find_map(|(path, label)| {
+        let len = std::fs::metadata(path).ok()?.len();
+        (len > LOG_SIZE_WARN_BYTES).then_some((label, len))
+    });
+    if let Some((label, len)) = oversized {
+        return DiagnosticCheck {
+            name: "logs".to_string(),
+            ok: true,
+            // A warning, not a failure: logging works, it is just unrotated.
+            warning: true,
+            detail: format!(
+                "{label} log is {:.0} MB; rotation may not be configured",
+                len as f64 / (1024.0 * 1024.0)
+            ),
+            hint: "re-run scripts/install-macos.sh to install /etc/newsyslog.d/sbctl.conf"
+                .to_string(),
+            fix: None,
+        };
+    }
     match std::fs::File::open(&layout.error_log_path) {
         Ok(_) => DiagnosticCheck {
             name: "logs".to_string(),

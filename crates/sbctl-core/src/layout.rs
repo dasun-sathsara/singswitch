@@ -46,7 +46,6 @@ pub struct Layout {
     /// Service stdout/access log file path.
     pub access_log_path: PathBuf,
     /// Path to `ln` invoked via `sudo` on Darwin.
-    pub ln_bin: PathBuf,
     /// Path to `launchctl` invoked via `sudo` on Darwin.
     pub ctl_bin: PathBuf,
     /// Named pipe path for the Windows unprivileged-GUI helper service.
@@ -85,12 +84,11 @@ impl Layout {
             active_name_path: None,
             error_log_path: PathBuf::from("/var/log/sing-box/error.log"),
             access_log_path: PathBuf::from("/var/log/sing-box/access.log"),
-            ln_bin: lookup_binary("ln", &["/bin/ln", "/usr/bin/ln"], "/bin/ln"),
-            ctl_bin: lookup_binary(
-                "launchctl",
-                &["/bin/launchctl", "/usr/bin/launchctl"],
-                "/bin/launchctl",
-            ),
+            // Fixed absolute paths only. These end up inside NOPASSWD sudoers
+            // rules, so resolving them from PATH would let a user-writable
+            // directory (Homebrew, /usr/local/bin) nominate the binary that
+            // root then runs.
+            ctl_bin: privileged_binary(&["/bin/launchctl", "/usr/bin/launchctl"], "/bin/launchctl"),
             pipe_name: String::new(),
         }
     }
@@ -118,7 +116,6 @@ impl Layout {
             active_name_path: Some(sbctl.join("active-profile")),
             error_log_path: sing_box.join("logs").join("sing-box.err.log"),
             access_log_path: sing_box.join("logs").join("sing-box.out.log"),
-            ln_bin: PathBuf::new(),
             ctl_bin: PathBuf::new(),
             pipe_name: r"\\.\pipe\sbctl-control".to_string(),
         }
@@ -130,15 +127,6 @@ impl Layout {
     }
 
     /// Returns the concrete `ln` argv used to point `active_config_path` at `profile_path`.
-    pub fn activate_argv(&self, profile_path: &Path) -> Vec<String> {
-        vec![
-            self.ln_bin.to_string_lossy().into_owned(),
-            "-sfn".to_string(),
-            profile_path.to_string_lossy().into_owned(),
-            self.active_config_path.to_string_lossy().into_owned(),
-        ]
-    }
-
     /// Directory where sbctl stores non-root UI settings and lock files.
     pub fn lock_path(&self) -> PathBuf {
         self.profiles_dir.join(".sbctl.lock")
@@ -163,6 +151,20 @@ impl Layout {
 
 /// Resolve an executable on `PATH`, checking explicit fallbacks (crucial for macOS GUI bundles
 /// launched from Finder without shell `PATH` initialization).
+/// Resolve a binary that will be named in a privileged (sudoers) rule.
+///
+/// Never consults PATH: the caller's PATH is attacker-controlled for this
+/// purpose, and the result is executed as root.
+pub fn privileged_binary(candidates: &[&str], default: &str) -> PathBuf {
+    for candidate in candidates {
+        let path = Path::new(candidate);
+        if is_executable_file(path) {
+            return path.to_path_buf();
+        }
+    }
+    PathBuf::from(default)
+}
+
 pub fn lookup_binary(name: &str, fallbacks: &[&str], default: &str) -> PathBuf {
     if let Some(found) = find_in_path(name) {
         return found;
