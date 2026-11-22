@@ -159,12 +159,12 @@ fn render_behavior_card(
                 .text_base()
                 .font_semibold()
                 .text_color(cx.theme().foreground)
-                .child("Desktop and tray"),
+                .child("Behaviour"),
         )
         .child(setting_switch_row(
             "set-launch-login",
-            "Launch at login",
-            "Start sbctl in the tray when you sign in.",
+            "Open at login",
+            "Start sbctl in the menu bar or tray when you sign in.",
             settings.launch_at_login,
             false,
             move |checked, _, cx| {
@@ -174,8 +174,8 @@ fn render_behavior_card(
         ))
         .child(setting_switch_row(
             "set-menubar-title",
-            "Profile name in menu bar",
-            "Show the active profile next to the macOS menu bar icon.",
+            "Show the connected profile name",
+            "Use the profile name as the menu bar title on macOS.",
             settings.show_profile_in_menubar,
             !cfg!(target_os = "macos"),
             move |checked, _, cx| {
@@ -185,8 +185,8 @@ fn render_behavior_card(
         ))
         .child(setting_switch_row(
             "set-auto-ip",
-            "Refresh IP on switch",
-            "Fetch public IP from ipinfo.io after connecting or disconnecting.",
+            "Refresh the public IP after connect",
+            "One lookup at launch and after each switch, never on a timer.",
             settings.auto_refresh_ip,
             false,
             move |checked, _, cx| {
@@ -196,8 +196,8 @@ fn render_behavior_card(
         ))
         .child(setting_switch_row(
             "set-notifications",
-            "Notifications",
-            "Show system alerts when profiles switch or fail.",
+            "Desktop notifications",
+            "Show a system notification when the service switches or fails.",
             settings.desktop_notifications,
             false,
             move |checked, _, cx| {
@@ -218,24 +218,27 @@ fn render_behavior_card(
                                 .text_sm()
                                 .font_medium()
                                 .text_color(cx.theme().foreground)
-                                .child("Setup guide"),
+                                .child("Setup"),
                         )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Show the first-run setup card on the dashboard."),
+                                .child(
+                                    "Show the welcome steps again on a healthy install. \
+                                 Failures always show, whatever this setting says.",
+                                ),
                         ),
                 )
                 .child(
                     Button::new("set-show-onboarding")
                         .outline()
                         .small()
-                        .label("Show Guide")
+                        .label("Show setup again")
                         .on_click(move |_, _, cx| {
                             store_guide.update(cx, |s, cx| {
                                 s.set_onboarding_dismissed(false, cx);
-                                s.set_tab(NavTab::Dashboard, cx);
+                                s.set_tab(NavTab::Profiles, cx);
                             });
                         }),
                 ),

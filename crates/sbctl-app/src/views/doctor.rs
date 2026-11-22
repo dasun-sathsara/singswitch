@@ -2,13 +2,12 @@ use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
     App, ClipboardItem, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
-    Styled as _, Window, div, prelude::FluentBuilder as _,
+    Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 use sbctl_core::doctor::{
     DiagnosticCheck, FixAction, macos_sudoers_install_command, macos_sudoers_root_script,
@@ -52,10 +51,10 @@ impl DoctorView {
                     .gap_1()
                     .child(
                         div()
-                            .text_base()
-                            .font_semibold()
+                            .text_size(px(20.0))
+                            .font_bold()
                             .text_color(cx.theme().foreground)
-                            .child("Diagnostics"),
+                            .child("Doctor"),
                     )
                     .child(
                         div()
@@ -71,9 +70,17 @@ impl DoctorView {
                             } else if failed_count == 0 && warn_count == 0 {
                                 format!("All {} checks passed.", checks.len())
                             } else {
-                                let errs = count_noun(failed_count, "error", "errors");
-                                let warns = count_noun(warn_count, "warning", "warnings");
-                                format!("{errs}, {warns} across {} checks.", checks.len())
+                                // Passes, warnings, and failures are exclusive buckets; a
+                                // warning is never counted as a pass.
+                                let passed = checks.iter().filter(|c| c.ok && !c.warning).count();
+                                let mut parts = vec![format!("{passed} passed")];
+                                if warn_count > 0 {
+                                    parts.push(count_noun(warn_count, "warning", "warnings"));
+                                }
+                                if failed_count > 0 {
+                                    parts.push(count_noun(failed_count, "failure", "failures"));
+                                }
+                                parts.join(", ")
                             }),
                     ),
             )
@@ -143,20 +150,23 @@ fn render_check_card(
     store: &Entity<AppStore>,
     cx: &App,
 ) -> impl IntoElement {
-    let (icon_el, badge) = if chk.ok && !chk.warning {
+    let (icon_el, status_word, status_color) = if chk.ok && !chk.warning {
         (
             Icon::new(IconName::CircleCheck).text_color(cx.theme().success),
-            Tag::success().small().child("OK"),
+            "OK",
+            cx.theme().muted_foreground,
         )
     } else if chk.warning {
         (
             Icon::new(IconName::TriangleAlert).text_color(cx.theme().warning),
-            Tag::warning().small().child("Warning"),
+            "Warning",
+            cx.theme().warning,
         )
     } else {
         (
             Icon::new(IconName::CircleX).text_color(cx.theme().danger),
-            Tag::danger().small().child("Failed"),
+            "Failed",
+            cx.theme().danger,
         )
     };
 
@@ -167,40 +177,50 @@ fn render_check_card(
 
     v_flex()
         .w_full()
-        .p_4()
-        .gap_2()
-        .rounded(cx.theme().radius_lg)
-        .bg(surface_card_bg(cx))
-        .border_1()
+        .border_b_1()
         .border_color(cx.theme().border)
         .child(
             h_flex()
-                .justify_between()
+                .w_full()
+                .min_h(px(44.0))
+                .py(px(6.0))
+                .gap(px(12.0))
                 .items_center()
+                // fixed slot keeps every glyph on one optical line
+                .child(div().w(px(20.0)).flex_none().child(icon_el))
                 .child(
-                    h_flex().gap_2().items_center().child(icon_el).child(
-                        div()
-                            .text_sm()
-                            .font_semibold()
-                            .text_color(cx.theme().foreground)
-                            .child(chk.name),
-                    ),
+                    v_flex()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_bold()
+                                .text_color(cx.theme().foreground)
+                                .child(chk.name),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_family(crate::fonts::mono_family())
+                                .text_color(cx.theme().muted_foreground)
+                                .truncate()
+                                .child(chk.detail),
+                        ),
                 )
+                .when_some(fix, |row, action| {
+                    row.child(render_fix_button(ix, action, layout, is_busy, store))
+                })
                 .child(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .when_some(fix, |row, action| {
-                            row.child(render_fix_button(ix, action, layout, is_busy, store))
-                        })
-                        .child(badge),
+                    div()
+                        .w(px(72.0))
+                        .flex_none()
+                        .text_right()
+                        .text_size(px(12.0))
+                        .text_color(status_color)
+                        .child(status_word),
                 ),
-        )
-        .child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().foreground)
-                .child(chk.detail),
         )
         .when(!hint.is_empty(), |this| {
             let hint_copy = hint.clone();

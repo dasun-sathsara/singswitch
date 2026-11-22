@@ -8,6 +8,8 @@ mod actions;
 #[cfg(any(target_os = "macos", windows))]
 mod diag;
 #[cfg(any(target_os = "macos", windows))]
+mod fonts;
+#[cfg(any(target_os = "macos", windows))]
 mod icons;
 #[cfg(any(target_os = "macos", windows))]
 mod notifier;
@@ -66,6 +68,7 @@ mod desktop {
             .with_quit_mode(QuitMode::Explicit)
             .run(move |cx: &mut App| {
                 gpui_kit::init(cx);
+                crate::fonts::install(cx);
 
                 let store = cx.new(AppStore::new);
                 let theme_pref = store.read(cx).settings.theme;
@@ -102,27 +105,20 @@ mod desktop {
             KeyBinding::new(
                 "cmd-1",
                 SelectTab {
-                    tab: NavTab::Dashboard,
-                },
-                None,
-            ),
-            KeyBinding::new(
-                "cmd-2",
-                SelectTab {
                     tab: NavTab::Profiles,
                 },
                 None,
             ),
-            KeyBinding::new("cmd-3", SelectTab { tab: NavTab::Logs }, None),
+            KeyBinding::new("cmd-2", SelectTab { tab: NavTab::Logs }, None),
             KeyBinding::new(
-                "cmd-4",
+                "cmd-3",
                 SelectTab {
                     tab: NavTab::Doctor,
                 },
                 None,
             ),
             KeyBinding::new(
-                "cmd-5",
+                "cmd-4",
                 SelectTab {
                     tab: NavTab::Settings,
                 },
@@ -133,6 +129,8 @@ mod desktop {
             KeyBinding::new("cmd-s", SaveCurrentProfile, None),
             KeyBinding::new("cmd-shift-s", SaveAndActivateProfile, None),
             KeyBinding::new("cmd-r", RefreshIp, None),
+            KeyBinding::new("cmd-e", crate::actions::EditSelectedProfile, None),
+            KeyBinding::new("cmd-shift-k", ToggleService, None),
             KeyBinding::new("cmd-,", OpenSettingsView, None),
             KeyBinding::new("cmd-w", CloseWindow, None),
             KeyBinding::new("cmd-q", QuitApp, None),
@@ -143,27 +141,20 @@ mod desktop {
             KeyBinding::new(
                 "ctrl-1",
                 SelectTab {
-                    tab: NavTab::Dashboard,
-                },
-                None,
-            ),
-            KeyBinding::new(
-                "ctrl-2",
-                SelectTab {
                     tab: NavTab::Profiles,
                 },
                 None,
             ),
-            KeyBinding::new("ctrl-3", SelectTab { tab: NavTab::Logs }, None),
+            KeyBinding::new("ctrl-2", SelectTab { tab: NavTab::Logs }, None),
             KeyBinding::new(
-                "ctrl-4",
+                "ctrl-3",
                 SelectTab {
                     tab: NavTab::Doctor,
                 },
                 None,
             ),
             KeyBinding::new(
-                "ctrl-5",
+                "ctrl-4",
                 SelectTab {
                     tab: NavTab::Settings,
                 },
@@ -174,6 +165,8 @@ mod desktop {
             KeyBinding::new("ctrl-s", SaveCurrentProfile, None),
             KeyBinding::new("ctrl-shift-s", SaveAndActivateProfile, None),
             KeyBinding::new("ctrl-r", RefreshIp, None),
+            KeyBinding::new("ctrl-e", crate::actions::EditSelectedProfile, None),
+            KeyBinding::new("ctrl-shift-k", ToggleService, None),
             KeyBinding::new("ctrl-,", OpenSettingsView, None),
             KeyBinding::new("ctrl-w", CloseWindow, None),
             KeyBinding::new("ctrl-q", QuitApp, None),
@@ -339,6 +332,33 @@ mod desktop {
     }
 
     fn register_window_actions(cx: &mut App) {
+        cx.on_action(|_: &crate::actions::BackToConnections, cx: &mut App| {
+            let store = cx.global::<AppGlobalState>().store.clone();
+            store.update(cx, |s, cx| s.end_edit(cx));
+        });
+
+        cx.on_action(|_: &crate::actions::EditSelectedProfile, cx: &mut App| {
+            let store = cx.global::<AppGlobalState>().store.clone();
+            store.update(cx, |s, cx| s.begin_edit(cx));
+            open_or_focus_main_window(cx);
+        });
+
+        cx.on_action(|_: &crate::actions::RestartService, cx: &mut App| {
+            let store = cx.global::<AppGlobalState>().store.clone();
+            store.update(cx, AppStore::restart_active);
+        });
+
+        cx.on_action(|_: &crate::actions::RefreshStatus, cx: &mut App| {
+            let store = cx.global::<AppGlobalState>().store.clone();
+            store.update(cx, |s, cx| s.refresh_snapshot(true, cx));
+        });
+
+        cx.on_action(|_: &crate::actions::DeleteSelectedProfile, cx: &mut App| {
+            with_main_window_and_store(cx, |store, window, cx| {
+                crate::views::profiles::confirm_delete_selected(store, window, cx);
+            });
+        });
+
         cx.on_action(|_: &NewProfileDialog, cx: &mut App| {
             with_main_window_and_store(cx, |store, window, cx| {
                 store.update(cx, |s, cx| s.set_tab(NavTab::Profiles, cx));

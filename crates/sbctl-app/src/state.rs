@@ -30,6 +30,23 @@ const POLL_LOG_INTERVAL: Duration = Duration::from_millis(800);
 const SNAPSHOT_TICK_INTERVAL: Duration = Duration::from_secs(1);
 const WATCHER_DEBOUNCE: Duration = Duration::from_millis(150);
 
+/// What the setup region should say, if anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetupCondition {
+    /// Nothing to resolve.
+    None,
+    /// The controller could not be created; the app cannot see the service.
+    InitFailed(String),
+    /// The active configuration is broken and is shown with its real reason.
+    Broken(String),
+    /// A blocking Doctor check, named as Doctor names it.
+    Blocked(String),
+    /// No profiles at all.
+    EmptyLibrary,
+    /// Profiles exist but none is ready; carries their names.
+    Unfinished(Vec<String>),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BannerTone {
     Info,
@@ -107,6 +124,8 @@ pub struct AppStore {
     pub doctor_running: bool,
     pub selected_tab: NavTab,
     pub selected_profile: Option<String>,
+    /// True while the Connections stage is showing the editor for the selected profile.
+    pub editing: bool,
     pub log_stream: LogStreamKind,
     pub log_follow: bool,
     pub log_severity: LogSeverityFilter,
@@ -197,7 +216,8 @@ impl AppStore {
             editor_validation: None,
             doctor_checks: Vec::new(),
             doctor_running: false,
-            selected_tab: NavTab::Dashboard,
+            selected_tab: NavTab::Profiles,
+            editing: false,
             selected_profile,
             log_stream: LogStreamKind::Error,
             log_follow: true,
@@ -285,17 +305,40 @@ impl AppStore {
         (errors, warnings)
     }
 
-    pub fn needs_onboarding(&self) -> bool {
-        if self.init_error.is_some() {
-            return false;
+    /// Which setup condition, if any, the user needs to resolve. Ordered by
+    /// severity: a failure always wins over a welcome, and none of these is
+    /// suppressed by `onboarding_dismissed` except the welcome itself.
+    pub fn setup_condition(&self) -> SetupCondition {
+        if let Some(err) = &self.init_error {
+            return SetupCondition::InitFailed(err.clone());
         }
-        let no_ready_profile =
-            self.snapshot.profiles.is_empty() || !self.snapshot.profiles.iter().any(Profile::ready);
-        let blocking_check = self
+        if let Some(reason) = &self.snapshot.broken {
+            return SetupCondition::Broken(reason.clone());
+        }
+        let has_profiles = !self.snapshot.profiles.is_empty();
+        let any_ready = self.snapshot.profiles.iter().any(Profile::ready);
+        let blocking = self
             .doctor_checks
             .iter()
-            .any(|c| (!c.ok && !c.warning) || c.name == "helper service" && !c.ok);
-        no_ready_profile || blocking_check
+            .find(|c| (!c.ok && !c.warning) || (c.name == "helper service" && !c.ok));
+
+        if let Some(check) = blocking {
+            return SetupCondition::Blocked(check.name.clone());
+        }
+        if !has_profiles {
+            return SetupCondition::EmptyLibrary;
+        }
+        if !any_ready {
+            let names: Vec<String> = self
+                .snapshot
+                .profiles
+                .iter()
+                .filter(|p| !p.ready())
+                .map(|p| p.name.clone())
+                .collect();
+            return SetupCondition::Unfinished(names);
+        }
+        SetupCondition::None
     }
 
     pub fn set_window_open(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -374,6 +417,24 @@ impl AppStore {
 
     pub fn select_profile(&mut self, name: Option<String>, cx: &mut Context<Self>) {
         self.selected_profile = name;
+        self.editing = false;
+        self.editor_validation = None;
+        cx.notify();
+    }
+
+    /// Open the editor for the selected profile.
+    pub fn begin_edit(&mut self, cx: &mut Context<Self>) {
+        if self.selected_profile.is_some() {
+            self.editing = true;
+            self.selected_tab = NavTab::Profiles;
+            self.editor_validation = None;
+            cx.notify();
+        }
+    }
+
+    /// Leave the editor and return to the Connections stage.
+    pub fn end_edit(&mut self, cx: &mut Context<Self>) {
+        self.editing = false;
         self.editor_validation = None;
         cx.notify();
     }
@@ -429,12 +490,6 @@ impl AppStore {
 
     pub fn set_onboarding_dismissed(&mut self, dismissed: bool, cx: &mut Context<Self>) {
         self.settings.onboarding_dismissed = dismissed;
-        let _ = self.settings.save();
-        cx.notify();
-    }
-
-    pub fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
-        self.settings.sidebar_collapsed = collapsed;
         let _ = self.settings.save();
         cx.notify();
     }
@@ -558,13 +613,27 @@ impl AppStore {
     }
 
     pub fn connect_active(&mut self, cx: &mut Context<Self>) {
-        let target = self.snapshot.active.clone().or_else(|| {
+        // Prefer the selected profile, then the remembered active one, but never
+        // an unready profile: activating one replaces a working config with a
+        // broken half-finished document.
+        let ready = |name: &String| {
             self.snapshot
                 .profiles
                 .iter()
-                .find(|p| p.ready())
-                .map(|p| p.name.clone())
-        });
+                .any(|p| &p.name == name && p.ready())
+        };
+        let target = self
+            .selected_profile
+            .clone()
+            .filter(|n| ready(n))
+            .or_else(|| self.snapshot.active.clone().filter(|n| ready(n)))
+            .or_else(|| {
+                self.snapshot
+                    .profiles
+                    .iter()
+                    .find(|p| p.ready())
+                    .map(|p| p.name.clone())
+            });
         let Some(name) = target else {
             self.selected_tab = NavTab::Profiles;
             self.set_banner(

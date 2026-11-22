@@ -1,6 +1,7 @@
 use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Editor, EditorState, Input, InputState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
@@ -14,9 +15,10 @@ use gpui_kit::{
 };
 use sbctl_core::form_model::{DEFAULT_SERVER_PORT, DEFAULT_TUN_MTU, ProfileFormModel};
 use sbctl_core::profile::placeholders_in;
+use std::rc::Rc;
 
+use crate::actions::BackToConnections;
 use crate::state::{AppStore, BannerTone, EditorValidationState};
-use crate::theme::surface_card_bg;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum EditorTab {
@@ -451,6 +453,9 @@ impl ProfileEditorPanel {
             })
     }
 
+    /// Pinned editor toolbar: identity and connection state on the left, then
+    /// exactly one live save action. Format, validate, and draft saves live in
+    /// the overflow so the primary choice is never ambiguous.
     fn render_toolbar(
         &self,
         dirty: bool,
@@ -458,15 +463,55 @@ impl ProfileEditorPanel {
         is_active_running: bool,
         cx: &Context<Self>,
     ) -> impl IntoElement {
+        let name = self.loaded_profile.clone().unwrap_or_default();
+        let ready = {
+            let s = self.store.read(cx);
+            s.snapshot
+                .profiles
+                .iter()
+                .find(|p| p.name == name)
+                .is_some_and(sbctl_core::profile::Profile::ready)
+        };
+
         h_flex()
             .w_full()
             .justify_between()
             .items_center()
-            .gap_2()
-            .flex_wrap()
+            .gap(px(10.0))
+            .h(px(44.0))
+            .flex_none()
             .child(
                 h_flex()
-                    .gap_2()
+                    .gap(px(8.0))
+                    .items_center()
+                    .min_w(px(0.0))
+                    .child(
+                        Button::new("editor-back")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::ChevronLeft)
+                            .tooltip("Back to Connections")
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.dispatch_action(&BackToConnections);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Editing"),
+                    )
+                    .child(div().text_sm().font_bold().truncate().child(name))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(if dirty { "unsaved changes" } else { "" }),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap(px(8.0))
                     .items_center()
                     .child(
                         TabBar::new("editor-mode-tabs")
@@ -492,78 +537,90 @@ impl ProfileEditorPanel {
                                 cx.notify();
                             })),
                     )
-                    .when(dirty, |t| t.child(Tag::info().xsmall().child("Modified"))),
+                    .child(self.render_overflow(is_busy, cx))
+                    .child(
+                        Button::new("editor-revert")
+                            .outline()
+                            .small()
+                            .label("Revert")
+                            .disabled(!dirty || is_busy)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.force_reload_selected(window, cx);
+                                cx.notify();
+                            })),
+                    )
+                    .when(!is_active_running, |el| {
+                        el.child(
+                            Button::new("editor-save")
+                                .outline()
+                                .small()
+                                .label("Save")
+                                .disabled(is_busy || !dirty)
+                                .tooltip("Save without touching the running service")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.trigger_save(false, window, cx);
+                                })),
+                        )
+                    })
+                    .child(
+                        Button::new("editor-save-live")
+                            .primary()
+                            .small()
+                            .label(if is_active_running {
+                                "Save & Reconnect"
+                            } else {
+                                "Save & Connect"
+                            })
+                            .disabled(is_busy || (!dirty && is_active_running) || !ready)
+                            .tooltip(if ready {
+                                "Save and apply to sing-box"
+                            } else {
+                                "Finish the TODO values first"
+                            })
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.trigger_save(true, window, cx);
+                            })),
+                    ),
             )
-            .child(self.render_toolbar_actions(dirty, is_busy, is_active_running, cx))
     }
 
-    fn render_toolbar_actions(
-        &self,
-        dirty: bool,
-        is_busy: bool,
-        is_active_running: bool,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        h_flex()
-            .gap_2()
-            .when(self.active_tab == EditorTab::Json, |this| {
-                this.child(
-                    Button::new("editor-format-json")
-                        .outline()
-                        .small()
-                        .label("Format")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.format_json(window, cx);
-                        })),
+    /// Secondary editor actions, kept out of the primary action row.
+    fn render_overflow(&self, is_busy: bool, cx: &Context<Self>) -> impl IntoElement {
+        let validate = Rc::new(cx.listener(|this, _, window, cx| this.validate_live(window, cx)));
+        let format = Rc::new(cx.listener(|this, _, window, cx| this.format_json(window, cx)));
+        let draft = Rc::new(cx.listener(|this, _, window, cx| {
+            let raw = this.json_editor.read(cx).value().to_string();
+            if let Some(name) = this.loaded_profile.clone() {
+                open_save_draft_dialog(name, raw, this.store.clone(), window, cx);
+            }
+        }));
+
+        Button::new("editor-overflow")
+            .ghost()
+            .xsmall()
+            .icon(IconName::Ellipsis)
+            .tooltip("More actions")
+            .dropdown_menu(move |menu, _, _| {
+                let v = validate.clone();
+                let f = format.clone();
+                let d = draft.clone();
+                menu.item(
+                    PopupMenuItem::new("Validate")
+                        .disabled(is_busy)
+                        .on_click(move |ev, w, cx| v(ev, w, cx)),
+                )
+                .item(
+                    PopupMenuItem::new("Format JSON")
+                        .disabled(is_busy)
+                        .on_click(move |ev, w, cx| f(ev, w, cx)),
+                )
+                .separator()
+                .item(
+                    PopupMenuItem::new("Save Draft")
+                        .disabled(is_busy)
+                        .on_click(move |ev, w, cx| d(ev, w, cx)),
                 )
             })
-            .child(
-                Button::new("editor-revert")
-                    .outline()
-                    .small()
-                    .label("Revert")
-                    .disabled(!dirty || is_busy)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.force_reload_selected(window, cx);
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("editor-validate")
-                    .outline()
-                    .small()
-                    .icon(IconName::Check)
-                    .label("Validate")
-                    .disabled(is_busy)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.validate_live(window, cx);
-                    })),
-            )
-            .child(
-                Button::new("editor-save")
-                    .outline()
-                    .small()
-                    .label("Save")
-                    .disabled(is_busy || !dirty)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.trigger_save(false, window, cx);
-                    })),
-            )
-            .child(
-                Button::new("editor-save-activate")
-                    .primary()
-                    .small()
-                    .icon(IconName::Play)
-                    .label(if is_active_running {
-                        "Save & Reconnect"
-                    } else {
-                        "Save & Connect"
-                    })
-                    .disabled(is_busy)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.trigger_save(true, window, cx);
-                    })),
-            )
     }
 
     fn render_guided_form(&self, cx: &Context<Self>) -> gpui_kit::AnyElement {
@@ -572,11 +629,6 @@ impl ProfileEditorPanel {
             .w_full()
             .overflow_y_scrollbar()
             .gap_4()
-            .p_4()
-            .rounded(cx.theme().radius_lg)
-            .bg(surface_card_bg(cx))
-            .border_1()
-            .border_color(cx.theme().border)
             .child(section_heading("Outbound", cx))
             .child(form_row_2(
                 labeled_input("Protocol", &self.in_outbound_type, cx),
