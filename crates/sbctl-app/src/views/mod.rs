@@ -514,13 +514,14 @@ impl WorkspaceShell {
 
                         v_flex()
                             .id(SharedString::from(format!("row-{}", p.name)))
-                            .px(px(10.0))
-                            .py(px(7.0))
-                            .gap(px(2.0))
-                            .rounded(px(8.0))
+                            .h(px(48.0))
+                            .px(px(8.0))
+                            .gap(px(1.0))
+                            .justify_center()
+                            .rounded(px(7.0))
                             .cursor_pointer()
                             .when(is_selected, |el| el.bg(cx.theme().sidebar_accent))
-                            .hover(|el| el.bg(cx.theme().muted))
+                            .hover(|el| el.bg(crate::theme::hover_wash(cx)))
                             .on_click(move |_, _, cx| {
                                 // Inspecting always lands on Connections, even
                                 // when the click came from Logs or Settings.
@@ -589,6 +590,26 @@ impl WorkspaceShell {
                                                 .child(format!("{todo} TODO")),
                                         )
                                     })
+                                    .when(is_running, |el| {
+                                        el.child(
+                                            h_flex()
+                                                .flex_none()
+                                                .gap(px(4.0))
+                                                .items_center()
+                                                .child(
+                                                    div()
+                                                        .size(px(6.0))
+                                                        .rounded_full()
+                                                        .bg(cx.theme().success),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().success)
+                                                        .child("Connected"),
+                                                ),
+                                        )
+                                    })
                                     .when_some(verb, |el, verb| {
                                         let st = st_switch.clone();
                                         let name = switch_name.clone();
@@ -643,7 +664,7 @@ impl WorkspaceShell {
                                 .rounded(px(6.0))
                                 .cursor_pointer()
                                 .when(on, |el| el.bg(cx.theme().sidebar_accent))
-                                .hover(|el| el.bg(cx.theme().muted))
+                                .hover(|el| el.bg(crate::theme::hover_wash(cx)))
                                 .on_click(move |_, _, cx| {
                                     st.update(cx, |s, cx| s.set_tab(target, cx));
                                 })

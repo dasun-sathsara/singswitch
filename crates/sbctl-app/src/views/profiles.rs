@@ -397,14 +397,16 @@ impl ProfilesView {
                         ),
                 )
             })
-            // Provenance — configured values only
+            // Provenance — one grouped region, configured values only
             .child(
                 v_flex()
-                    .mt(px(22.0))
-                    .border_t_1()
-                    .border_color(cx.theme().border)
+                    .mt(px(20.0))
+                    .rounded(px(9.0))
+                    .border_1()
+                    .border_color(crate::theme::control_edge(cx))
+                    .bg(cx.theme().input)
                     .child(prov_row(
-                        "Configured outbound",
+                        "Outbound",
                         match facts.as_ref() {
                             None => "unavailable · config could not be parsed".to_string(),
                             Some(f) => match (&f.outbound_type, &f.endpoint) {
@@ -447,14 +449,15 @@ impl ProfilesView {
             .child(
                 h_flex()
                     .w_full()
-                    .py(px(10.0))
-                    .gap(px(10.0))
-                    .items_center()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
+                    .px(px(14.0))
+                    .py(px(11.0))
+                    .gap(px(18.0))
+                    .items_baseline()
+                    .border_t_1()
+                    .border_color(cx.theme().muted)
                     .child(
                         div()
-                            .w(px(132.0))
+                            .w(px(118.0))
                             .flex_none()
                             .text_size(px(12.0))
                             .text_color(cx.theme().muted_foreground)
@@ -819,14 +822,13 @@ fn prov_row(
     cx: &Context<ProfilesView>,
 ) -> impl IntoElement {
     h_flex()
-        .min_h(px(36.0))
-        .border_b_1()
-        .border_color(cx.theme().border)
-        .gap(px(16.0))
-        .items_center()
+        .px(px(14.0))
+        .py(px(11.0))
+        .gap(px(18.0))
+        .items_baseline()
         .child(
             div()
-                .w(px(132.0))
+                .w(px(118.0))
                 .flex_none()
                 .text_size(px(12.0))
                 .text_color(cx.theme().muted_foreground)
@@ -855,14 +857,12 @@ fn fact_row(
     cx: &Context<ProfilesView>,
 ) -> impl IntoElement {
     h_flex()
-        .min_h(px(32.0))
-        .border_b_1()
-        .border_color(cx.theme().border)
+        .min_h(px(30.0))
         .gap(px(16.0))
-        .items_center()
+        .items_baseline()
         .child(
             div()
-                .w(px(132.0))
+                .w(px(128.0))
                 .flex_none()
                 .text_size(px(12.0))
                 .text_color(cx.theme().muted_foreground)
