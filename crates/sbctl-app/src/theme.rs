@@ -117,46 +117,52 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.background = rgb(0x161513).into();
             theme.foreground = rgb(0xEFEDE8).into();
             theme.muted = rgb(0x232220).into();
-            theme.muted_foreground = rgb(0x9A968C).into();
-            theme.border = rgb(0x2E2C29).into();
+            theme.muted_foreground = rgb(0xB8B4AA).into();
+            theme.border = rgb(0x35322E).into();
+            theme.input = rgb(0x1D1C1A).into();
             theme.title_bar = rgb(0x161513).into();
-            theme.title_bar_border = rgb(0x2E2C29).into();
+            theme.title_bar_border = rgb(0x35322E).into();
             theme.sidebar = rgb(0x1D1C1A).into();
-            theme.sidebar_border = rgb(0x2E2C29).into();
-            theme.sidebar_accent = rgb(0x2C2B34).into();
+            theme.sidebar_border = rgb(0x35322E).into();
+            theme.sidebar_accent = rgb(0x303644).into();
             theme.sidebar_accent_foreground = rgb(0xEFEDE8).into();
-            theme.primary = rgb(0x9C97F0).into();
-            theme.primary_hover = rgb(0xADA9F5).into();
-            theme.primary_active = rgb(0x8A85E6).into();
-            theme.primary_foreground = rgb(0x161513).into();
-            theme.success = rgb(0x46C97B).into();
-            theme.warning = rgb(0xE5A93B).into();
-            theme.danger = rgb(0xF07A6E).into();
-            theme.ring = rgb(0x9C97F0).into();
-            theme.selection = rgb(0x2C2B34).into();
-            theme.caret = rgb(0x9C97F0).into();
+            // Primary = explicit action (Connect, Switch): a blue, not the
+            // selection colour, so "act" and "selected" never look alike.
+            theme.primary = rgb(0x9DBCF0).into();
+            theme.primary_hover = rgb(0xB2CCF5).into();
+            theme.primary_active = rgb(0x8AAAE0).into();
+            theme.primary_foreground = rgb(0x172033).into();
+            theme.success = rgb(0x73D99B).into();
+            theme.warning = rgb(0xF4C46B).into();
+            theme.danger = rgb(0xFF9D93).into();
+            theme.ring = rgb(0x9DBCF0).into();
+            theme.selection = rgb(0x303644).into();
+            theme.caret = rgb(0x9DBCF0).into();
         } else {
             theme.background = rgb(0xF7F6F3).into();
             theme.foreground = rgb(0x171613).into();
             theme.muted = rgb(0xEFEEE9).into();
-            theme.muted_foreground = rgb(0x6E6A62).into();
-            theme.border = rgb(0xE2E0D9).into();
+            theme.muted_foreground = rgb(0x5E5A52).into();
+            theme.border = rgb(0x716D66).into();
+            theme.input = rgb(0xFFFFFF).into();
             theme.title_bar = rgb(0xF7F6F3).into();
             theme.title_bar_border = rgb(0xE2E0D9).into();
             theme.sidebar = rgb(0xFFFFFF).into();
             theme.sidebar_border = rgb(0xE2E0D9).into();
-            theme.sidebar_accent = rgb(0xF2F2F9).into();
+            // Selection is neutral, never lavender: a viewed row must not read
+            // as "active" or as a brand accent.
+            theme.sidebar_accent = rgb(0xE8EBEF).into();
             theme.sidebar_accent_foreground = rgb(0x171613).into();
-            theme.primary = rgb(0x4A47A3).into();
-            theme.primary_hover = rgb(0x3D3A8C).into();
-            theme.primary_active = rgb(0x333077).into();
+            theme.primary = rgb(0x234F86).into();
+            theme.primary_hover = rgb(0x1C4270).into();
+            theme.primary_active = rgb(0x16355C).into();
             theme.primary_foreground = rgb(0xFFFFFF).into();
-            theme.success = rgb(0x1C7A45).into();
+            theme.success = rgb(0x166534).into();
             theme.warning = rgb(0x8A5300).into();
             theme.danger = rgb(0xA3261D).into();
-            theme.ring = rgb(0x4A47A3).into();
-            theme.selection = rgb(0xF2F2F9).into();
-            theme.caret = rgb(0x4A47A3).into();
+            theme.ring = rgb(0x234F86).into();
+            theme.selection = rgb(0xE8EBEF).into();
+            theme.caret = rgb(0x234F86).into();
         }
     });
 }
@@ -174,4 +180,27 @@ pub fn surface_card_bg(cx: &App) -> gpui_kit::Hsla {
 /// Background for recessed rows, hover states, and inline code.
 pub fn subtle_pill_bg(cx: &App) -> gpui_kit::Hsla {
     cx.theme().muted
+}
+
+/// Geometry for every single-line field, so the rail filter, dialogs, and the
+/// guided editor cannot drift apart.
+pub const INPUT_HEIGHT: f32 = 32.0;
+pub const INPUT_RADIUS: f32 = 6.0;
+/// The frame every input sits in. Reserved for fields that need an explicit
+/// box; the component's own frame covers the rest with the same tokens.
+#[allow(dead_code)]
+///
+/// The component paints a border and, when focused, an outer ring that extends
+/// past the field's bounds; any ancestor that clips then cuts the ring in half.
+/// So the resting border is used for the frame and focus is drawn *inside* the
+/// field, which cannot be clipped and never shifts layout.
+pub fn input_frame(focused: bool, cx: &gpui_kit::App) -> gpui_kit::Div {
+    use gpui_kit::Styled as _;
+    let theme = cx.theme();
+    gpui_kit::div()
+        .h(gpui_kit::px(INPUT_HEIGHT))
+        .rounded(gpui_kit::px(INPUT_RADIUS))
+        .bg(theme.input)
+        .border_1()
+        .border_color(if focused { theme.ring } else { theme.border })
 }

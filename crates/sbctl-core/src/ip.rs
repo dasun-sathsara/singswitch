@@ -42,13 +42,29 @@ pub struct IpInfo {
 
 impl IpInfo {
     /// Formatted `City, Region, Country` display string.
+    /// Human-readable place for the sample, without repetition.
+    ///
+    /// ipinfo often returns the same value for city and region (Singapore,
+    /// Singapore), and the country code merely repeats it, so duplicates are
+    /// dropped and the country code is only used when nothing else names the
+    /// place.
     pub fn formatted_location(&self) -> String {
-        [&self.city, &self.region, &self.country]
-            .into_iter()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join(", ")
+        let mut parts: Vec<&str> = Vec::new();
+        for value in [&self.city, &self.region, &self.country] {
+            let value = value.trim();
+            if value.is_empty() {
+                continue;
+            }
+            if parts.iter().any(|seen| seen.eq_ignore_ascii_case(value)) {
+                continue;
+            }
+            parts.push(value);
+        }
+        // Drop a trailing two-letter country code when a full name precedes it.
+        if parts.len() > 1 && parts.last().is_some_and(|c| c.len() == 2) {
+            parts.pop();
+        }
+        parts.join(", ")
     }
 }
 
@@ -98,9 +114,23 @@ mod tests {
         let info: IpInfo = serde_json::from_str(raw).unwrap();
         assert_eq!(info.ip, "13.215.132.32");
         assert_eq!(info.network, "AS16509 Amazon.com, Inc.");
-        assert_eq!(
-            info.formatted_location(),
-            "Singapore, Central Singapore, SG"
-        );
+        // The two-letter country code is redundant once a place name is present.
+        assert_eq!(info.formatted_location(), "Singapore, Central Singapore");
+
+        let repeated = IpInfo {
+            city: "Singapore".into(),
+            region: "Singapore".into(),
+            country: "SG".into(),
+            ..info.clone()
+        };
+        assert_eq!(repeated.formatted_location(), "Singapore");
+
+        let only_country = IpInfo {
+            city: String::new(),
+            region: String::new(),
+            country: "SG".into(),
+            ..info
+        };
+        assert_eq!(only_country.formatted_location(), "SG");
     }
 }

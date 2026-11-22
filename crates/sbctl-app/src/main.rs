@@ -70,6 +70,16 @@ mod desktop {
                 gpui_kit::init(cx);
                 crate::fonts::install(cx);
 
+                // The stock 500ms delay reads as "tooltips don't work" on icons
+                // that carry meaning only in their tooltip. 180ms still avoids
+                // flicker while feeling immediate; the grace period lets the
+                // pointer move between neighbouring icon buttons without
+                // re-waiting.
+                gpui_kit::component::tooltip::TooltipDefaults::new()
+                    .with_show_delay(std::time::Duration::from_millis(180))
+                    .with_grace_period(std::time::Duration::from_millis(400))
+                    .install(cx);
+
                 let store = cx.new(AppStore::new);
                 let theme_pref = store.read(cx).settings.theme;
                 apply_theme(theme_pref, None, cx);
@@ -332,6 +342,25 @@ mod desktop {
     }
 
     fn register_window_actions(cx: &mut App) {
+        cx.on_action(|_: &crate::actions::OpenDoctorView, cx: &mut App| {
+            let store = cx.global::<AppGlobalState>().store.clone();
+            store.update(cx, |s, cx| {
+                s.set_tab(NavTab::Doctor, cx);
+                s.run_doctor(cx);
+            });
+            open_or_focus_main_window(cx);
+        });
+
+        cx.on_action(|action: &crate::actions::EditProfile, cx: &mut App| {
+            let name = action.name.clone();
+            let store = cx.global::<AppGlobalState>().store.clone();
+            store.update(cx, |s, cx| {
+                s.select_profile(Some(name), cx);
+                s.begin_edit(cx);
+            });
+            open_or_focus_main_window(cx);
+        });
+
         cx.on_action(|_: &crate::actions::BackToConnections, cx: &mut App| {
             let store = cx.global::<AppGlobalState>().store.clone();
             store.update(cx, |s, cx| s.end_edit(cx));

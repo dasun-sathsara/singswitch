@@ -18,7 +18,7 @@ use gpui_kit::{
 };
 use sbctl_core::logs::{LogLevel, contains_ignore_ascii_case};
 
-use crate::state::{AppStore, BannerTone, LogSeverityFilter, LogStreamKind};
+use crate::state::{AppStore, BannerTone, LogSeverityFilter, LogStreamKind, NoticeOrigin};
 use crate::theme::subtle_pill_bg;
 
 pub struct LogsView {
@@ -144,9 +144,12 @@ impl LogsView {
                     )
                     .child(div().flex_1())
                     .child(
-                        div()
-                            .w(px(240.0))
-                            .child(Input::new(&self.search_input).small().cleanable(true)),
+                        div().w(px(240.0)).child(
+                            Input::new(&self.search_input)
+                                .focus_bordered(false)
+                                .small()
+                                .cleanable(true),
+                        ),
                     ),
             )
             .child(
@@ -276,7 +279,12 @@ impl LogsView {
                         };
                         cx.write_to_clipboard(ClipboardItem::new_string(joined));
                         store_copy.update(cx, |s, cx| {
-                            s.set_banner(BannerTone::Success, "Copied logs", cx);
+                            s.set_notice(
+                                NoticeOrigin::Logs,
+                                BannerTone::Success,
+                                "Copied logs",
+                                cx,
+                            );
                         });
                     }),
             )
@@ -323,7 +331,12 @@ impl LogsView {
                                     line_copy.to_string(),
                                 ));
                                 store_banner.update(cx, |s, cx| {
-                                    s.set_banner(BannerTone::Success, "Line copied", cx);
+                                    s.set_notice(
+                                        NoticeOrigin::Logs,
+                                        BannerTone::Success,
+                                        "Line copied",
+                                        cx,
+                                    );
                                 });
                             }),
                     )

@@ -13,10 +13,8 @@ pub mod logs;
 pub mod profiles;
 pub mod settings;
 
-use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
     h_flex, v_flex,
@@ -41,8 +39,6 @@ use crate::views::settings::SettingsView;
 
 /// Height of the toolbar row that sits under the native title bar.
 const TOOLBAR_HEIGHT: f32 = 44.0;
-/// Height of the always-on status strip.
-const STATUS_HEIGHT: f32 = 30.0;
 /// Width of the profile rail.
 const RAIL_WIDTH: f32 = 264.0;
 
@@ -240,6 +236,12 @@ impl WorkspaceShell {
         let store_refresh = self.store.clone();
         let store_theme = self.store.clone();
         let store_settab = self.store.clone();
+        let store_dismiss = self.store.clone();
+        let toolbar_notice = self
+            .store
+            .read(cx)
+            .notice_for(crate::state::NoticeOrigin::Toolbar)
+            .cloned();
         let is_dark = cx.theme().is_dark();
 
         let disconnect_label = if running { "Disconnect" } else { "Connect" };
@@ -283,10 +285,39 @@ impl WorkspaceShell {
                             .child(headline),
                     ),
             )
+            .when_some(toolbar_notice, |el, notice| {
+                el.child(
+                    h_flex()
+                        .gap(px(6.0))
+                        .items_center()
+                        .px(px(8.0))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(match notice.tone {
+                                    BannerTone::Error => cx.theme().danger,
+                                    BannerTone::Warning => cx.theme().warning,
+                                    BannerTone::Success => cx.theme().success,
+                                    BannerTone::Info => cx.theme().muted_foreground,
+                                })
+                                .child(notice.message.clone()),
+                        )
+                        .child(
+                            Button::new("toolbar-notice-dismiss")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Close)
+                                .tooltip("Dismiss")
+                                .on_click(move |_, _, cx| {
+                                    store_dismiss.update(cx, |s, cx| s.dismiss_notice(cx));
+                                }),
+                        ),
+                )
+            })
             .child(
                 Button::new("toolbar-connection")
                     .small()
-                    .when(running, |b| b.danger())
+                    .when(running, |b| b.outline())
                     .when(!running, |b| b.primary())
                     .label(disconnect_label)
                     .disabled(disabled)
@@ -348,6 +379,8 @@ impl WorkspaceShell {
         let selected = s.selected_profile.clone();
         let active = s.snapshot.active.clone();
         let running = s.snapshot.running;
+        let busy = s.busy_phase.is_some();
+        let current_phase = s.busy_phase.clone();
         let query = s.profile_search_query.trim().to_string();
         let profiles: Vec<Profile> = s
             .snapshot
@@ -370,6 +403,7 @@ impl WorkspaceShell {
             .count();
 
         let store_select = self.store.clone();
+        let store_switch = self.store.clone();
         let store_new = self.store.clone();
         let store_import = self.store.clone();
         let store_tab = self.store.clone();
@@ -434,10 +468,13 @@ impl WorkspaceShell {
                     ),
             )
             .child(
-                div().px(px(12.0)).pb(px(10.0)).child(
+                // 8px of breathing room so the field's focus treatment is never
+                // clipped by the rail edge.
+                div().px(px(8.0)).pb(px(10.0)).child(
                     Input::new(&self.filter)
                         .small()
                         .cleanable(true)
+                        .focus_bordered(false)
                         .prefix(Icon::new(IconName::Search).xsmall()),
                 ),
             )
@@ -458,6 +495,22 @@ impl WorkspaceShell {
                         let name = p.name.clone();
                         let sub = p.server.clone().unwrap_or_else(|| "direct".to_string());
                         let st = store_select.clone();
+                        let st_switch = store_switch.clone();
+                        let switch_name = p.name.clone();
+                        // The row's verb is explicit and differs from the
+                        // connected row's, so switching never requires a
+                        // disconnect first.
+                        let verb = if is_running {
+                            None
+                        } else if running {
+                            Some("Switch")
+                        } else {
+                            Some("Connect")
+                        };
+                        let busy_here = busy
+                            && current_phase
+                                .as_deref()
+                                .is_some_and(|ph| ph.contains(&p.name));
 
                         v_flex()
                             .id(SharedString::from(format!("row-{}", p.name)))
@@ -469,14 +522,23 @@ impl WorkspaceShell {
                             .when(is_selected, |el| el.bg(cx.theme().sidebar_accent))
                             .hover(|el| el.bg(cx.theme().muted))
                             .on_click(move |_, _, cx| {
-                                st.update(cx, |s, cx| s.select_profile(Some(name.clone()), cx));
+                                // Inspecting always lands on Connections, even
+                                // when the click came from Logs or Settings.
+                                st.update(cx, |s, cx| {
+                                    s.select_profile(Some(name.clone()), cx);
+                                    s.set_tab(NavTab::Profiles, cx);
+                                });
                             })
                             .child(
                                 h_flex()
+                                    .w_full()
                                     .gap(px(6.0))
                                     .items_center()
                                     .child(
                                         div()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .truncate()
                                             .when(is_selected, |el| el.font_bold())
                                             .text_sm()
                                             .text_color(cx.theme().foreground)
@@ -484,19 +546,35 @@ impl WorkspaceShell {
                                     )
                                     .when(is_running, |el| {
                                         el.child(
-                                            div()
-                                                .size(px(6.0))
-                                                .rounded_full()
-                                                .bg(cx.theme().success),
+                                            h_flex()
+                                                .flex_none()
+                                                .gap(px(4.0))
+                                                .items_center()
+                                                .child(
+                                                    div()
+                                                        .size(px(6.0))
+                                                        .rounded_full()
+                                                        .bg(cx.theme().success),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().success)
+                                                        .child("Connected"),
+                                                ),
                                         )
                                     }),
                             )
                             .child(
                                 h_flex()
+                                    .w_full()
                                     .gap(px(6.0))
                                     .items_center()
                                     .child(
                                         div()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .truncate()
                                             .font_family(fonts::mono_family())
                                             .text_xs()
                                             .text_color(cx.theme().muted_foreground)
@@ -505,17 +583,34 @@ impl WorkspaceShell {
                                     .when(!ready, |el| {
                                         el.child(
                                             div()
+                                                .flex_none()
                                                 .text_xs()
                                                 .text_color(cx.theme().warning)
-                                                .child(format!("{todo} values still TODO")),
+                                                .child(format!("{todo} TODO")),
                                         )
                                     })
-                                    .when(is_active && !is_running, |el| {
+                                    .when_some(verb, |el, verb| {
+                                        let st = st_switch.clone();
+                                        let name = switch_name.clone();
                                         el.child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child("Selected"),
+                                            Button::new(SharedString::from(format!(
+                                                "row-switch-{}",
+                                                switch_name
+                                            )))
+                                            .xsmall()
+                                            .when(running, |b| b.outline())
+                                            .when(!running, |b| b.outline())
+                                            .label(verb)
+                                            .disabled(busy_here || busy || !ready)
+                                            .tooltip(if ready {
+                                                format!("{verb} {}", switch_name)
+                                            } else {
+                                                format!("{switch_name} still has TODO values")
+                                            })
+                                            .on_click(move |_, _, cx| {
+                                                let n = name.clone();
+                                                st.update(cx, |s, cx| s.activate_profile(n, cx));
+                                            }),
                                         )
                                     }),
                             )
@@ -530,12 +625,13 @@ impl WorkspaceShell {
                     .border_color(cx.theme().border)
                     .children(
                         [
+                            ("Connections", NavTab::Profiles, 0usize, true),
                             ("Logs", NavTab::Logs, log_errors, false),
                             ("Doctor", NavTab::Doctor, doctor_failed, false),
                             ("Settings", NavTab::Settings, 0, true),
                         ]
                         .into_iter()
-                        .map(|(label, target, count, inverted)| {
+                        .map(|(label, target, count, muted_count)| {
                             let on = tab == target;
                             let st = store_tab.clone();
                             h_flex()
@@ -563,7 +659,7 @@ impl WorkspaceShell {
                                         .child(label),
                                 )
                                 .child(div().flex_1())
-                                .when(count > 0 && !inverted, |el| {
+                                .when(count > 0 && !muted_count, |el| {
                                     el.child(
                                         div()
                                             .font_family(fonts::mono_family())
@@ -585,101 +681,10 @@ impl WorkspaceShell {
             NavTab::Settings => self.settings.clone().into_any_element(),
         }
     }
-
-    fn render_status_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let s = self.store.read(cx);
-        let (dot, headline) = self.service_headline(cx);
-        let snap = &s.snapshot;
-        let pid = snap.health.pid.map(|p| format!("PID {p}"));
-        let tun = s.snapshot.status_view.tun.clone();
-        let ip = s.ip_info.as_ref().map(|i| {
-            let loc = if !i.location.is_empty() {
-                i.location.clone()
-            } else {
-                i.city.clone()
-            };
-            if loc.is_empty() {
-                i.ip.clone()
-            } else {
-                format!("{} {loc}", i.ip)
-            }
-        });
-        let ip_text = if s.ip_loading {
-            Some("Checking…".to_string())
-        } else if s.ip_error.is_some() {
-            Some("IP unreachable".to_string())
-        } else {
-            ip
-        };
-        let doctor_failed = s
-            .doctor_checks
-            .iter()
-            .filter(|c| !c.ok && !c.warning)
-            .count();
-
-        StatusBar::new()
-            .h(px(STATUS_HEIGHT))
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .text_size(px(12.0))
-            .text_color(cx.theme().muted_foreground)
-            .left(
-                h_flex()
-                    .gap(px(6.0))
-                    .items_center()
-                    .px(px(12.0))
-                    .child(div().size(px(5.0)).rounded_full().bg(dot))
-                    .child(div().text_color(cx.theme().foreground).child(headline)),
-            )
-            .left(
-                h_flex()
-                    .gap(px(14.0))
-                    .px(px(12.0))
-                    .children(tun.map(|t| div().font_family(fonts::mono_family()).child(t)))
-                    .children(pid.map(|p| div().font_family(fonts::mono_family()).child(p))),
-            )
-            .left(
-                h_flex()
-                    .px(px(12.0))
-                    .children(ip_text.map(|t| div().font_family(fonts::mono_family()).child(t))),
-            )
-            .right(
-                h_flex()
-                    .gap(px(14.0))
-                    .px(px(12.0))
-                    .child(
-                        div()
-                            .when(doctor_failed > 0, |el| el.text_color(cx.theme().danger))
-                            .child(format!("Doctor {doctor_failed}")),
-                    )
-                    .child(
-                        div()
-                            .font_family(fonts::mono_family())
-                            .child(env!("CARGO_PKG_VERSION")),
-                    ),
-            )
-    }
-
-    fn render_banner(&self, tone: BannerTone, msg: String) -> impl IntoElement {
-        let sb = self.store.clone();
-        let alert = match tone {
-            BannerTone::Info => Alert::info("global-alert", msg),
-            BannerTone::Success => Alert::success("global-alert", msg),
-            BannerTone::Warning => Alert::warning("global-alert", msg),
-            BannerTone::Error => Alert::error("global-alert", msg),
-        };
-        div().px(px(16.0)).pt(px(10.0)).child(
-            alert
-                .small()
-                .on_close(move |_, _, cx| sb.update(cx, AppStore::dismiss_banner)),
-        )
-    }
 }
 
 impl Render for WorkspaceShell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let banner = self.store.read(cx).banner.clone();
-
         v_flex()
             .size_full()
             .bg(cx.theme().background)
@@ -695,22 +700,14 @@ impl Render for WorkspaceShell {
                     .min_h(px(0.0))
                     .child(self.render_rail(cx))
                     .child(
-                        v_flex()
-                            .flex_1()
-                            .h_full()
-                            .min_w(px(0.0))
-                            .when_some(banner, |this, (tone, msg)| {
-                                this.child(self.render_banner(tone, msg))
-                            })
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .w_full()
-                                    .min_h(px(0.0))
-                                    .child(self.render_stage(cx)),
-                            ),
+                        v_flex().flex_1().h_full().min_w(px(0.0)).child(
+                            div()
+                                .flex_1()
+                                .w_full()
+                                .min_h(px(0.0))
+                                .child(self.render_stage(cx)),
+                        ),
                     ),
             )
-            .child(self.render_status_strip(cx))
     }
 }

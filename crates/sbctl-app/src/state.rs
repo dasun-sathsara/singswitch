@@ -30,6 +30,34 @@ const POLL_LOG_INTERVAL: Duration = Duration::from_millis(800);
 const SNAPSHOT_TICK_INTERVAL: Duration = Duration::from_secs(1);
 const WATCHER_DEBOUNCE: Duration = Duration::from_millis(150);
 
+/// Where a piece of feedback belongs on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoticeOrigin {
+    /// The profile rail and its switch actions.
+    #[allow(dead_code)]
+    Rail,
+    /// The stage header's Switch action.
+    Stage,
+    /// The toolbar connection control.
+    Toolbar,
+    /// The editor's pinned action bar.
+    Editor,
+    /// The log screen controls.
+    Logs,
+    /// The doctor screen.
+    Doctor,
+    /// The settings rows.
+    Settings,
+}
+
+/// Inline feedback attached to one origin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notice {
+    pub origin: NoticeOrigin,
+    pub tone: BannerTone,
+    pub message: String,
+}
+
 /// What the setup region should say, if anything.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SetupCondition {
@@ -118,7 +146,10 @@ pub struct AppStore {
     pub ip_loading: bool,
     pub ip_error: Option<String>,
     pub busy_phase: Option<String>,
-    pub banner: Option<(BannerTone, String)>,
+    /// Feedback shown next to the control that produced it. Replaces the old
+    /// full-width banner, which scrolled out of view and mixed unrelated
+    /// messages together.
+    pub notice: Option<Notice>,
     pub editor_validation: Option<(String, EditorValidationState)>,
     pub doctor_checks: Vec<DiagnosticCheck>,
     pub doctor_running: bool,
@@ -212,7 +243,11 @@ impl AppStore {
             ip_loading: false,
             ip_error: None,
             busy_phase: None,
-            banner: init_error.map(|m| (BannerTone::Warning, m)),
+            notice: init_error.map(|m| Notice {
+                origin: NoticeOrigin::Toolbar,
+                tone: BannerTone::Warning,
+                message: m,
+            }),
             editor_validation: None,
             doctor_checks: Vec::new(),
             doctor_running: false,
@@ -264,18 +299,37 @@ impl AppStore {
         }
     }
 
+    /// Tooltip text: state first, then the profile, capped so an unusually
+    /// long name cannot produce an unreadable tooltip.
     pub fn tray_tooltip(&self) -> String {
-        if let Some(phase) = &self.busy_phase {
-            return format!("sbctl: {phase}");
-        }
-        if let Some(broken) = &self.snapshot.broken {
-            return format!("sbctl: {broken}");
-        }
-        match (&self.snapshot.running, &self.snapshot.active) {
-            (true, Some(name)) => format!("sbctl: Connected to {name}"),
-            (true, None) => "sbctl: Connected".to_string(),
-            (false, Some(name)) => format!("sbctl: {name} selected"),
-            (false, None) => "sbctl: Disconnected".to_string(),
+        const CAP: usize = 120;
+        let text = if let Some(phase) = &self.busy_phase {
+            format!("sbctl · {phase}")
+        } else if let Some(broken) = &self.snapshot.broken {
+            format!("sbctl · {broken}")
+        } else if self.snapshot.health.state == RunState::Error {
+            "sbctl · Service failed · Open Doctor".to_string()
+        } else if !self.snapshot.running {
+            let needs_setup = self
+                .selected_profile
+                .as_ref()
+                .and_then(|n| self.snapshot.profiles.iter().find(|p| &p.name == n))
+                .is_some_and(|p| !p.ready());
+            match (&self.snapshot.active, needs_setup) {
+                (Some(name), true) => format!("sbctl · {name} needs setup"),
+                (Some(name), false) => format!("sbctl · Disconnected · {name} selected"),
+                (None, _) => "sbctl · Disconnected".to_string(),
+            }
+        } else {
+            match &self.snapshot.active {
+                Some(name) => format!("sbctl · Connected to {name}"),
+                None => "sbctl · Connected".to_string(),
+            }
+        };
+        if text.chars().count() > CAP {
+            text.chars().take(CAP - 1).collect::<String>() + "…"
+        } else {
+            text
         }
     }
 
@@ -368,7 +422,8 @@ impl AppStore {
         if let Some(ctrl) = &self.ctrl {
             return Some(ctrl.clone());
         }
-        self.set_banner(
+        self.set_notice(
+            NoticeOrigin::Toolbar,
             BannerTone::Warning,
             self.init_error
                 .clone()
@@ -450,14 +505,37 @@ impl AppStore {
         }
     }
 
-    pub fn dismiss_banner(&mut self, cx: &mut Context<Self>) {
-        self.banner = None;
+    pub fn dismiss_notice(&mut self, cx: &mut Context<Self>) {
+        self.notice = None;
         cx.notify();
     }
 
-    pub fn set_banner(&mut self, tone: BannerTone, msg: impl Into<String>, cx: &mut Context<Self>) {
-        self.banner = Some((tone, msg.into()));
+    /// Record feedback for a specific origin. Callers name where the message
+    /// belongs so it renders beside that control, not at the top of the window.
+    pub fn set_notice(
+        &mut self,
+        origin: NoticeOrigin,
+        tone: BannerTone,
+        msg: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.notice = Some(Notice {
+            origin,
+            tone,
+            message: msg.into(),
+        });
         cx.notify();
+    }
+
+    /// Convenience for the common "copied" case, which reports on its button.
+    #[allow(dead_code)]
+    pub fn note_copied(&mut self, origin: NoticeOrigin, what: &str, cx: &mut Context<Self>) {
+        self.set_notice(origin, BannerTone::Success, format!("{what} copied"), cx);
+    }
+
+    /// The notice for one origin, if it is the current one.
+    pub fn notice_for(&self, origin: NoticeOrigin) -> Option<&Notice> {
+        self.notice.as_ref().filter(|n| n.origin == origin)
     }
 
     pub fn set_theme_preference(&mut self, pref: ThemePreference, cx: &mut Context<Self>) {
@@ -499,7 +577,8 @@ impl AppStore {
             Ok(()) => {
                 self.settings.launch_at_login = enabled;
                 let _ = self.settings.save();
-                self.set_banner(
+                self.set_notice(
+                    NoticeOrigin::Settings,
                     BannerTone::Success,
                     if enabled {
                         "Launch at login enabled"
@@ -510,7 +589,12 @@ impl AppStore {
                 );
             }
             Err(err) => {
-                self.set_banner(BannerTone::Error, err.to_string(), cx);
+                self.set_notice(
+                    NoticeOrigin::Toolbar,
+                    BannerTone::Error,
+                    err.to_string(),
+                    cx,
+                );
             }
         }
     }
@@ -589,10 +673,12 @@ impl AppStore {
                             "sing-box disconnected",
                             "sing-box stopped unexpectedly. Check Logs or Doctor.",
                         );
-                        store.banner = Some((
-                            BannerTone::Error,
-                            "sing-box stopped unexpectedly. Check Logs or Doctor.".to_string(),
-                        ));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: "sing-box stopped unexpectedly. Check Logs or Doctor."
+                                .to_string(),
+                        });
                     }
                     cx.notify();
                 }
@@ -636,7 +722,8 @@ impl AppStore {
             });
         let Some(name) = target else {
             self.selected_tab = NavTab::Profiles;
-            self.set_banner(
+            self.set_notice(
+                NoticeOrigin::Toolbar,
                 BannerTone::Warning,
                 "No ready profile. Create or finish configuring a profile first.",
                 cx,
@@ -663,7 +750,7 @@ impl AppStore {
         };
 
         self.busy_phase = Some(format!("Activating {name}..."));
-        self.banner = None;
+        self.notice = None;
         cx.notify();
 
         let (phase_tx, phase_rx) = smol::channel::unbounded();
@@ -700,14 +787,22 @@ impl AppStore {
                         store.connected_since = Some(Instant::now());
                         store.was_running_expected = true;
                         store.selected_profile = Some(name.clone());
-                        store.banner = Some((BannerTone::Success, format!("Connected to {name}")));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Success,
+                            message: format!("Connected to {name}"),
+                        });
                         should_refresh_ip = store.settings.auto_refresh_ip;
                     }
                     Err(err) => {
                         if err.code != ExitCode::Service {
                             ctrl.notify_error("sing-box activation failed", &err.message);
                         }
-                        store.banner = Some((BannerTone::Error, format!("{err}")));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: format!("{err}"),
+                        });
                     }
                 }
                 cx.notify();
@@ -728,7 +823,7 @@ impl AppStore {
         };
 
         self.busy_phase = Some(format!("Saving and activating {name}..."));
-        self.banner = None;
+        self.notice = None;
         cx.notify();
 
         let (phase_tx, phase_rx) = smol::channel::unbounded();
@@ -772,10 +867,11 @@ impl AppStore {
                         store.selected_profile = Some(name.clone());
                         store.editor_validation =
                             Some((name.clone(), EditorValidationState::Valid));
-                        store.banner = Some((
-                            BannerTone::Success,
-                            format!("Saved and connected to {name}"),
-                        ));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Success,
+                            message: format!("Saved and connected to {name}"),
+                        });
                         should_refresh_ip = store.settings.auto_refresh_ip;
                     }
                     Err(err) => {
@@ -786,7 +882,11 @@ impl AppStore {
                             name.clone(),
                             EditorValidationState::Invalid(format!("{err}")),
                         ));
-                        store.banner = Some((BannerTone::Error, format!("{err}")));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: format!("{err}"),
+                        });
                     }
                 }
                 cx.notify();
@@ -808,7 +908,7 @@ impl AppStore {
 
         self.was_running_expected = false;
         self.busy_phase = Some("Stopping sing-box...".to_string());
-        self.banner = None;
+        self.notice = None;
         cx.notify();
 
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -830,11 +930,19 @@ impl AppStore {
                 match res {
                     Ok(()) => {
                         store.connected_since = None;
-                        store.banner = Some((BannerTone::Info, "sing-box stopped".to_string()));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Info,
+                            message: "sing-box stopped".to_string(),
+                        });
                         should_refresh_ip = store.settings.auto_refresh_ip;
                     }
                     Err(err) => {
-                        store.banner = Some((BannerTone::Error, format!("{err}")));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: format!("{err}"),
+                        });
                     }
                 }
                 cx.notify();
@@ -862,7 +970,12 @@ impl AppStore {
         self.selected_tab = NavTab::Profiles;
         self.editor_validation = None;
         self.restart_file_watcher(cx);
-        self.set_banner(BannerTone::Success, format!("Created {name}"), cx);
+        self.set_notice(
+            NoticeOrigin::Stage,
+            BannerTone::Success,
+            format!("Created {name}"),
+            cx,
+        );
         Ok(())
     }
 
@@ -898,10 +1011,18 @@ impl AppStore {
                         store.selected_tab = NavTab::Profiles;
                         store.editor_validation = None;
                         store.restart_file_watcher(cx);
-                        store.banner = Some((BannerTone::Success, format!("Imported {name}")));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Success,
+                            message: format!("Imported {name}"),
+                        });
                     }
                     Err(err) => {
-                        store.banner = Some((BannerTone::Error, format!("{err}")));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: format!("{err}"),
+                        });
                     }
                 }
                 cx.notify();
@@ -943,10 +1064,18 @@ impl AppStore {
                         } else {
                             format!("Synced {name}")
                         };
-                        store.banner = Some((BannerTone::Success, note));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Success,
+                            message: note,
+                        });
                     }
                     Err(err) => {
-                        store.banner = Some((BannerTone::Error, format!("{err}")));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: format!("{err}"),
+                        });
                     }
                 }
                 cx.notify();
@@ -991,20 +1120,32 @@ impl AppStore {
                                 .collect::<Vec<_>>()
                                 .join("; ");
                             let synced = count_noun(report.synced.len(), "profile", "profiles");
-                            store.banner = Some((
-                                BannerTone::Warning,
-                                format!("Synced {synced}; failed: {details}"),
-                            ));
+                            store.notice = Some(Notice {
+                                origin: NoticeOrigin::Stage,
+                                tone: BannerTone::Warning,
+                                message: format!("Synced {synced}; failed: {details}"),
+                            });
                         } else if report.synced.is_empty() {
-                            store.banner =
-                                Some((BannerTone::Info, "No remote profiles to sync".to_string()));
+                            store.notice = Some(Notice {
+                                origin: NoticeOrigin::Stage,
+                                tone: BannerTone::Info,
+                                message: "No remote profiles to sync".to_string(),
+                            });
                         } else {
                             let synced = count_noun(report.synced.len(), "profile", "profiles");
-                            store.banner = Some((BannerTone::Success, format!("Synced {synced}")));
+                            store.notice = Some(Notice {
+                                origin: NoticeOrigin::Stage,
+                                tone: BannerTone::Success,
+                                message: format!("Synced {synced}"),
+                            });
                         }
                     }
                     Err(err) => {
-                        store.banner = Some((BannerTone::Error, format!("{err}")));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: format!("{err}"),
+                        });
                     }
                 }
                 cx.notify();
@@ -1058,14 +1199,22 @@ impl AppStore {
                             store.editor_validation =
                                 Some((name.clone(), EditorValidationState::Valid));
                         }
-                        store.banner = Some((BannerTone::Success, msg));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Success,
+                            message: msg,
+                        });
                     }
                     Err(err) => {
                         store.editor_validation = Some((
                             name.clone(),
                             EditorValidationState::Invalid(format!("{err}")),
                         ));
-                        store.banner = Some((BannerTone::Error, format!("{err}")));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: format!("{err}"),
+                        });
                     }
                 }
                 cx.notify();
@@ -1093,14 +1242,21 @@ impl AppStore {
                 match res {
                     Ok(()) => {
                         store.editor_validation = Some((name, EditorValidationState::Valid));
-                        store.banner =
-                            Some((BannerTone::Success, "Configuration valid".to_string()));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Editor,
+                            tone: BannerTone::Success,
+                            message: "Configuration valid".to_string(),
+                        });
                     }
                     Err(err) => {
                         let msg = format!("{err}");
                         store.editor_validation =
                             Some((name, EditorValidationState::Invalid(msg.clone())));
-                        store.banner = Some((BannerTone::Error, msg));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: msg,
+                        });
                     }
                 }
                 cx.notify();
@@ -1141,10 +1297,18 @@ impl AppStore {
                                 store.snapshot.profiles.first().map(|p| p.name.clone())
                             });
                         }
-                        store.banner = Some((BannerTone::Info, format!("Deleted {name}")));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Info,
+                            message: format!("Deleted {name}"),
+                        });
                     }
                     Err(err) => {
-                        store.banner = Some((BannerTone::Error, format!("{err}")));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: format!("{err}"),
+                        });
                     }
                 }
                 cx.notify();
@@ -1183,13 +1347,18 @@ impl AppStore {
                 match res {
                     Ok(()) => {
                         store.restart_file_watcher(cx);
-                        store.banner = Some((
-                            BannerTone::Success,
-                            format!("Created {}", store.layout().profiles_dir.display()),
-                        ));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Success,
+                            message: format!("Created {}", store.layout().profiles_dir.display()),
+                        });
                     }
                     Err(err) => {
-                        store.banner = Some((BannerTone::Error, format!("{err}")));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: format!("{err}"),
+                        });
                     }
                 }
                 cx.notify();
@@ -1266,7 +1435,11 @@ impl AppStore {
                         if reload_logs_after {
                             store.reload_logs();
                         }
-                        store.banner = Some((BannerTone::Success, success_msg.to_string()));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Success,
+                            message: success_msg.to_string(),
+                        });
                     }
                     Ok(out) => {
                         let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -1275,10 +1448,18 @@ impl AppStore {
                         } else {
                             msg
                         };
-                        store.banner = Some((BannerTone::Error, banner));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: banner,
+                        });
                     }
                     Err(err) => {
-                        store.banner = Some((BannerTone::Error, err.to_string()));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: err.to_string(),
+                        });
                     }
                 }
                 cx.notify();
@@ -1317,13 +1498,18 @@ impl AppStore {
                 match res {
                     Ok(()) => {
                         store.restart_file_watcher(cx);
-                        store.banner = Some((
-                            BannerTone::Success,
-                            "sbctl-agent and profiles directory ready".to_string(),
-                        ));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Success,
+                            message: "sbctl-agent and profiles directory ready".to_string(),
+                        });
                     }
                     Err(err) => {
-                        store.banner = Some((BannerTone::Error, format!("{err}")));
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Stage,
+                            tone: BannerTone::Error,
+                            message: format!("{err}"),
+                        });
                     }
                 }
                 cx.notify();
@@ -1692,6 +1878,9 @@ fn apply_log_delta(
 }
 
 fn into_log_record(line: String) -> LogRecord {
+    // sing-box writes coloured output even to a file, so strip escapes once here
+    // and every consumer (list, search, copy, detail) sees clean text.
+    let line = sbctl_core::logs::strip_ansi(&line);
     let level = LogLevel::classify(&line);
     LogRecord {
         line: SharedString::from(line),
