@@ -35,6 +35,7 @@ actions!(
         RestartService,
         RefreshStatus,
         SyncSelectedProfile,
+        OpenDoctorView,
     ]
 );
 
@@ -47,6 +48,13 @@ pub struct SwitchProfile {
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = sbctl_app, no_json)]
 pub struct SyncProfile {
+    pub name: String,
+}
+
+/// Open a named profile's editor, used by the tray's "Set up …" row.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = sbctl_app, no_json)]
+pub struct EditProfile {
     pub name: String,
 }
 

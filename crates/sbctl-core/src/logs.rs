@@ -20,6 +20,66 @@ pub fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
         .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
+/// Remove ANSI SGR/VT escape sequences from a log line.
+///
+/// sing-box writes coloured output (`\x1b[36mINFO\x1b[0m`) even when the stream
+/// is a file, so every line the UI shows must be stripped or the reader sees
+/// literal escape bytes. Handles CSI sequences (`ESC [ ... final`), OSC
+/// sequences terminated by BEL or ST, and lone ESC pairs.
+pub fn strip_ansi(input: &str) -> String {
+    if !input.as_bytes().contains(&0x1b) {
+        return input.to_string();
+    }
+
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != 0x1b {
+            // Copy the next UTF-8 scalar whole so multibyte text survives.
+            let start = i;
+            i += 1;
+            while i < bytes.len() && (bytes[i] & 0xC0) == 0x80 {
+                i += 1;
+            }
+            out.push_str(&input[start..i]);
+            continue;
+        }
+
+        match bytes.get(i + 1).copied() {
+            // CSI: ESC '[' params final-byte (0x40..=0x7E)
+            Some(b'[') => {
+                i += 2;
+                while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1;
+                }
+            }
+            // OSC: ESC ']' ... terminated by BEL or ESC '\'
+            Some(b']') => {
+                i += 2;
+                while i < bytes.len() {
+                    if bytes[i] == 0x07 {
+                        i += 1;
+                        break;
+                    }
+                    if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
+                        i += 2;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            // Any other two-byte escape.
+            Some(_) => i += 2,
+            None => i += 1,
+        }
+    }
+    out
+}
+
 /// Parsed severity level for a sing-box log line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
@@ -32,6 +92,9 @@ pub enum LogLevel {
 
 impl LogLevel {
     pub fn classify(line: &str) -> Self {
+        // Colour codes can sit between the bracket and the word, so classify
+        // against the stripped text.
+        let line = &strip_ansi(line);
         if contains_ignore_ascii_case(line, "FATAL")
             || contains_ignore_ascii_case(line, "ERROR")
             || contains_ignore_ascii_case(line, "ERR ")
@@ -149,6 +212,45 @@ pub fn read_appended_lines(path: &Path, offset: u64) -> std::io::Result<(Vec<Str
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn strip_ansi_removes_sgr_and_keeps_text() {
+        let raw = "+0530 2026-09-15 02:01:57 \u{1b}[36mINFO\u{1b}[0m network: updated interface";
+        assert_eq!(
+            strip_ansi(raw),
+            "+0530 2026-09-15 02:01:57 INFO network: updated interface"
+        );
+    }
+
+    #[test]
+    fn strip_ansi_removes_extended_and_256_colour_sequences() {
+        let raw = "\u{1b}[38;5;190m190m1935904686\u{1b}[0m \u{1b}[1;32mok\u{1b}[39m";
+        assert_eq!(strip_ansi(raw), "190m1935904686 ok");
+    }
+
+    #[test]
+    fn strip_ansi_is_zero_cost_without_escapes() {
+        let plain = "tun: started at utun123, stack=gvisor";
+        assert_eq!(strip_ansi(plain), plain);
+    }
+
+    #[test]
+    fn strip_ansi_preserves_multibyte_text() {
+        let raw = "\u{1b}[31mproxy → 直连\u{1b}[0m";
+        assert_eq!(strip_ansi(raw), "proxy → 直连");
+    }
+
+    #[test]
+    fn classify_ignores_colour_codes() {
+        assert_eq!(
+            LogLevel::classify("\u{1b}[36mINFO\u{1b}[0m x"),
+            LogLevel::Info
+        );
+        assert_eq!(
+            LogLevel::classify("\u{1b}[31mERROR\u{1b}[0m x"),
+            LogLevel::Error
+        );
+    }
+
     use super::*;
     use std::io::Write;
 

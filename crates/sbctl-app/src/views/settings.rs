@@ -12,7 +12,7 @@ use gpui_kit::{
 use sbctl_core::layout::Layout;
 
 use crate::actions::NavTab;
-use crate::state::{AppStore, BannerTone};
+use crate::state::{AppStore, BannerTone, NoticeOrigin};
 use crate::theme::{ThemePreference, surface_card_bg};
 
 pub struct SettingsView {
@@ -358,7 +358,12 @@ fn render_paths_card(
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(val_copy.clone()));
                             store_copy.update(cx, |s, cx| {
-                                s.set_banner(BannerTone::Success, "Copied path", cx);
+                                s.set_notice(
+                                    NoticeOrigin::Settings,
+                                    BannerTone::Success,
+                                    "Copied path",
+                                    cx,
+                                );
                             });
                         }),
                 )

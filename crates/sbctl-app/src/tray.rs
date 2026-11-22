@@ -1,11 +1,10 @@
-use gpui_kit::{App, Entity, MenuItem, Subscription};
+use gpui_kit::{App, Entity, Menu, MenuItem, Subscription};
 use gpui_tray::{Icon, Tray};
 use sbctl_core::profile::Profile;
 use sbctl_core::service::RunState;
 
 use crate::actions::{
-    ConnectActive, DisconnectService, Noop, OpenLogsView, OpenMainWindow, OpenSettingsView,
-    QuitApp, RefreshIp, RestartService, RunDoctor, SwitchProfile, SyncAll,
+    DisconnectService, EditProfile, Noop, OpenDoctorView, OpenMainWindow, QuitApp, SwitchProfile,
 };
 use crate::icons::{TrayVisualState, build_tray_icon};
 use crate::state::AppStore;
@@ -44,35 +43,20 @@ struct MenuFingerprint {
     busy_phase: Option<String>,
     broken: Option<String>,
     active: Option<String>,
-    tun: Option<String>,
-    pid: Option<u32>,
-    ip_line: Option<String>,
-    ip_loading: bool,
-    profiles: Vec<(String, bool, Option<String>, Option<String>)>,
+    selected: Option<String>,
+    profiles: Vec<(String, bool)>,
 }
 
 impl MenuFingerprint {
+    /// Only what changes the rendered menu. Telemetry that used to be listed
+    /// here (tunnel, PID, IP, loading flags) no longer appears, so churn in it
+    /// must not trigger a rebuild.
     fn from_store(store: &AppStore) -> Self {
-        let ip_line = store.ip_info.as_ref().map(|ip| {
-            let loc = ip.formatted_location();
-            if loc.is_empty() {
-                ip.ip.clone()
-            } else {
-                format!("{} ({loc})", ip.ip)
-            }
-        });
         let profiles = store
             .snapshot
             .profiles
             .iter()
-            .map(|p| {
-                (
-                    p.name.clone(),
-                    p.ready(),
-                    p.server.clone(),
-                    p.source_url.clone(),
-                )
-            })
+            .map(|p| (p.name.clone(), p.ready()))
             .collect();
         Self {
             running: store.snapshot.running,
@@ -80,10 +64,7 @@ impl MenuFingerprint {
             busy_phase: store.busy_phase.clone(),
             broken: store.snapshot.broken.clone(),
             active: store.snapshot.active.clone(),
-            tun: store.snapshot.status_view.tun.clone(),
-            pid: store.snapshot.status_view.pid,
-            ip_line,
-            ip_loading: store.ip_loading,
+            selected: store.selected_profile.clone(),
             profiles,
         }
     }
@@ -162,141 +143,141 @@ impl TrayController {
     }
 }
 
-fn menubar_title(store: &AppStore) -> Option<String> {
-    #[cfg(target_os = "macos")]
-    {
-        if !store.settings.show_profile_in_menubar {
-            return None;
-        }
-        if store.snapshot.running {
-            store.snapshot.active.clone()
-        } else {
-            None
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = store;
-        None
-    }
+/// The menu bar carries an icon only. A profile name is too long for that
+/// space and competes with the status items the user actually watches; the
+/// tooltip carries the detail instead.
+fn menubar_title(_store: &AppStore) -> Option<String> {
+    None
 }
 
-fn format_status_header(store: &AppStore) -> String {
-    if let Some(phase) = &store.busy_phase {
-        return format!("Switching: {phase}");
-    }
-    if let Some(broken) = &store.snapshot.broken {
-        return format!("Attention needed: {broken}");
-    }
-    if store.snapshot.running {
-        match &store.snapshot.active {
-            Some(name) => format!("Connected: {name}"),
-            None => "Connected".to_string(),
-        }
-    } else if let Some(name) = &store.snapshot.active {
-        format!("Stopped · {name} selected")
-    } else {
-        "Stopped".to_string()
-    }
-}
+/// Profiles shown inline before collapsing the rest into a submenu.
+const INLINE_PROFILE_LIMIT: usize = 8;
 
-fn push_connection_telemetry(items: &mut Vec<MenuItem>, store: &AppStore) {
-    if store.snapshot.running {
-        let mut parts = Vec::new();
-        if let Some(tun) = &store.snapshot.status_view.tun {
-            parts.push(tun.clone());
-        }
-        if let Some(pid) = store.snapshot.status_view.pid {
-            parts.push(format!("PID {pid}"));
-        }
-        if !parts.is_empty() {
-            items.push(
-                MenuItem::action(format!("Tunnel: {}", parts.join(" | ")), Noop).disabled(true),
-            );
-        }
-    }
-
-    if let Some(ip) = &store.ip_info {
-        let loc = ip.formatted_location();
-        let line = if loc.is_empty() {
-            format!("IP: {}", ip.ip)
-        } else {
-            format!("IP: {}, {loc}", ip.ip)
-        };
-        items.push(MenuItem::action(line, Noop).disabled(true));
-    }
-}
-
+/// The tray menu, deliberately small.
+///
+/// Everything else that used to live here (restart, refresh IP, sync, doctor,
+/// logs, settings) is reachable from the window, which is one click away. The
+/// menu answers exactly two questions: is the tunnel up, and which profile is
+/// carrying it.
 fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
     let mut items = Vec::new();
     let is_busy = store.busy_phase.is_some();
-    let broken = store.snapshot.broken.is_some() || store.snapshot.health.state == RunState::Error;
+    let failed = store.snapshot.broken.is_some() || store.snapshot.health.state == RunState::Error;
 
-    items.push(MenuItem::action(format_status_header(store), Noop).disabled(true));
-    push_connection_telemetry(&mut items, store);
-
-    // A failure outranks everything else, so the escape hatch sits directly
-    // under the reason instead of at the bottom of a Tools submenu.
-    if broken {
+    // A failure is the only thing that outranks the service control.
+    if failed {
+        items.push(MenuItem::action("Open Doctor", OpenDoctorView));
+        if store.snapshot.running {
+            items.push(MenuItem::action("Disconnect", DisconnectService));
+        }
         items.push(MenuItem::separator());
-        items.push(MenuItem::action("Run Doctor...", RunDoctor));
     }
 
-    items.push(MenuItem::separator());
-    if store.snapshot.running {
-        items.push(MenuItem::action("Disconnect", DisconnectService).disabled(is_busy));
+    // The connection control, named for what it will act on.
+    if !failed {
+        if store.snapshot.running {
+            items.push(MenuItem::action("Disconnect", DisconnectService).disabled(is_busy));
+        } else {
+            let ready_target = store
+                .selected_profile
+                .clone()
+                .filter(|n| is_ready(store, n))
+                .or_else(|| store.snapshot.active.clone().filter(|n| is_ready(store, n)))
+                .or_else(|| {
+                    store
+                        .snapshot
+                        .profiles
+                        .iter()
+                        .find(|p| p.ready())
+                        .map(|p| p.name.clone())
+                });
+            match ready_target {
+                Some(name) => {
+                    items.push(
+                        MenuItem::action(format!("Connect to {name}"), SwitchProfile { name })
+                            .disabled(is_busy),
+                    );
+                }
+                None => {
+                    // Nothing can connect: offer the route to fixing it instead
+                    // of a dead button.
+                    if let Some(unready) = store
+                        .selected_profile
+                        .clone()
+                        .or_else(|| store.snapshot.profiles.first().map(|p| p.name.clone()))
+                    {
+                        items.push(MenuItem::action(
+                            format!("Set up {unready}…"),
+                            EditProfile { name: unready },
+                        ));
+                    }
+                }
+            }
+        }
+        items.push(MenuItem::separator());
+    }
+
+    // Profiles, stable alphabetical order, bare names.
+    let mut sorted: Vec<_> = store.snapshot.profiles.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let (inline, overflow) = if sorted.len() > INLINE_PROFILE_LIMIT {
+        sorted.split_at(INLINE_PROFILE_LIMIT)
     } else {
-        let can_connect = store.snapshot.profiles.iter().any(Profile::ready);
-        items.push(MenuItem::action("Connect", ConnectActive).disabled(is_busy || !can_connect));
+        (&sorted[..], &[][..])
+    };
+
+    for profile in inline {
+        items.push(profile_item(profile, store, is_busy));
+    }
+    if !overflow.is_empty() {
+        let sub: Vec<MenuItem> = overflow
+            .iter()
+            .map(|p| profile_item(p, store, is_busy))
+            .collect();
+        items.push(MenuItem::submenu(Menu {
+            name: "Profiles".into(),
+            items: sub,
+            disabled: false,
+        }));
     }
 
     if !store.snapshot.profiles.is_empty() {
         items.push(MenuItem::separator());
-        for profile in &store.snapshot.profiles {
-            let is_active = store.snapshot.active.as_deref() == Some(profile.name.as_str());
-            let label = if !profile.ready() {
-                format!("{}: needs setup", profile.name)
-            } else if is_active && !store.snapshot.running {
-                format!("{}: selected", profile.name)
-            } else {
-                profile.name.clone()
-            };
-            items.push(
-                MenuItem::action(
-                    label,
-                    SwitchProfile {
-                        name: profile.name.clone(),
-                    },
-                )
-                .checked(is_active && store.snapshot.running)
-                .disabled(is_busy || !profile.ready()),
-            );
-        }
     }
-
-    let has_remote = store
-        .snapshot
-        .profiles
-        .iter()
-        .any(|p| p.source_url.is_some());
-
-    items.push(MenuItem::separator());
-    items.push(
-        MenuItem::action("Restart service", RestartService)
-            .disabled(is_busy || !store.snapshot.running),
-    );
-    items.push(MenuItem::action("Refresh public IP", RefreshIp).disabled(store.ip_loading));
-    items.push(MenuItem::action("Sync remote profiles", SyncAll).disabled(is_busy || !has_remote));
-    if !broken {
-        items.push(MenuItem::action("Run Doctor...", RunDoctor));
-    }
-
-    items.push(MenuItem::separator());
     items.push(MenuItem::action("Open sbctl", OpenMainWindow));
-    items.push(MenuItem::action("Logs", OpenLogsView));
-    items.push(MenuItem::action("Settings...", OpenSettingsView));
-    items.push(MenuItem::separator());
     items.push(MenuItem::action("Quit sbctl", QuitApp));
 
     items
+}
+
+fn is_ready(store: &AppStore, name: &str) -> bool {
+    store
+        .snapshot
+        .profiles
+        .iter()
+        .any(|p| p.name == name && p.ready())
+}
+
+fn profile_item(profile: &Profile, store: &AppStore, is_busy: bool) -> MenuItem {
+    let is_live = store.snapshot.running && store.snapshot.active.as_deref() == Some(&profile.name);
+    if is_live {
+        // Checked and locked: choosing the live profile again would only
+        // restart it for no reason.
+        return MenuItem::action(profile.name.clone(), Noop)
+            .checked(true)
+            .disabled(true);
+    }
+    let label = if profile.ready() {
+        profile.name.clone()
+    } else {
+        format!("{} (needs setup)", profile.name)
+    };
+    MenuItem::action(
+        label,
+        SwitchProfile {
+            name: profile.name.clone(),
+        },
+    )
+    .disabled(is_busy || !profile.ready())
 }

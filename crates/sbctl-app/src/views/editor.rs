@@ -1,6 +1,6 @@
 use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{Editor, EditorState, Input, InputState};
+use gpui_kit::component::input::{Editor, EditorState, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
@@ -18,7 +18,7 @@ use sbctl_core::profile::placeholders_in;
 use std::rc::Rc;
 
 use crate::actions::BackToConnections;
-use crate::state::{AppStore, BannerTone, EditorValidationState};
+use crate::state::{AppStore, BannerTone, EditorValidationState, NoticeOrigin};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum EditorTab {
@@ -303,7 +303,7 @@ impl ProfileEditorPanel {
                 self.validated_snapshot = Some(self.current_validation_key(cx));
                 self.store.update(cx, |s, cx| {
                     s.editor_validation = Some((name, EditorValidationState::Invalid(err.clone())));
-                    s.set_banner(BannerTone::Error, err, cx);
+                    s.set_notice(NoticeOrigin::Editor, BannerTone::Error, err, cx);
                 });
                 return;
             }
@@ -340,7 +340,7 @@ impl ProfileEditorPanel {
                 self.validated_snapshot = Some(self.current_validation_key(cx));
                 self.store.update(cx, |s, cx| {
                     s.editor_validation = Some((name, EditorValidationState::Invalid(err.clone())));
-                    s.set_banner(BannerTone::Error, err, cx);
+                    s.set_notice(NoticeOrigin::Editor, BannerTone::Error, err, cx);
                 });
             }
         }
@@ -358,7 +358,12 @@ impl ProfileEditorPanel {
             }
             Err(err) => {
                 self.store.update(cx, |s, cx| {
-                    s.set_banner(BannerTone::Error, format!("Invalid JSON: {err}"), cx);
+                    s.set_notice(
+                        NoticeOrigin::Editor,
+                        BannerTone::Error,
+                        format!("Invalid JSON: {err}"),
+                        cx,
+                    );
                 });
             }
         }
@@ -926,7 +931,12 @@ fn labeled_input(label: &'static str, state: &Entity<InputState>, cx: &App) -> g
                 .text_color(cx.theme().foreground)
                 .child(label),
         )
-        .child(Input::new(state).cleanable(true).small())
+        .child(
+            gpui_kit::component::input::Input::new(state)
+                .focus_bordered(false)
+                .cleanable(true)
+                .small(),
+        )
 }
 
 fn form_row_2(left: impl IntoElement, right: impl IntoElement) -> impl IntoElement {

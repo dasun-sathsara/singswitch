@@ -4,7 +4,7 @@ use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{
-    ActiveTheme as _, IconName, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
+    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
     App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
@@ -14,13 +14,15 @@ use gpui_kit::{
 
 use crate::actions::NavTab;
 use crate::fonts;
-use crate::state::{AppStore, BannerTone};
+use crate::state::{AppStore, BannerTone, NoticeOrigin};
 use crate::views::editor::ProfileEditorPanel;
 
 pub struct ProfilesView {
     store: Entity<AppStore>,
     editor: Entity<ProfileEditorPanel>,
     _search_input: Entity<InputState>,
+    /// Whether the technical detail rows are expanded on the Connections stage.
+    details_open: bool,
     _sub: Subscription,
 }
 
@@ -48,6 +50,7 @@ impl ProfilesView {
             store,
             editor,
             _search_input: search_input,
+            details_open: false,
             _sub: sub,
         }
     }
@@ -86,7 +89,11 @@ impl ProfilesView {
                                 .text_color(cx.theme().muted_foreground)
                                 .child("Create a profile from the VLESS + Reality template."),
                         )
-                        .child(Input::new(&name_input).cleanable(true)),
+                        .child(
+                            Input::new(&name_input)
+                                .focus_bordered(false)
+                                .cleanable(true),
+                        ),
                 )
                 .footer(
                     h_flex()
@@ -111,7 +118,8 @@ impl ProfilesView {
                                         Ok(()) => window.close_dialog(cx),
                                         Err(err) => {
                                             store_for_ok.update(cx, |s, cx| {
-                                                s.set_banner(
+                                                s.set_notice(
+                                                    NoticeOrigin::Stage,
                                                     BannerTone::Error,
                                                     err.to_string(),
                                                     cx,
@@ -153,8 +161,12 @@ impl ProfilesView {
                                     "Fetch a sing-box JSON config over HTTP(S) and validate it.",
                                 ),
                         )
-                        .child(Input::new(&name_input).cleanable(true))
-                        .child(Input::new(&url_input).cleanable(true)),
+                        .child(
+                            Input::new(&name_input)
+                                .focus_bordered(false)
+                                .cleanable(true),
+                        )
+                        .child(Input::new(&url_input).focus_bordered(false).cleanable(true)),
                 )
                 .footer(
                     h_flex()
@@ -176,7 +188,8 @@ impl ProfilesView {
                                     let url = u_ok.read(cx).value().trim().to_string();
                                     if name.is_empty() || url.is_empty() {
                                         s_ok.update(cx, |s, cx| {
-                                            s.set_banner(
+                                            s.set_notice(
+                                                NoticeOrigin::Stage,
                                                 BannerTone::Warning,
                                                 "Enter a profile name and URL.",
                                                 cx,
@@ -204,6 +217,7 @@ impl ProfilesView {
         let init_err = s.init_error.is_some();
 
         let setup = s.setup_condition();
+        let details_open = self.details_open;
 
         let Some(prof) = s
             .selected_profile
@@ -222,6 +236,23 @@ impl ProfilesView {
         let store_act = self.store.clone();
         let store_del = self.store.clone();
         let store_edit = self.store.clone();
+        let store_ip = self.store.clone();
+        let ip_loading = s.ip_loading;
+        let ip_error = s.ip_error.clone();
+        let ip_text = if s.ip_loading {
+            Some("Checking…".to_string())
+        } else {
+            s.ip_info.as_ref().map(|i| {
+                let loc = i.formatted_location();
+                if loc.is_empty() {
+                    i.ip.clone()
+                } else {
+                    format!("{} · {loc}", i.ip)
+                }
+            })
+        };
+        let store_dismiss = self.store.clone();
+        let stage_notice = s.notice_for(crate::state::NoticeOrigin::Stage).cloned();
         let store_sync = self.store.clone();
         let cfg_path = prof.path.display().to_string();
         let path_for_copy = cfg_path.clone();
@@ -337,6 +368,35 @@ impl ProfilesView {
                             ),
                     ),
             )
+            .when_some(stage_notice, |el, notice| {
+                el.child(
+                    h_flex()
+                        .mt(px(10.0))
+                        .gap(px(6.0))
+                        .items_center()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(match notice.tone {
+                                    BannerTone::Error => cx.theme().danger,
+                                    BannerTone::Warning => cx.theme().warning,
+                                    BannerTone::Success => cx.theme().success,
+                                    BannerTone::Info => cx.theme().muted_foreground,
+                                })
+                                .child(notice.message.clone()),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            Button::new("stage-notice-dismiss")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Close)
+                                .on_click(move |_, _, cx| {
+                                    store_dismiss.update(cx, |s, cx| s.dismiss_notice(cx));
+                                }),
+                        ),
+                )
+            })
             // Provenance — configured values only
             .child(
                 v_flex()
@@ -383,6 +443,64 @@ impl ProfilesView {
                         cx,
                     )),
             )
+            // Observed public IP: machine-wide, never presented as the profile's.
+            .child(
+                h_flex()
+                    .w_full()
+                    .py(px(10.0))
+                    .gap(px(10.0))
+                    .items_center()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        div()
+                            .w(px(132.0))
+                            .flex_none()
+                            .text_size(px(12.0))
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Public IP"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .truncate()
+                            .font_family(fonts::mono_family())
+                            .text_size(px(12.5))
+                            .text_color(if ip_text.is_some() {
+                                cx.theme().foreground
+                            } else {
+                                cx.theme().muted_foreground
+                            })
+                            .child(ip_text.clone().unwrap_or_else(|| "Not checked".into())),
+                    )
+                    .when_some(ip_error, |el, err| {
+                        el.child(
+                            div()
+                                .flex_none()
+                                .max_w(px(220.0))
+                                .truncate()
+                                .text_size(px(11.5))
+                                .text_color(cx.theme().danger)
+                                .child(err),
+                        )
+                    })
+                    .child(
+                        Button::new("conn-refresh-ip")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::RefreshCw)
+                            .label(if ip_loading {
+                                "Checking…"
+                            } else {
+                                "Refresh IP"
+                            })
+                            .disabled(ip_loading || busy)
+                            .on_click(move |_, _, cx| {
+                                store_ip.update(cx, |s, cx| s.refresh_ip(cx));
+                            }),
+                    ),
+            )
             // Runtime facts — only while running
             .when(is_live, |el| {
                 el.child(
@@ -424,55 +542,86 @@ impl ProfilesView {
                     ),
                 )
             })
-            // Config facts
+            // Advanced details stay available but collapsed: the daily task is
+            // knowing which profile is live and switching, not reading paths.
             .child(
-                v_flex()
-                    .mt(px(4.0))
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .child(fact_row("Config", path_for_copy.clone(), true, cx))
-                    .when_some(prof.source_url.clone(), |el, url| {
-                        let n = name_sync.clone();
-                        let st = store_sync.clone();
-                        el.child(
-                            h_flex()
-                                .min_h(px(32.0))
-                                .border_b_1()
-                                .border_color(cx.theme().border)
-                                .gap(px(16.0))
-                                .items_center()
-                                .child(
-                                    div()
-                                        .w(px(132.0))
-                                        .flex_none()
-                                        .text_size(px(12.0))
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child("Source"),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w(px(0.0))
-                                        .truncate()
-                                        .font_family(fonts::mono_family())
-                                        .text_size(px(12.5))
-                                        .child(url),
-                                )
-                                .child(
-                                    Button::new("conn-sync")
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::RefreshCw)
-                                        .tooltip("Sync from source")
-                                        .disabled(busy)
-                                        .on_click(move |_, _, cx| {
-                                            let n = n.clone();
-                                            st.update(cx, |s, cx| s.sync_profile(n, cx));
-                                        }),
-                                ),
-                        )
-                    }),
+                h_flex()
+                    .id("conn-details-toggle")
+                    .mt(px(6.0))
+                    .py(px(8.0))
+                    .gap(px(6.0))
+                    .items_center()
+                    .cursor_pointer()
+                    .child(
+                        Icon::new(if details_open {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Advanced details"),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.details_open = !this.details_open;
+                        cx.notify();
+                    })),
             )
+            .when(details_open, |el| {
+                el.child(
+                    v_flex()
+                        .mt(px(4.0))
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .child(fact_row("Config", path_for_copy.clone(), true, cx))
+                        .when_some(prof.source_url.clone(), |el, url| {
+                            let n = name_sync.clone();
+                            let st = store_sync.clone();
+                            el.child(
+                                h_flex()
+                                    .min_h(px(32.0))
+                                    .border_b_1()
+                                    .border_color(cx.theme().border)
+                                    .gap(px(16.0))
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .w(px(132.0))
+                                            .flex_none()
+                                            .text_size(px(12.0))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Source"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .truncate()
+                                            .font_family(fonts::mono_family())
+                                            .text_size(px(12.5))
+                                            .child(url),
+                                    )
+                                    .child(
+                                        Button::new("conn-sync")
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(IconName::RefreshCw)
+                                            .tooltip("Sync from source")
+                                            .disabled(busy)
+                                            .on_click(move |_, _, cx| {
+                                                let n = n.clone();
+                                                st.update(cx, |s, cx| s.sync_profile(n, cx));
+                                            }),
+                                    ),
+                            )
+                        }),
+                )
+            })
             .into_any_element()
     }
 }
@@ -552,7 +701,12 @@ impl ProfilesView {
                             if let Some(value) = (*original_ip).clone() {
                                 cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(value));
                                 ip.update(cx, |s, cx| {
-                                    s.set_banner(BannerTone::Success, "Public IP copied", cx);
+                                    s.set_notice(
+                                        NoticeOrigin::Stage,
+                                        BannerTone::Success,
+                                        "Public IP copied",
+                                        cx,
+                                    );
                                 });
                             }
                         }),

@@ -6,8 +6,9 @@ use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    App, ClipboardItem, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
-    Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    App, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use sbctl_core::doctor::{
     DiagnosticCheck, FixAction, macos_sudoers_install_command, macos_sudoers_root_script,
@@ -15,16 +16,26 @@ use sbctl_core::doctor::{
 use sbctl_core::layout::{Layout, PlatformKind};
 
 use crate::actions::NavTab;
-use crate::state::{AppStore, BannerTone, count_noun};
+use crate::state::{AppStore, BannerTone, NoticeOrigin, count_noun};
 use crate::theme::{subtle_pill_bg, surface_card_bg};
 
 pub struct DoctorView {
     store: Entity<AppStore>,
+    /// Passing checks are collapsed by default so problems lead the screen.
+    show_passed: bool,
 }
 
 impl DoctorView {
     pub fn new(store: Entity<AppStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            show_passed: false,
+        }
+    }
+
+    /// Titles that need attention, in the order Doctor lists them.
+    fn problem_count(checks: &[DiagnosticCheck]) -> usize {
+        checks.iter().filter(|c| !c.ok).count()
     }
 
     fn render_summary_bar(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -123,11 +134,69 @@ impl Render for DoctorView {
             .child(
                 v_flex()
                     .w_full()
-                    .gap_3()
-                    .children(checks.into_iter().enumerate().map(|(ix, chk)| {
-                        render_check_card(ix, chk, &layout, is_busy, &self.store, cx)
-                    })),
+                    .children(checks.iter().filter(|c| !c.ok).cloned().enumerate().map(
+                        |(ix, chk)| render_check_card(ix, chk, &layout, is_busy, &self.store, cx),
+                    ))
+                    .when(
+                        Self::problem_count(&checks) == 0 && !checks.is_empty(),
+                        |el| {
+                            el.child(
+                                div()
+                                    .py(px(10.0))
+                                    .text_sm()
+                                    .text_color(cx.theme().success)
+                                    .child("Everything is working."),
+                            )
+                        },
+                    ),
             )
+            .when(!checks.is_empty(), |el| {
+                let passed = checks.iter().filter(|c| c.ok && !c.warning).count();
+                el.child(
+                    h_flex()
+                        .id("doctor-passed-toggle")
+                        .w_full()
+                        .gap(px(6.0))
+                        .py(px(8.0))
+                        .items_center()
+                        .cursor_pointer()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            Icon::new(if self.show_passed {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .xsmall()
+                            .text_color(cx.theme().muted_foreground),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!("Show passed checks ({passed})")),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.show_passed = !this.show_passed;
+                            cx.notify();
+                        })),
+                )
+            })
+            .when(self.show_passed, |el| {
+                el.child(
+                    v_flex().w_full().children(
+                        checks
+                            .iter()
+                            .filter(|c| c.ok)
+                            .cloned()
+                            .enumerate()
+                            .map(|(ix, chk)| {
+                                render_check_card(ix + 100, chk, &layout, is_busy, &self.store, cx)
+                            }),
+                    ),
+                )
+            })
             .when(layout.platform == PlatformKind::Darwin, |this| {
                 this.child(render_macos_sudoers_card(&layout, is_busy, &self.store, cx))
             })
@@ -250,7 +319,12 @@ fn render_check_card(
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(hint_copy.clone()));
                                 store_hint.update(cx, |s, cx| {
-                                    s.set_banner(BannerTone::Success, "Copied hint", cx);
+                                    s.set_notice(
+                                        NoticeOrigin::Doctor,
+                                        BannerTone::Success,
+                                        "Copied hint",
+                                        cx,
+                                    );
                                 });
                             }),
                     ),
@@ -373,11 +447,7 @@ fn render_macos_sudoers_card(
                                         cmd_for_copy.clone(),
                                     ));
                                     store_copy.update(cx, |s, cx| {
-                                        s.set_banner(
-                                            BannerTone::Success,
-                                            "Copied sudoers command",
-                                            cx,
-                                        );
+                                        s.set_notice(NoticeOrigin::Doctor, BannerTone::Success, "Copied sudoers command", cx);
                                     });
                                 }),
                         )
@@ -473,11 +543,7 @@ fn render_windows_helper_card(
                                         install_cmd.to_string(),
                                     ));
                                     store_copy.update(cx, |s, cx| {
-                                        s.set_banner(
-                                            BannerTone::Success,
-                                            "Copied installer command",
-                                            cx,
-                                        );
+                                        s.set_notice(NoticeOrigin::Doctor, BannerTone::Success, "Copied installer command", cx);
                                     });
                                 }),
                         )
