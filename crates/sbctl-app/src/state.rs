@@ -143,8 +143,8 @@ pub struct AppStore {
     /// click, so the close path consults this before hiding.
     pub tray_available: bool,
     /// Cached counts of the error stream, maintained where it changes.
-    error_log_errors: usize,
-    error_log_warnings: usize,
+    /// Error/Warn counts for the error stream, kept incrementally.
+    error_log_counts: sbctl_core::logs::LogCounts,
     /// Stand-in layout for the init-failed state.
     ///
     /// Building `Layout::darwin()` walks PATH and stats binaries, and the UI
@@ -272,8 +272,7 @@ impl AppStore {
             settings,
             window_open: false,
             tray_available: false,
-            error_log_errors: 0,
-            error_log_warnings: 0,
+            error_log_counts: sbctl_core::logs::LogCounts::default(),
             fallback_layout: if cfg!(windows) {
                 Layout::windows()
             } else {
@@ -399,20 +398,17 @@ impl AppStore {
     /// time. The counts are refreshed when the buffer changes instead, so a
     /// repaint for any other reason costs nothing.
     pub fn log_counts(&self) -> (usize, usize) {
-        (self.error_log_errors, self.error_log_warnings)
+        (
+            self.error_log_counts.errors(),
+            self.error_log_counts.warnings(),
+        )
     }
 
-    fn recount_error_logs(&mut self) {
-        self.error_log_errors = self
-            .error_logs
-            .iter()
-            .filter(|r| r.level == LogLevel::Error)
-            .count();
-        self.error_log_warnings = self
-            .error_logs
-            .iter()
-            .filter(|r| r.level == LogLevel::Warn)
-            .count();
+    /// Bring the error/warn counts up to date with the buffer. Incremental when
+    /// the records it already counted are still a prefix of the buffer.
+    fn sync_log_counts(&mut self) {
+        self.error_log_counts
+            .sync(&self.error_logs, |r| r.id, |r| r.level);
     }
 
     /// Which setup condition, if any, the user needs to resolve. Ordered by
@@ -1606,7 +1602,7 @@ impl AppStore {
         self.error_log_id = sbctl_core::logs::log_file_id(&layout.error_log_path);
         self.access_log_id = sbctl_core::logs::log_file_id(&layout.access_log_path);
 
-        self.recount_error_logs();
+        self.sync_log_counts();
         load_tail_stream(
             &layout.error_log_path,
             &mut self.error_logs,
@@ -1710,7 +1706,7 @@ impl AppStore {
                     err_res,
                 );
                 if changed || err_rotated {
-                    store.recount_error_logs();
+                    store.sync_log_counts();
                 }
                 changed |= apply_log_delta(
                     &mut store.access_logs,
