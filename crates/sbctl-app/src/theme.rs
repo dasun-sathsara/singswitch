@@ -114,55 +114,53 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
         theme.font_family = crate::fonts::ui_family();
         theme.mono_font_family = crate::fonts::mono_family();
         if theme.mode.is_dark() {
-            theme.background = rgb(0x161513).into();
-            theme.foreground = rgb(0xEFEDE8).into();
-            theme.muted = rgb(0x232220).into();
-            theme.muted_foreground = rgb(0xB8B4AA).into();
-            theme.border = rgb(0x35322E).into();
-            theme.input = rgb(0x1D1C1A).into();
-            theme.title_bar = rgb(0x161513).into();
-            theme.title_bar_border = rgb(0x35322E).into();
-            theme.sidebar = rgb(0x1D1C1A).into();
-            theme.sidebar_border = rgb(0x35322E).into();
-            theme.sidebar_accent = rgb(0x303644).into();
-            theme.sidebar_accent_foreground = rgb(0xEFEDE8).into();
-            // Primary = explicit action (Connect, Switch): a blue, not the
-            // selection colour, so "act" and "selected" never look alike.
-            theme.primary = rgb(0x9DBCF0).into();
-            theme.primary_hover = rgb(0xB2CCF5).into();
-            theme.primary_active = rgb(0x8AAAE0).into();
-            theme.primary_foreground = rgb(0x172033).into();
-            theme.success = rgb(0x73D99B).into();
-            theme.warning = rgb(0xF4C46B).into();
-            theme.danger = rgb(0xFF9D93).into();
-            theme.ring = rgb(0x9DBCF0).into();
-            theme.selection = rgb(0x303644).into();
-            theme.caret = rgb(0x9DBCF0).into();
+            // Cool neutral grey, the vocabulary macOS utilities use. No warm
+            // cream: a tool should look like a system surface, not paper.
+            theme.background = rgb(0x1A1A1C).into();
+            theme.foreground = rgb(0xEDEDEF).into();
+            theme.muted = rgb(0x2A2A2E).into();
+            theme.muted_foreground = rgb(0xB0B0B6).into();
+            theme.border = rgb(0x3A3A3E).into();
+            theme.input = rgb(0x242427).into();
+            theme.title_bar = rgb(0x1F1F22).into();
+            theme.title_bar_border = rgb(0x3A3A3E).into();
+            theme.sidebar = rgb(0x1F1F22).into();
+            theme.sidebar_border = rgb(0x3A3A3E).into();
+            theme.sidebar_accent = rgb(0x323238).into();
+            theme.sidebar_accent_foreground = rgb(0xEDEDEF).into();
+            theme.primary = rgb(0x5AA2FF).into();
+            theme.primary_hover = rgb(0x74B1FF).into();
+            theme.primary_active = rgb(0x488FE6).into();
+            theme.primary_foreground = rgb(0x0D1117).into();
+            theme.success = rgb(0x5BC97E).into();
+            theme.warning = rgb(0xE0A33E).into();
+            theme.danger = rgb(0xFF7B72).into();
+            theme.ring = rgb(0x5AA2FF).into();
+            theme.selection = rgb(0x323238).into();
+            theme.caret = rgb(0x5AA2FF).into();
         } else {
-            theme.background = rgb(0xF7F6F3).into();
-            theme.foreground = rgb(0x171613).into();
-            theme.muted = rgb(0xEFEEE9).into();
-            theme.muted_foreground = rgb(0x5E5A52).into();
-            theme.border = rgb(0x716D66).into();
+            theme.background = rgb(0xEFEFF1).into();
+            theme.foreground = rgb(0x1B1B1E).into();
+            theme.muted = rgb(0xE8E8EB).into();
+            theme.muted_foreground = rgb(0x5E5E64).into();
+            theme.border = rgb(0xE1E1E4).into();
             theme.input = rgb(0xFFFFFF).into();
-            theme.title_bar = rgb(0xF7F6F3).into();
-            theme.title_bar_border = rgb(0xE2E0D9).into();
-            theme.sidebar = rgb(0xFFFFFF).into();
-            theme.sidebar_border = rgb(0xE2E0D9).into();
-            // Selection is neutral, never lavender: a viewed row must not read
-            // as "active" or as a brand accent.
-            theme.sidebar_accent = rgb(0xE8EBEF).into();
-            theme.sidebar_accent_foreground = rgb(0x171613).into();
-            theme.primary = rgb(0x234F86).into();
-            theme.primary_hover = rgb(0x1C4270).into();
-            theme.primary_active = rgb(0x16355C).into();
+            theme.title_bar = rgb(0xF0F0F2).into();
+            theme.title_bar_border = rgb(0xE1E1E4).into();
+            theme.sidebar = rgb(0xF5F5F7).into();
+            theme.sidebar_border = rgb(0xE1E1E4).into();
+            theme.sidebar_accent = rgb(0xE4E4E8).into();
+            theme.sidebar_accent_foreground = rgb(0x1B1B1E).into();
+            theme.primary = rgb(0x0B62C4).into();
+            theme.primary_hover = rgb(0x0A56AC).into();
+            theme.primary_active = rgb(0x084A94).into();
             theme.primary_foreground = rgb(0xFFFFFF).into();
-            theme.success = rgb(0x166534).into();
-            theme.warning = rgb(0x8A5300).into();
-            theme.danger = rgb(0xA3261D).into();
-            theme.ring = rgb(0x234F86).into();
-            theme.selection = rgb(0xE8EBEF).into();
-            theme.caret = rgb(0x234F86).into();
+            theme.success = rgb(0x1F7A3D).into();
+            theme.warning = rgb(0x8A4B00).into();
+            theme.danger = rgb(0xB3261E).into();
+            theme.ring = rgb(0x0B62C4).into();
+            theme.selection = rgb(0xE4E4E8).into();
+            theme.caret = rgb(0x0B62C4).into();
         }
     });
 }
@@ -203,4 +201,24 @@ pub fn input_frame(focused: bool, cx: &gpui_kit::App) -> gpui_kit::Div {
         .bg(theme.input)
         .border_1()
         .border_color(if focused { theme.ring } else { theme.border })
+}
+
+/// The edge of a control that must read as a control: a button outline or a
+/// field border. Structural hairlines use `theme.border`, which is deliberately
+/// faint enough to recede; this is the one place a visible line earns its keep.
+pub fn control_edge(cx: &gpui_kit::App) -> gpui_kit::Hsla {
+    if cx.theme().is_dark() {
+        gpui_kit::rgb(0x45454A).into()
+    } else {
+        gpui_kit::rgb(0xD2D2D8).into()
+    }
+}
+
+/// A neutral hover wash for rows and controls, one step above the ground.
+pub fn hover_wash(cx: &gpui_kit::App) -> gpui_kit::Hsla {
+    if cx.theme().is_dark() {
+        gpui_kit::rgb(0x2A2A2E).into()
+    } else {
+        gpui_kit::rgb(0xE8E8EB).into()
+    }
 }
