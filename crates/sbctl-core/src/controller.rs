@@ -11,7 +11,7 @@ use crate::activator::{
     write_new_file_exclusive,
 };
 use crate::checker::{Checker, ExecChecker, check_temp_bytes};
-use crate::doctor::{DiagnosticCheck, SudoProbeFn, diagnose_active, run_doctor_checks};
+use crate::doctor::diagnose_active;
 use crate::error::{ExitCode, Result, SbctlError, store_error};
 use crate::layout::{Layout, PlatformKind};
 use crate::lock::AdvisoryLock;
@@ -22,6 +22,7 @@ use crate::profile::{
 };
 use crate::remote::{fetch_remote_profile, normalise_profile_url, validate_remote_body};
 use crate::runner::{ExecRunner, Runner, SudoRunner, TraceHook};
+use crate::service::SudoProbeFn;
 use crate::service::launchd::LaunchdManager;
 use crate::service::win_rpc::{
     HELPER_SERVICE_NAME, PipeRequest, PipeResponse, try_send_pipe_request,
@@ -914,18 +915,6 @@ impl Controller {
         )
     }
 
-    /// Run all `doctor` checks against this controller's layout and services.
-    pub fn doctor(&self) -> Vec<DiagnosticCheck> {
-        run_doctor_checks(
-            &self.layout,
-            self.checker.as_ref(),
-            self.manager.as_ref(),
-            self.activator.as_ref(),
-            self.runner.as_ref(),
-            self.sudo_probe.as_ref(),
-        )
-    }
-
     /// Ensure the configured profiles directory exists.
     pub fn ensure_profiles_dir(&self) -> Result<()> {
         fs::create_dir_all(&self.layout.profiles_dir)
@@ -1481,26 +1470,6 @@ mod tests {
         assert_eq!(err.code, ExitCode::Service);
         assert!(err.message.contains("reverted work"));
         assert_eq!(fs::read_to_string(&p).unwrap(), r#"{"version":"new"}"#);
-    }
-
-    #[test]
-    fn doctor_reports_sudo_mismatch_and_broken_active_profile() {
-        let (_dir, mut ctrl, runner, _checker) = test_controller(PlatformKind::Darwin);
-        runner.set_response(
-            "sudo -n /bin/launchctl print",
-            FakeResult::ok("state = running\npid = 123\nruns = 1\n"),
-        );
-        ctrl.sudo_probe = Some(Arc::new(|argv| {
-            if argv.iter().any(|a| a == "bootout") {
-                Err("sudo: a password is required".to_string())
-            } else {
-                Ok(())
-            }
-        }));
-        let checks = ctrl.doctor();
-        let stop_check = checks.iter().find(|c| c.name == "sudo: stop").unwrap();
-        assert!(!stop_check.ok);
-        assert_eq!(stop_check.detail, "not permitted without a password");
     }
 
     #[test]

@@ -127,7 +127,6 @@ enum Commands {
     /// Show the public IP address traffic is leaving from
     Ip,
     /// Diagnose the sbctl installation
-    Doctor,
     /// Show version information
     Version,
     /// Generate shell completions
@@ -227,7 +226,6 @@ fn run(cli: &Cli, ctrl: &Controller, theme: &Theme) -> sbctl_core::error::Result
         Some(Commands::Rm { name, force }) => cmd_rm(cli, ctrl, theme, name, *force),
         Some(Commands::Check { name }) => cmd_check(cli, ctrl, theme, name.as_deref()),
         Some(Commands::Ip) => cmd_ip(cli, theme),
-        Some(Commands::Doctor) => cmd_doctor(cli, ctrl, theme),
         Some(Commands::Version)
         | Some(Commands::Completion { .. })
         | Some(Commands::PrintSudoers { .. })
@@ -818,30 +816,6 @@ fn cmd_ip(cli: &Cli, theme: &Theme) -> sbctl_core::error::Result<()> {
     Ok(())
 }
 
-fn cmd_doctor(cli: &Cli, ctrl: &Controller, theme: &Theme) -> sbctl_core::error::Result<()> {
-    let checks = ctrl.doctor();
-    let failed = checks.iter().any(|c| !c.ok && !c.warning);
-
-    if cli.json {
-        emit_json(&json!({ "checks": checks, "ok": !failed }))?;
-        if failed {
-            return Err(SbctlError::general("some checks failed").mark_reported());
-        }
-        return Ok(());
-    }
-
-    if !cli.quiet {
-        print!("{}", theme.render_checks(&checks));
-    }
-    if failed {
-        return Err(SbctlError::general("some checks failed"));
-    }
-    if !cli.quiet {
-        println!("{}", theme.ok("everything looks healthy"));
-    }
-    Ok(())
-}
-
 fn cmd_version_standalone(cli: &Cli, theme: &Theme) -> sbctl_core::error::Result<()> {
     let checker = sbctl_core::checker::ExecChecker::default();
     emit_version_with_checker(cli, &checker, theme)
@@ -1084,30 +1058,5 @@ mod tests {
         assert!(
             matches!(parsed.command, Some(Commands::Use { name: Some(ref n) }) if n == "aws-sg")
         );
-    }
-
-    #[test]
-    fn cmd_doctor_detects_missing_singbox_and_reports_checks() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut layout = Layout::darwin();
-        layout.profiles_dir = dir.path().join("profiles");
-        fs::create_dir_all(&layout.profiles_dir).unwrap();
-
-        let runner = Arc::new(FakeRunner::default());
-        runner.set_response(
-            "sudo -n /bin/launchctl print",
-            FakeResult::ok("state = running\npid = 1\nruns = 1\n"),
-        );
-        let checker = FakeChecker {
-            missing_binary: true,
-            ..Default::default()
-        };
-        let mut ctrl =
-            Controller::with_runner(layout, runner, Arc::new(checker), Arc::new(NoopNotifier));
-        ctrl.sudo_probe = Some(Arc::new(|_| Ok(())));
-
-        let checks = ctrl.doctor();
-        assert!(!checks[0].ok);
-        assert_eq!(checks[0].name, "sing-box");
     }
 }

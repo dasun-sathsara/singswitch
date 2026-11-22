@@ -7,7 +7,6 @@
 //! belong to the machine and live in the toolbar and status strip. They are
 //! never mixed, because only one of them can be attributed to a profile.
 
-pub mod doctor;
 pub mod editor;
 pub mod logs;
 pub mod profiles;
@@ -32,7 +31,6 @@ use crate::fonts;
 use crate::shell::set_dock_visible;
 use crate::state::{AppStore, BannerTone, NoticeOrigin};
 use crate::theme::ThemePreference;
-use crate::views::doctor::DoctorView;
 use crate::views::logs::LogsView;
 use crate::views::profiles::ProfilesView;
 use crate::views::settings::SettingsView;
@@ -46,7 +44,6 @@ pub struct WorkspaceShell {
     store: Entity<AppStore>,
     profiles: Entity<ProfilesView>,
     logs: Entity<LogsView>,
-    doctor: Entity<DoctorView>,
     settings: Entity<SettingsView>,
     filter: Entity<InputState>,
     _subs: Vec<Subscription>,
@@ -78,7 +75,6 @@ impl WorkspaceShell {
 
         let profiles = cx.new(|cx| ProfilesView::new(store.clone(), window, cx));
         let logs = cx.new(|cx| LogsView::new(store.clone(), window, cx));
-        let doctor = cx.new(|_| DoctorView::new(store.clone()));
         let settings = cx.new(|_| SettingsView::new(store.clone()));
 
         let filter = cx.new(|cx| {
@@ -122,7 +118,6 @@ impl WorkspaceShell {
             store,
             profiles,
             logs,
-            doctor,
             settings,
             filter,
             _subs: subs,
@@ -240,7 +235,6 @@ impl WorkspaceShell {
         let screen = match tab {
             NavTab::Profiles => "Connections",
             NavTab::Logs => "Logs",
-            NavTab::Doctor => "Doctor",
             NavTab::Settings => "Settings",
         };
 
@@ -413,11 +407,6 @@ impl WorkspaceShell {
             })
             .collect();
         let (log_errors, _) = s.log_counts();
-        let doctor_failed = s
-            .doctor_checks
-            .iter()
-            .filter(|c| !c.ok && !c.warning)
-            .count();
 
         let store_select = self.store.clone();
         let store_switch = self.store.clone();
@@ -674,7 +663,6 @@ impl WorkspaceShell {
                         [
                             ("Connections", NavTab::Profiles, 0usize, true),
                             ("Logs", NavTab::Logs, log_errors, false),
-                            ("Doctor", NavTab::Doctor, doctor_failed, false),
                             ("Settings", NavTab::Settings, 0, true),
                         ]
                         .into_iter()
@@ -724,7 +712,6 @@ impl WorkspaceShell {
         match self.store.read(cx).selected_tab {
             NavTab::Profiles => self.profiles.clone().into_any_element(),
             NavTab::Logs => self.logs.clone().into_any_element(),
-            NavTab::Doctor => self.doctor.clone().into_any_element(),
             NavTab::Settings => self.settings.clone().into_any_element(),
         }
     }

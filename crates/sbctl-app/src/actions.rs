@@ -5,7 +5,6 @@ pub enum NavTab {
     #[default]
     Profiles,
     Logs,
-    Doctor,
     Settings,
 }
 
@@ -19,7 +18,6 @@ actions!(
         SaveAndActivateProfile,
         SyncAll,
         RefreshIp,
-        RunDoctor,
         OpenMainWindow,
         OpenLogsView,
         OpenSettingsView,
@@ -32,7 +30,6 @@ actions!(
         EditSelectedProfile,
         DeleteSelectedProfile,
         RestartService,
-        OpenDoctorView,
     ]
 );
 

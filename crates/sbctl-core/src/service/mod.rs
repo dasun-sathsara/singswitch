@@ -1,4 +1,13 @@
 pub mod launchd;
+
+/// Injection point for verifying a sudoers rule is actually in force.
+///
+/// Returns `Err(reason)` when the rule would prompt for a password. Used by the
+/// verified-activation path and by tests.
+pub type SudoProbeFn =
+    std::sync::Arc<dyn Fn(&[String]) -> std::result::Result<(), String> + Send + Sync>;
+
+pub use self::SudoProbeFn as Probe;
 pub mod win_rpc;
 pub mod winsw;
 

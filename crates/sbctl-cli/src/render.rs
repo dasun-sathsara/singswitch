@@ -1,7 +1,6 @@
 use std::io::IsTerminal;
 
 use sbctl_core::controller::StatusView;
-use sbctl_core::doctor::DiagnosticCheck;
 use sbctl_core::error::SbctlError;
 use sbctl_core::ip::IpInfo;
 use sbctl_core::profile::Profile;
@@ -218,30 +217,6 @@ impl Theme {
             } else {
                 let pad = " ".repeat(name_width.saturating_sub(name.len()) + 2);
                 out.push_str(&format!("{lead}{pad}{}\n", self.muted(note)));
-            }
-        }
-        out
-    }
-
-    pub fn render_checks(&self, checks: &[DiagnosticCheck]) -> String {
-        let name_width = checks.iter().map(|c| c.name.len()).max().unwrap_or(0);
-        let mut out = String::new();
-        for c in checks {
-            let glyph = if c.warning {
-                self.paint("33", if self.opts.plain { "!" } else { "⚠" })
-            } else if c.ok {
-                self.paint("32", if self.opts.plain { "+" } else { "✓" })
-            } else {
-                self.paint("31", if self.opts.plain { "x" } else { "✗" })
-            };
-            let pad = " ".repeat(name_width.saturating_sub(c.name.len()));
-            out.push_str(&format!(
-                "{glyph} {}  {}\n",
-                self.paint("2", &format!("{}{pad}", c.name)),
-                c.detail
-            ));
-            if !c.hint.is_empty() && !c.ok {
-                out.push_str(&format!("{}\n", self.hint(&c.hint)));
             }
         }
         out

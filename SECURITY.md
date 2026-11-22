@@ -15,7 +15,7 @@ No persistent root helper runs for `sbctl`. Both `sbctl` and `sbctl-app` run as 
 <user> ALL=(root) NOPASSWD: /bin/launchctl bootstrap system /Library/LaunchDaemons/app.lexiflix.singbox.plist
 ```
 
-`Layout::sudo_commands` generates both `sbctl print-sudoers` output and runtime `sudo` arguments from one table. Staged installs validate the temporary rules file with `visudo -cf` before installing it as `0440 root:wheel`, and `sbctl doctor` checks each rule with `sudo -n -l`.
+`Layout::sudo_commands` generates both `sbctl print-sudoers` output and runtime `sudo` arguments from one table. Staged installs validate the temporary rules file with `visudo -cf` before installing it as `0440 root:wheel`, and activation verifies the rule with `sudo -n -l` before relying on it.
 
 ### Windows
 
@@ -35,7 +35,7 @@ Both `sbctl-agent` and the `--elevated-op` UAC fallback deserialize typed JSON `
 
 ## Privileged binaries
 
-Both platforms run a sing-box that ordinary users cannot replace. macOS installs a root-owned copy at `/usr/local/libexec/sbctl/sing-box`; Windows installs one at `%ProgramData%\sbctl\bin\sing-box.exe` (plus `libcronet.dll`). The installer takes both from the checksum-verified release pinned in `scripts/sing-box.lock`, and the LaunchDaemon and WinSW service point at that path. A sing-box from Homebrew, WinGet, or `PATH` is only used as a fallback when no managed copy exists, and `sbctl doctor` flags it as unmanaged.
+Both platforms run a sing-box that ordinary users cannot replace. macOS installs a root-owned copy at `/usr/local/libexec/sbctl/sing-box`; Windows installs one at `%ProgramData%\sbctl\bin\sing-box.exe` (plus `libcronet.dll`). The installer takes both from the checksum-verified release pinned in `scripts/sing-box.lock`, and the LaunchDaemon and WinSW service point at that path. A sing-box from Homebrew, WinGet, or `PATH` is only used as a fallback when no managed copy exists.
 
 ## Known limitation: user-writable profiles
 

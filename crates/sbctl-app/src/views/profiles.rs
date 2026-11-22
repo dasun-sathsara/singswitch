@@ -12,7 +12,6 @@ use gpui_kit::{
     div, prelude::FluentBuilder as _, px,
 };
 
-use crate::actions::NavTab;
 use crate::fonts;
 use crate::state::{AppStore, BannerTone, NoticeOrigin};
 use crate::views::editor::ProfileEditorPanel;
@@ -362,6 +361,7 @@ impl ProfilesView {
                                         open_delete_dialog(
                                             name_del.clone(),
                                             is_live,
+                                            NoticeOrigin::Stage,
                                             store_del.clone(),
                                             window,
                                             cx,
@@ -741,10 +741,6 @@ fn render_setup(
         ),
         C::InitFailed(err) => ("sbctl cannot reach the service".into(), err.clone()),
         C::Broken(reason) => ("The active configuration is broken".into(), reason.clone()),
-        C::Blocked(name) => (
-            "A required permission is missing".into(),
-            format!("Doctor reports {name} is not ready. Run Doctor to repair it."),
-        ),
         C::EmptyLibrary => (
             "No profiles yet".into(),
             "Add one, or import a sing-box config from a URL.".into(),
@@ -757,7 +753,7 @@ fn render_setup(
 
     let store_new = store.clone();
     let store_import = store.clone();
-    let store_doctor = store.clone();
+    let store_edit = store.clone();
 
     v_flex()
         .size_full()
@@ -799,20 +795,17 @@ fn render_setup(
                         })
                 }))
                 .children(
-                    matches!(condition, C::Blocked(_) | C::Broken(_) | C::InitFailed(_)).then(
-                        || {
-                            Button::new("setup-doctor")
-                                .primary()
-                                .small()
-                                .label("Run Doctor")
-                                .on_click(move |_, _, cx| {
-                                    store_doctor.update(cx, |s, cx| {
-                                        s.set_tab(NavTab::Doctor, cx);
-                                        s.run_doctor(cx);
-                                    });
-                                })
-                        },
-                    ),
+                    // A broken config is fixed where it is edited, not in a
+                    // diagnostics screen.
+                    matches!(condition, C::Broken(_)).then(|| {
+                        Button::new("setup-fix-config")
+                            .primary()
+                            .small()
+                            .label("Fix configuration")
+                            .on_click(move |_, _, cx| {
+                                store_edit.update(cx, |s, cx| s.begin_edit(cx));
+                            })
+                    }),
                 ),
         )
 }
@@ -935,12 +928,20 @@ pub fn confirm_delete_selected(store: Entity<AppStore>, window: &mut Window, cx:
         let live = s.snapshot.running && s.snapshot.active.as_deref() == Some(name.as_str());
         (name, live)
     };
-    open_delete_dialog(name, is_live, store, window, cx);
+    // The dialog is opened from the editor or the stage; report back to the
+    // surface the user is actually looking at.
+    let origin = if store.read(cx).editing {
+        NoticeOrigin::Editor
+    } else {
+        NoticeOrigin::Stage
+    };
+    open_delete_dialog(name, is_live, origin, store, window, cx);
 }
 
 fn open_delete_dialog(
     name: String,
     is_connected: bool,
+    origin: NoticeOrigin,
     store: Entity<AppStore>,
     window: &mut Window,
     cx: &mut App,
@@ -965,7 +966,7 @@ fn open_delete_dialog(
                 // this dialog exists to give. Core decides, and its refusal
                 // comes back as a notice.
                 s_ok.update(cx, |s, cx| {
-                    s.delete_profile(n_ok.clone(), false, cx);
+                    s.delete_profile(n_ok.clone(), false, origin, cx);
                 });
                 true
             })

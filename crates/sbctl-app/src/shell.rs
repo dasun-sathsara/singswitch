@@ -4,7 +4,7 @@ use sbctl_core::error::{Result, SbctlError};
 
 use crate::actions::{
     CloseWindow, ConnectActive, DisconnectService, ImportUrlDialog, NavTab, NewProfileDialog,
-    OpenMainWindow, OpenSettingsView, QuitApp, RefreshIp, RunDoctor, SaveAndActivateProfile,
+    OpenMainWindow, OpenSettingsView, QuitApp, RefreshIp, SaveAndActivateProfile,
     SaveCurrentProfile, SelectTab, SyncAll,
 };
 
@@ -51,7 +51,6 @@ pub fn install_app_menus(cx: &mut App) {
                 MenuItem::action("Open sbctl", OpenMainWindow),
                 MenuItem::action("Settings...", OpenSettingsView),
                 MenuItem::separator(),
-                MenuItem::action("Run Doctor", RunDoctor),
                 MenuItem::separator(),
                 MenuItem::action("Quit sbctl", QuitApp),
             ],
@@ -109,12 +108,6 @@ pub fn install_app_menus(cx: &mut App) {
                     },
                 ),
                 MenuItem::action("Logs", SelectTab { tab: NavTab::Logs }),
-                MenuItem::action(
-                    "Doctor",
-                    SelectTab {
-                        tab: NavTab::Doctor,
-                    },
-                ),
                 MenuItem::action(
                     "Settings",
                     SelectTab {
