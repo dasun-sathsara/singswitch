@@ -162,7 +162,11 @@ impl WorkspaceShell {
                 .unwrap_or_else(|| "unknown profile".into());
             return (cx.theme().success, format!("Connected: {name}"));
         }
-        match &snap.active {
+        // Name the profile the connect button will actually act on. Using
+        // `active` here put a different name next to the button than the one it
+        // would activate.
+        let target = self.connect_target(cx).0.or_else(|| snap.active.clone());
+        match target {
             Some(name) => (
                 cx.theme().muted_foreground,
                 format!("Stopped · {name} selected"),
@@ -524,8 +528,15 @@ impl WorkspaceShell {
                             .justify_center()
                             .rounded(px(7.0))
                             .cursor_pointer()
-                            .when(is_selected, |el| el.bg(cx.theme().sidebar_accent))
-                            .hover(|el| el.bg(crate::theme::hover_wash(cx)))
+                            // Hover must not repaint the selected row: doing so
+                            // made the current profile unreadable under the
+                            // cursor, because the two washes differ by 1.04:1.
+                            .when(is_selected, |el| {
+                                el.bg(cx.theme().sidebar_accent).font_bold()
+                            })
+                            .when(!is_selected, |el| {
+                                el.hover(|el| el.bg(crate::theme::hover_wash(cx)))
+                            })
                             .on_click(move |_, _, cx| {
                                 // Inspecting always lands on Connections, even
                                 // when the click came from Logs or Settings.

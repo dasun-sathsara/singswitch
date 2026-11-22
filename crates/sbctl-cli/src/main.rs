@@ -85,7 +85,7 @@ enum Commands {
         #[arg(short = 'n', long, default_value_t = 80)]
         lines: usize,
         /// Follow new log lines until Ctrl-C
-        #[arg(short = 'f', long, default_value_t = true)]
+        #[arg(short = 'f', long)]
         follow: bool,
     },
     /// Create a profile from the template and edit it
@@ -219,7 +219,7 @@ fn run(cli: &Cli, ctrl: &Controller, theme: &Theme) -> sbctl_core::error::Result
         Some(Commands::Use { name: Some(n) }) => cmd_use(cli, ctrl, theme, n),
         Some(Commands::Off) => cmd_off(cli, ctrl, theme),
         Some(Commands::Status) => cmd_status(cli, ctrl, theme),
-        Some(Commands::Logs { lines, follow }) => cmd_logs(ctrl, *lines, *follow),
+        Some(Commands::Logs { lines, follow }) => cmd_logs(cli, ctrl, *lines, *follow),
         Some(Commands::Add { name }) => cmd_add(cli, ctrl, theme, name),
         Some(Commands::Pull { name, url }) => cmd_pull(cli, ctrl, theme, name, url),
         Some(Commands::Sync { name }) => cmd_sync(cli, ctrl, theme, name.as_deref()),
@@ -414,7 +414,12 @@ fn cmd_off(cli: &Cli, ctrl: &Controller, theme: &Theme) -> sbctl_core::error::Re
     Ok(())
 }
 
-fn cmd_logs(ctrl: &Controller, lines: usize, follow: bool) -> sbctl_core::error::Result<()> {
+fn cmd_logs(
+    cli: &Cli,
+    ctrl: &Controller,
+    lines: usize,
+    follow: bool,
+) -> sbctl_core::error::Result<()> {
     let path = &ctrl.layout.error_log_path;
     if !path.exists() {
         return Err(
@@ -427,8 +432,17 @@ fn cmd_logs(ctrl: &Controller, lines: usize, follow: bool) -> sbctl_core::error:
     }
 
     let (initial, mut offset) = read_tail_lines(path, lines)?;
-    for line in initial {
-        println!("{line}");
+    if cli.json {
+        // Every other command honours the global flag; `logs` ignored it and
+        // emitted plain text while the README promised schema 1.
+        emit_json(&json!({ "lines": initial }))?;
+        if !follow {
+            return Ok(());
+        }
+    } else {
+        for line in &initial {
+            println!("{line}");
+        }
     }
     if !follow {
         return Ok(());

@@ -25,6 +25,32 @@ fn version_json_outputs_schema_v1() {
 }
 
 #[test]
+fn logs_without_follow_exits_and_honours_json() {
+    // `--follow` used to default to true, so `sbctl logs` never returned.
+    let dir = std::env::temp_dir().join(format!("sbctl-logs-test-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let out = Command::new(sbctl_bin())
+        .args(["logs", "-n", "5", "--json"])
+        .env("SBCTL_LOG_DIR", &dir)
+        .output()
+        .expect("run sbctl logs -n 5 --json");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Either it has no log file yet (refused with a hint) or it printed schema 1
+    // and exited. What must never happen is hanging.
+    if out.status.success() {
+        let body: Value = serde_json::from_slice(&out.stdout).expect("valid JSON output");
+        assert_eq!(body["schema"], 1);
+        assert!(body["lines"].is_array());
+    } else {
+        // Errors are reported as JSON on stdout in --json mode, with a
+        // non-zero exit. Either way it must not hang.
+        let body: Value = serde_json::from_slice(&out.stdout).expect("valid JSON error output");
+        assert!(body["error"].is_string(), "a failure must explain itself");
+    }
+}
+
+#[test]
 fn print_sudoers_renders_scoped_darwin_rules() {
     let out = Command::new(sbctl_bin())
         .args(["print-sudoers", "--user", "alice"])

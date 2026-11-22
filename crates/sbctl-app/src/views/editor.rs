@@ -829,7 +829,7 @@ impl Render for ProfileEditorPanel {
                 .child(
                     div()
                         .text_sm()
-                        .font_semibold()
+                        .font_bold()
                         .text_color(cx.theme().foreground)
                         .child("Select or create a profile."),
                 )
@@ -941,7 +941,7 @@ fn render_placeholder_strip(live_todos: Vec<String>, cx: &App) -> impl IntoEleme
         .child(
             div()
                 .text_xs()
-                .font_semibold()
+                .font_bold()
                 .text_color(cx.theme().warning)
                 .child("Placeholders:"),
         )
@@ -955,7 +955,7 @@ fn render_placeholder_strip(live_todos: Vec<String>, cx: &App) -> impl IntoEleme
 fn section_heading(title: &'static str, cx: &App) -> impl IntoElement {
     div()
         .text_xs()
-        .font_semibold()
+        .font_bold()
         .text_color(cx.theme().muted_foreground)
         .child(title)
 }
@@ -968,7 +968,7 @@ fn labeled_input(label: &'static str, state: &Entity<InputState>, cx: &App) -> g
         .child(
             div()
                 .text_xs()
-                .font_medium()
+                .font_normal()
                 .text_color(cx.theme().foreground)
                 .child(label),
         )

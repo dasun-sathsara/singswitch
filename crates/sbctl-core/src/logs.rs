@@ -72,9 +72,11 @@ pub fn strip_ansi(input: &str) -> String {
                     i += 1;
                 }
             }
-            // Any other two-byte escape.
-            Some(_) => i += 2,
-            None => i += 1,
+            // Any other two-byte escape, but only when the follower is a
+            // single-byte char. Advancing two bytes past a UTF-8 lead byte
+            // would resume mid-scalar and panic on the next slice.
+            Some(b) if b < 0x80 => i += 2,
+            _ => i += 1,
         }
     }
     out
@@ -91,27 +93,75 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
+    /// Classify from the level field sing-box writes, never from the message.
+    ///
+    /// The body routinely contains the words we look for: an INFO line reading
+    /// "connection error, retrying" is not an error, and scanning the whole line
+    /// for "ERR " matched proxy tags. That misclassification drove the row
+    /// badge, the severity filters, and the error count in the rail.
+    ///
+    /// sing-box writes either `-0700 2026-01-02 15:04:05 LEVEL msg` (with
+    /// `timestamp: true`) or `LEVEL[0012] msg` (without), optionally after an
+    /// ANSI colour code.
     pub fn classify(line: &str) -> Self {
-        // Colour codes can sit between the bracket and the word, so classify
-        // against the stripped text.
         let line = &strip_ansi(line);
-        if contains_ignore_ascii_case(line, "FATAL")
-            || contains_ignore_ascii_case(line, "ERROR")
-            || contains_ignore_ascii_case(line, "ERR ")
-        {
-            Self::Error
-        } else if contains_ignore_ascii_case(line, "WARN") {
-            Self::Warn
-        } else if contains_ignore_ascii_case(line, "INFO") {
-            Self::Info
-        } else if contains_ignore_ascii_case(line, "DEBUG")
-            || contains_ignore_ascii_case(line, "TRACE")
-        {
-            Self::Debug
-        } else {
-            Self::Other
+        let Some(token) = level_token(line) else {
+            return Self::Other;
+        };
+        match token {
+            "FATAL" | "PANIC" | "ERROR" | "ERR" => Self::Error,
+            "WARN" | "WARNING" => Self::Warn,
+            "INFO" => Self::Info,
+            "DEBUG" | "TRACE" => Self::Debug,
+            _ => Self::Other,
         }
     }
+}
+
+/// The level word at the front of a sing-box log line, if there is one.
+///
+/// Accepts the shapes sing-box actually writes:
+/// `-0700 2026-01-02 15:04:05 LEVEL msg`,
+/// `2026-01-02T15:04:05.000000000+07:00 LEVEL msg`, and `LEVEL[0012] msg`.
+fn level_token(line: &str) -> Option<&str> {
+    const LEVELS: [&str; 9] = [
+        "FATAL", "PANIC", "ERROR", "WARN", "WARNING", "INFO", "DEBUG", "TRACE", "ERR",
+    ];
+    let token_of = |rest: &str| -> Option<&str> {
+        let end = rest
+            .find(|c: char| !c.is_ascii_uppercase())
+            .unwrap_or(rest.len());
+        LEVELS.iter().find(|l| **l == &rest[..end]).copied()
+    };
+
+    let line = line.trim_start();
+
+    // Timezone offset prefix: "+0530 " or "-0700 ", then date and time words.
+    if let Some(pos) = line.find(' ') {
+        let head = &line[..pos];
+        let is_offset = head.len() == 5
+            && (head.starts_with('+') || head.starts_with('-'))
+            && head[1..].bytes().all(|b| b.is_ascii_digit());
+        if is_offset {
+            let mut rest = line[pos..].trim_start();
+            for _ in 0..2 {
+                rest = rest[rest.find(' ')?..].trim_start();
+            }
+            return token_of(rest);
+        }
+    }
+
+    // ISO date prefix: "2026-01-02T15:04:05...+07:00 ".
+    if line.len() > 10
+        && line.as_bytes().get(4) == Some(&b'-')
+        && line.as_bytes().get(7) == Some(&b'-')
+        && line[..4].bytes().all(|b| b.is_ascii_digit())
+    {
+        let rest = line[line.find(' ')?..].trim_start();
+        return token_of(rest);
+    }
+
+    token_of(line)
 }
 
 /// Return the byte offset in `file` where the final `lines` lines begin, scanning
@@ -161,9 +211,16 @@ pub fn read_tail_lines(path: &Path, max_lines: usize) -> std::io::Result<(Vec<St
 
     let mut raw = Vec::with_capacity((len - start) as usize);
     file.read_to_end(&mut raw)?;
-    let text = String::from_utf8_lossy(&raw);
+    // Drop any unterminated trailing fragment and report the offset of the last
+    // complete newline. Reporting `len` would consume that fragment here and
+    // re-read its remainder on the next append, merging two writes into one line.
+    let complete = match raw.iter().rposition(|&b| b == b'\n') {
+        Some(pos) => pos + 1,
+        None => 0,
+    };
+    let text = String::from_utf8_lossy(&raw[..complete]);
     let lines = text.lines().map(ToString::to_string).collect::<Vec<_>>();
-    Ok((lines, len))
+    Ok((lines, start + complete as u64))
 }
 
 /// Identity of a log file, used to detect a rotation that a length check misses.
@@ -258,6 +315,26 @@ pub fn read_appended_lines(path: &Path, offset: u64) -> std::io::Result<(Vec<Str
     Ok((lines, next_offset, truncated))
 }
 
+/// Append `lines` to `buf`, keeping at most `max` entries.
+///
+/// Returns the number of records dropped. Dropping from the front *before*
+/// building the records avoids constructing entries only to discard them.
+pub fn append_bounded<T, F>(buf: &mut Vec<T>, lines: Vec<String>, max: usize, make: F)
+where
+    F: Fn(String) -> T,
+{
+    let incoming = lines.len();
+    let cur = buf.len();
+    let keep_new = incoming.min(max);
+    // Records that are about to fall off the front never need constructing.
+    let skip_new = incoming - keep_new;
+    let overflow_before = (cur + keep_new).saturating_sub(max);
+    if overflow_before > 0 {
+        buf.drain(..overflow_before.min(cur));
+    }
+    buf.extend(lines.into_iter().skip(skip_new).map(make));
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -282,9 +359,69 @@ mod tests {
     }
 
     #[test]
+    fn strip_ansi_survives_escape_before_multibyte_char() {
+        // An ESC followed by a non-ASCII char is not a valid escape; it must be
+        // dropped without leaving the scanner inside a scalar.
+        assert_eq!(
+            strip_ansi("prefix \u{1b}\u{2192} arrow"),
+            "prefix \u{2192} arrow"
+        );
+        assert_eq!(strip_ansi("x \u{1b}\u{e9} y"), "x \u{e9} y");
+        // A torn UTF-8 write arrives as ESC + U+FFFD via from_utf8_lossy.
+        assert_eq!(strip_ansi("a\u{1b}\u{fffd}b"), "a\u{fffd}b");
+        assert_eq!(strip_ansi("trailing\u{1b}"), "trailing");
+    }
+
+    #[test]
     fn strip_ansi_preserves_multibyte_text() {
         let raw = "\u{1b}[31mproxy → 直连\u{1b}[0m";
         assert_eq!(strip_ansi(raw), "proxy → 直连");
+    }
+
+    #[test]
+    fn classify_reads_the_level_not_the_message() {
+        // Bodies that contain level words must not change the classification.
+        assert_eq!(
+            LogLevel::classify(
+                "+0530 2026-09-15 02:01:57 INFO outbound/vless[proxy]: outbound connection to example.com:443: connection error, retrying"
+            ),
+            LogLevel::Info
+        );
+        assert_eq!(
+            LogLevel::classify(
+                "+0530 2026-09-15 02:01:57 WARN inbound/tun[tun-in]: connection reset by peer: error"
+            ),
+            LogLevel::Warn
+        );
+        assert_eq!(
+            LogLevel::classify("+0530 2026-09-15 02:01:57 DEBUG router: no error surfaced"),
+            LogLevel::Debug
+        );
+        assert_eq!(
+            LogLevel::classify("+0530 2026-09-15 02:01:57 INFO outbound/TERR proxy up"),
+            LogLevel::Info
+        );
+    }
+
+    #[test]
+    fn classify_handles_iso_timestamp_and_bracket_form() {
+        assert_eq!(
+            LogLevel::classify("2026-09-15T02:01:57.123456789+05:30 ERROR start failed"),
+            LogLevel::Error
+        );
+        assert_eq!(
+            LogLevel::classify("INFO[0012] router: started"),
+            LogLevel::Info
+        );
+        assert_eq!(
+            LogLevel::classify("FATAL listen tcp: bind"),
+            LogLevel::Error
+        );
+        // Message with no level field at all is not guessed from its words.
+        assert_eq!(
+            LogLevel::classify("plain line mentioning error later"),
+            LogLevel::Other
+        );
     }
 
     #[test]
@@ -364,6 +501,50 @@ mod tests {
         let (fresh, _, _) = read_appended_lines(&path, 0).expect("read new");
         assert_eq!(fresh.len(), 400);
         assert!(fresh[0].starts_with("new 0"));
+    }
+
+    #[test]
+    fn append_bounded_keeps_the_tail_and_never_exceeds_the_cap() {
+        let mut buf: Vec<String> = Vec::new();
+        let mk = |l: String| l;
+
+        append_bounded(&mut buf, vec!["a".into(), "b".into()], 3, mk);
+        assert_eq!(buf, ["a", "b"]);
+
+        // Adding one past the cap drops the oldest.
+        append_bounded(&mut buf, vec!["c".into(), "d".into()], 3, mk);
+        assert_eq!(buf, ["b", "c", "d"]);
+
+        // A burst larger than the cap keeps only the newest `max`.
+        append_bounded(
+            &mut buf,
+            (0..10).map(|i| format!("n{i}")).collect(),
+            3,
+            |l: String| l,
+        );
+        assert_eq!(buf, ["n7", "n8", "n9"]);
+    }
+
+    #[test]
+    fn tail_leaves_an_unterminated_fragment_for_the_next_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("access.log");
+        std::fs::write(&path, "a\nb\nc").expect("write");
+
+        let (lines, offset) = read_tail_lines(&path, 10).expect("tail");
+        assert_eq!(lines, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(offset, 4, "offset must point past the last complete line");
+
+        // The writer finishes the fragment; it must not be merged with new data.
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open");
+        f.write_all(b"xyz\n").expect("append");
+        drop(f);
+
+        let (delta, _, _) = read_appended_lines(&path, offset).expect("delta");
+        assert_eq!(delta, vec!["cxyz".to_string()]);
     }
 
     #[test]
