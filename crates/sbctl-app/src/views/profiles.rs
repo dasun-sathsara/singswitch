@@ -23,7 +23,7 @@ pub struct ProfilesView {
     store: Entity<AppStore>,
     editor: Entity<ProfileEditorPanel>,
     search_input: Entity<InputState>,
-    details_open: bool,
+    expanded_profile: Option<String>,
     _subs: [Subscription; 2],
 }
 
@@ -53,7 +53,7 @@ impl ProfilesView {
             store,
             editor,
             search_input,
-            details_open: false,
+            expanded_profile: None,
             _subs: [sub, store_observer],
         }
     }
@@ -223,12 +223,11 @@ impl ProfilesView {
     fn render_connections(&self, cx: &Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
         let busy = store.busy_phase.is_some();
-        let mut content = v_flex()
+        let content = v_flex()
             .size_full()
-            .px(px(28.0))
-            .pt(px(22.0))
-            .pb(px(24.0))
-            .gap(px(16.0))
+            .px(px(14.0))
+            .py(px(10.0))
+            .gap(px(8.0))
             .child(self.render_connection(cx))
             .when_some(
                 super::notice_strip(&self.store, NoticeOrigin::Stage, cx),
@@ -280,159 +279,104 @@ impl ProfilesView {
             );
         }
 
-        content = content.child(
-            h_flex()
-                .w_full()
-                .flex_none()
-                .justify_between()
-                .items_center()
-                .child(div().text_size(px(20.0)).font_bold().child("Profiles"))
-                .child(self.render_add_actions(store)),
-        );
-        let selected = store.selected_profile.as_deref();
-        let profile = store
-            .snapshot
-            .profiles
-            .iter()
-            .find(|p| Some(p.name.as_str()) == selected);
-
-        content.child(
-            h_flex()
-                .flex_1()
-                .min_h(px(0.0))
-                .w_full()
-                .gap(px(12.0))
-                .items_stretch()
-                .child(self.render_library(store, cx))
-                .child(
-                    v_flex()
-                        .id("profile-details")
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .overflow_y_scroll()
-                        .rounded(px(14.0))
-                        .bg(crate::theme::surface(cx))
-                        .p(px(20.0))
-                        .child(match profile {
-                            Some(profile) => self.render_profile(profile, cx).into_any_element(),
-                            None => div()
-                                .text_sm()
-                                .child("Select a profile to view its settings.")
-                                .into_any_element(),
-                        }),
-                ),
-        )
+        content.child(self.render_library(store, cx))
     }
 
     fn render_connection(&self, cx: &Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
         let store = self.store.read(cx);
         let snap = &store.snapshot;
         let visual = store.tray_visual_state();
-        let (title, tone, icon) = match visual {
-            TrayVisualState::Transitioning => (
-                "Updating connection",
-                cx.theme().warning,
-                IconName::LoaderCircle,
-            ),
-            TrayVisualState::Broken => ("Connection issue", cx.theme().danger, IconName::Info),
-            TrayVisualState::Connected => ("Connected", cx.theme().success, IconName::Check),
-            TrayVisualState::Disconnected => {
-                ("Disconnected", cx.theme().muted_foreground, IconName::Minus)
-            }
+        let (label, tone) = match visual {
+            TrayVisualState::Transitioning => ("Updating", cx.theme().warning),
+            TrayVisualState::Broken => ("Connection issue", cx.theme().danger),
+            TrayVisualState::Connected => ("Connected", cx.theme().success),
+            TrayVisualState::Disconnected => ("Disconnected", cx.theme().muted_foreground),
         };
-        let issue = store
-            .init_error
-            .as_deref()
-            .or(snap.broken.as_deref())
-            .or_else(|| {
-                (snap.health.state == sbctl_core::service::RunState::Error
-                    && !snap.health.detail.is_empty())
-                .then_some(snap.health.detail.as_str())
-            });
-        let subtitle = if let Some(phase) = &store.busy_phase {
-            phase.clone()
-        } else if let Some(issue) = issue {
-            issue.to_owned()
-        } else if snap.running {
-            snap.active
-                .clone()
-                .unwrap_or_else(|| "sing-box is running".into())
-        } else if snap.profiles.is_empty() {
-            "Add a profile to connect.".into()
-        } else {
-            "Choose a profile below to connect.".into()
-        };
-
-        let disconnect = self.store.clone();
-        let show_logs = self.store.clone();
-        let refresh = self.store.clone();
-        let network = self.store.clone();
+        let active = snap.active.as_ref().filter(|_| snap.running).cloned();
+        let activity = store.busy_phase.as_ref().cloned().or(active);
+        let issue = (visual == TrayVisualState::Broken)
+            .then(|| {
+                store
+                    .init_error
+                    .as_deref()
+                    .or(snap.broken.as_deref())
+                    .filter(|detail| !detail.is_empty())
+                    .unwrap_or(snap.health.detail.as_str())
+            })
+            .filter(|issue| !issue.is_empty());
         let ip = if store.ip_loading {
-            "Checking…".into()
-        } else if let Some(error) = &store.ip_error {
-            format!("Lookup failed. {error}")
-        } else if let Some(info) = &store.ip_info {
-            let location = info.formatted_location();
-            if location.is_empty() {
-                info.ip.clone()
-            } else {
-                format!("{} · {location}", info.ip)
-            }
+            "Checking…".to_owned()
+        } else if store.ip_error.is_some() {
+            "Lookup failed".to_owned()
         } else {
-            "Not checked".into()
+            store
+                .ip_info
+                .as_ref()
+                .map(|i| i.ip.clone())
+                .unwrap_or_else(|| "Not checked".into())
         };
-        let ip_clipboard = store
+        let ip_details = if store.ip_loading {
+            None
+        } else {
+            store.ip_error.as_ref()
+        };
+        let ip_to_copy = store
             .ip_info
             .as_ref()
             .filter(|_| !store.ip_loading && store.ip_error.is_none())
-            .map(|info| info.ip.clone());
+            .map(|info| (info.ip.clone(), info.formatted_location()));
+        let busy = store.busy_phase.is_some() || store.init_error.is_some();
+        let disconnect = self.store.clone();
+        let show_logs = self.store.clone();
+        let refresh = self.store.clone();
+        let restart = self.store.clone();
 
         v_flex()
             .w_full()
             .flex_none()
-            .p(px(18.0))
-            .gap(px(14.0))
-            .rounded(px(14.0))
+            .rounded(px(8.0))
             .bg(crate::theme::connection_surface(cx, tone))
             .child(
                 h_flex()
                     .w_full()
+                    .min_h(px(36.0))
+                    .px(px(8.0))
+                    .gap(px(6.0))
                     .items_center()
-                    .gap(px(14.0))
-                    .child(
-                        h_flex()
-                            .flex_none()
-                            .size(px(44.0))
-                            .justify_center()
-                            .items_center()
-                            .rounded(px(12.0))
-                            .bg(tone.opacity(0.13))
-                            .child(Icon::new(icon).text_color(tone)),
-                    )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .gap(px(2.0))
-                            .child(div().text_size(px(25.0)).font_bold().child(title))
-                            .child(
-                                div()
-                                    .id("connection-subtitle")
-                                    .text_sm()
-                                    .when(visual == TrayVisualState::Broken, |detail| {
-                                        detail.max_h(px(56.0)).overflow_y_scroll()
-                                    })
-                                    .when(visual != TrayVisualState::Broken, |detail| {
-                                        detail.truncate()
-                                    })
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(subtitle),
-                            ),
-                    )
+                    .child(div().size(px(7.0)).flex_none().rounded_full().bg(tone))
+                    .child(div().text_sm().flex_none().font_bold().child(label))
+                    .when_some(activity, |row, text| {
+                        row.child(
+                            div()
+                                .min_w(px(0.0))
+                                .max_w(px(210.0))
+                                .text_sm()
+                                .truncate()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(text),
+                        )
+                    })
+                    .when(snap.running, |row| {
+                        row.child(
+                            Button::new("connection-disconnect")
+                                .ghost()
+                                .small()
+                                .flex_none()
+                                .label("Disconnect")
+                                .disabled(busy)
+                                .on_click(move |_, _, cx| {
+                                    disconnect
+                                        .update(cx, |s, cx| s.disconnect(NoticeOrigin::Stage, cx));
+                                }),
+                        )
+                    })
                     .when(visual == TrayVisualState::Broken, |row| {
                         row.child(
                             Button::new("connection-logs")
-                                .secondary()
+                                .ghost()
+                                .small()
+                                .flex_none()
                                 .label("View logs")
                                 .on_click(move |_, _, cx| {
                                     show_logs.update(cx, |s, cx| {
@@ -441,54 +385,28 @@ impl ProfilesView {
                                 }),
                         )
                     })
-                    .when(snap.running, |row| {
-                        row.child(
-                            Button::new("connection-disconnect")
-                                .secondary()
-                                .label("Disconnect")
-                                .disabled(store.busy_phase.is_some() || store.init_error.is_some())
-                                .on_click(move |_, _, cx| {
-                                    disconnect
-                                        .update(cx, |s, cx| s.disconnect(NoticeOrigin::Stage, cx));
-                                }),
-                        )
-                    }),
-            )
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap(px(10.0))
-                    .pt(px(10.0))
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .items_center()
+                    .child(div().flex_1())
                     .child(
                         div()
                             .flex_none()
-                            .text_sm()
+                            .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child("Public IP"),
                     )
-                    .child(
-                        div()
-                            .id("public-ip-state")
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .text_sm()
-                            .when(store.ip_error.is_some() && !store.ip_loading, |line| {
-                                line.max_h(px(40.0))
-                                    .overflow_y_scroll()
-                                    .text_color(cx.theme().danger)
-                            })
-                            .when(store.ip_error.is_none(), |line| line.truncate())
-                            .child(ip),
-                    )
-                    .when_some(ip_clipboard, |row, ip| {
+                    .child(div().text_sm().min_w(px(0.0)).truncate().child(ip))
+                    .when_some(ip_to_copy, |row, (ip, location)| {
                         row.child(
                             Button::new("copy-ip")
                                 .ghost()
                                 .small()
-                                .label("Copy IP")
+                                .flex_none()
+                                .icon(IconName::Copy)
+                                .accessibility_label("Copy public IP")
+                                .tooltip(if location.is_empty() {
+                                    "Copy public IP".into()
+                                } else {
+                                    format!("Copy public IP · {location}")
+                                })
                                 .on_click(move |_, _, cx| {
                                     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
                                         ip.clone(),
@@ -500,7 +418,10 @@ impl ProfilesView {
                         Button::new("refresh-network")
                             .ghost()
                             .small()
-                            .label("Refresh")
+                            .flex_none()
+                            .icon(IconName::RefreshCw)
+                            .accessibility_label("Refresh connection and public IP")
+                            .tooltip("Refresh connection and public IP")
                             .disabled(store.ip_loading)
                             .on_click(move |_, _, cx| {
                                 refresh.update(cx, |s, cx| {
@@ -510,22 +431,21 @@ impl ProfilesView {
                             }),
                     )
                     .when(snap.running, |row| {
-                        use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-                        let busy = store.busy_phase.is_some();
                         row.child(
                             Button::new("connection-options")
                                 .ghost()
                                 .small()
+                                .flex_none()
                                 .icon(IconName::Ellipsis)
                                 .accessibility_label("Connection options")
                                 .tooltip("Connection options")
                                 .dropdown_menu(move |menu, _, _| {
-                                    let network = network.clone();
+                                    let restart = restart.clone();
                                     menu.item(
                                         PopupMenuItem::new("Restart service")
                                             .disabled(busy)
                                             .on_click(move |_, _, cx| {
-                                                network.update(cx, |s, cx| {
+                                                restart.update(cx, |s, cx| {
                                                     s.restart_active(NoticeOrigin::Stage, cx)
                                                 });
                                             }),
@@ -534,6 +454,12 @@ impl ProfilesView {
                         )
                     }),
             )
+            .when_some(issue, |strip, reason| {
+                strip.child(connection_error("service-error", reason, cx))
+            })
+            .when_some(ip_details, |strip, reason| {
+                strip.child(connection_error("ip-error", reason, cx))
+            })
     }
 
     fn render_add_actions(&self, store: &AppStore) -> impl IntoElement {
@@ -604,245 +530,273 @@ impl ProfilesView {
         let none = profiles.peek().is_none();
 
         v_flex()
-            .w(px(248.0))
-            .flex_none()
+            .w_full()
+            .flex_1()
             .min_h(px(0.0))
-            .p(px(9.0))
-            .gap(px(6.0))
-            .rounded(px(14.0))
-            .bg(crate::theme::surface(cx))
             .child(
-                Input::new(&self.search_input)
-                    .small()
-                    .cleanable(true)
-                    .prefix(Icon::new(IconName::Search).xsmall()),
+                h_flex()
+                    .w_full()
+                    .flex_none()
+                    .pb(px(6.0))
+                    .gap(px(8.0))
+                    .justify_between()
+                    .child(
+                        div().w(px(220.0)).child(
+                            Input::new(&self.search_input)
+                                .small()
+                                .cleanable(true)
+                                .prefix(Icon::new(IconName::Search).xsmall()),
+                        ),
+                    )
+                    .child(self.render_add_actions(store)),
+            )
+            .child(
+                profile_columns(cx)
+                    .h(px(26.0))
+                    .flex_none()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(div().flex_1().min_w(px(0.0)).pl(px(8.0)).child("Profile"))
+                    .child(div().flex_1().min_w(px(0.0)).child("Server"))
+                    .child(div().w(px(90.0)).flex_none().child("Status"))
+                    .child(div().w(px(192.0)).flex_none()),
             )
             .child(
                 v_flex()
                     .id("profile-library")
                     .flex_1()
                     .min_h(px(0.0))
-                    .gap(px(2.0))
                     .overflow_y_scroll()
                     .when(none, |list| {
                         list.child(
                             div()
-                                .p(px(10.0))
+                                .p(px(8.0))
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
                                 .child("No matching profiles"),
                         )
                     })
-                    .children(profiles.map(|p| {
-                        let selected = store.selected_profile.as_deref() == Some(p.name.as_str());
-                        let live = store.snapshot.running
-                            && store.snapshot.active.as_deref() == Some(p.name.as_str());
-                        let app = self.store.clone();
-                        let name = p.name.clone();
-                        let text = if live {
-                            "Connected".into()
-                        } else if !p.ready() {
-                            "Needs setup".into()
-                        } else {
-                            p.server
-                                .clone()
-                                .unwrap_or_else(|| "Local configuration".into())
-                        };
-                        Button::new(gpui_kit::SharedString::from(format!("profile-{}", p.name)))
-                            .when(selected, Button::secondary)
-                            .when(!selected, Button::ghost)
-                            .toggled(selected)
-                            .accessibility_label(format!("{}: {text}", p.name))
-                            .h(px(52.0))
-                            .w_full()
-                            .flex_none()
-                            .justify_start()
-                            .rounded(px(8.0))
-                            .on_click(move |_, _, cx| {
-                                app.update(cx, |s, cx| s.select_profile(Some(name.clone()), cx));
-                            })
-                            .child(
-                                v_flex()
-                                    .w_full()
-                                    .min_w(px(0.0))
-                                    .gap(px(2.0))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_bold()
-                                            .truncate()
-                                            .child(p.name.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .truncate()
-                                            .text_color(if live {
-                                                cx.theme().success
-                                            } else if !p.ready() {
-                                                cx.theme().warning
-                                            } else {
-                                                cx.theme().muted_foreground
-                                            })
-                                            .child(text),
-                                    ),
-                            )
-                    })),
+                    .children(profiles.map(|profile| self.render_profile(profile, store, cx))),
             )
     }
 
-    fn render_profile(&self, profile: &Profile, cx: &Context<Self>) -> impl IntoElement {
-        let store = self.store.read(cx);
+    fn render_profile(
+        &self,
+        profile: &Profile,
+        store: &AppStore,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let running = store.snapshot.running;
-        let is_live = running && store.snapshot.active.as_deref() == Some(profile.name.as_str());
+        let live = running && store.snapshot.active.as_deref() == Some(profile.name.as_str());
+        let selected = store.selected_profile.as_deref() == Some(profile.name.as_str());
         let busy = store.busy_phase.is_some() || store.init_error.is_some();
         let ready = profile.ready();
-        let name = profile.name.clone();
+        let expanded = self.expanded_profile.as_deref() == Some(profile.name.as_str());
+        let app = self.store.clone();
+        let activation_name = profile.name.clone();
+        let edit_name = profile.name.clone();
+        let detail_name = profile.name.clone();
         let edit = self.store.clone();
-        let activate = self.store.clone();
-        let facts = &profile.facts;
-        let endpoint = facts.endpoint.as_deref().or(profile.server.as_deref());
-        let missing = if !profile.config_parsed {
-            "The configuration could not be read as JSON.".to_owned()
+        let select = self.store.clone();
+        let endpoint = profile
+            .facts
+            .endpoint
+            .as_ref()
+            .or(profile.server.as_ref())
+            .cloned();
+        let (status, color) = if live {
+            ("Connected", cx.theme().success)
+        } else if !ready {
+            ("Needs setup", cx.theme().warning)
         } else {
-            let fields = profile
-                .missing
-                .iter()
-                .map(|field| field.label())
-                .collect::<Vec<_>>();
-            format!("Required fields: {}", fields.join(", "))
+            ("Ready", cx.theme().muted_foreground)
         };
 
         v_flex()
             .w_full()
-            .gap(px(12.0))
+            .flex_none()
+            .bg(if selected {
+                cx.theme().muted
+            } else {
+                crate::theme::surface(cx)
+            })
             .child(
-                h_flex()
-                    .w_full()
-                    .gap(px(8.0))
-                    .items_center()
+                profile_columns(cx)
+                    .min_h(px(36.0))
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Button::new(gpui_kit::SharedString::from(format!(
+                            "profile-{}",
+                            profile.name
+                        )))
+                        .ghost()
+                        .small()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .icon(if expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .toggled(expanded)
+                        .accessibility_label(format!("{} details", profile.name))
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .truncate()
+                                .font_bold()
+                                .child(profile.name.clone()),
+                        )
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.expanded_profile =
+                                if view.expanded_profile.as_ref() == Some(&detail_name) {
+                                    None
+                                } else {
+                                    Some(detail_name.clone())
+                                };
+                            select.update(cx, |s, cx| {
+                                s.select_profile(Some(detail_name.clone()), cx)
+                            });
+                            cx.notify();
+                        })),
+                    )
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
+                            .text_sm()
                             .truncate()
-                            .text_size(px(22.0))
-                            .font_bold()
-                            .child(profile.name.clone()),
+                            .child(endpoint.unwrap_or_else(|| "—".into())),
                     )
-                    .child(self.render_profile_menu(profile, is_live, busy)),
-            )
-            .when(!ready, |panel| {
-                panel.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().warning)
-                        .child(missing),
-                )
-            })
-            .child(
-                h_flex()
-                    .gap(px(8.0))
-                    .when(ready && !is_live, |row| {
-                        row.child(
-                            Button::new("profile-connect")
-                                .primary()
-                                .label(if running {
-                                    "Switch to this profile"
-                                } else {
-                                    "Connect"
-                                })
+                    .child(
+                        div()
+                            .w(px(90.0))
+                            .flex_none()
+                            .text_xs()
+                            .text_color(color)
+                            .child(status),
+                    )
+                    .child(
+                        h_flex()
+                            .w(px(192.0))
+                            .flex_none()
+                            .justify_end()
+                            .gap(px(4.0))
+                            .when(ready && !live, |row| {
+                                row.child(
+                                    Button::new(gpui_kit::SharedString::from(format!(
+                                        "connect-{}",
+                                        profile.name
+                                    )))
+                                    .small()
+                                    .when(selected, Button::primary)
+                                    .when(!selected, Button::ghost)
+                                    .label(if running { "Switch" } else { "Connect" })
+                                    .disabled(busy)
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            app.update(cx, |s, cx| {
+                                                s.activate_profile(
+                                                    activation_name.clone(),
+                                                    NoticeOrigin::Stage,
+                                                    cx,
+                                                )
+                                            });
+                                        },
+                                    ),
+                                )
+                            })
+                            .child(
+                                Button::new(gpui_kit::SharedString::from(format!(
+                                    "edit-{}",
+                                    profile.name
+                                )))
+                                .small()
+                                .when(ready, Button::ghost)
+                                .when(!ready, Button::secondary)
+                                .label(if ready { "Edit" } else { "Finish setup" })
                                 .disabled(busy)
                                 .on_click(move |_, _, cx| {
-                                    activate.update(cx, |s, cx| {
-                                        s.activate_profile(name.clone(), NoticeOrigin::Stage, cx)
+                                    edit.update(cx, |s, cx| {
+                                        s.select_profile(Some(edit_name.clone()), cx);
+                                        s.begin_edit(cx);
                                     });
                                 }),
-                        )
-                    })
-                    .child(
-                        Button::new("profile-edit")
-                            .when(ready, Button::secondary)
-                            .when(!ready, Button::primary)
-                            .label(if ready {
-                                "Edit profile"
-                            } else {
-                                "Finish setup"
-                            })
-                            .disabled(busy)
-                            .on_click(move |_, _, cx| {
-                                edit.update(cx, |s, cx| s.begin_edit(cx));
-                            }),
+                            )
+                            .child(self.render_profile_menu(profile, live, busy)),
                     ),
             )
-            .child(
-                v_flex()
-                    .pt(px(2.0))
-                    .when_some(endpoint, |section, address| {
-                        section.child(detail_row("Server", address.to_owned(), cx))
-                    })
-                    .when_some(facts.outbound_type.as_ref(), |section, kind| {
-                        section.child(detail_row("Protocol", kind.clone(), cx))
-                    })
-                    .when_some(
-                        store.connected_since.filter(|_| is_live),
-                        |section, since| {
-                            section.child(detail_row(
-                                "Connected for",
-                                format_duration(since.elapsed().as_secs()),
-                                cx,
-                            ))
-                        },
-                    ),
-            )
-            .child(
-                Button::new("profile-details-toggle")
-                    .ghost()
-                    .small()
-                    .icon(if self.details_open {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .label("Configuration details")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.details_open = !this.details_open;
-                        cx.notify();
-                    })),
-            )
-            .when(self.details_open, |panel| {
-                let tunnel = match facts.tun_state() {
-                    sbctl_core::profile::TunState::Named => {
-                        facts.tun_interface.clone().unwrap_or_default()
-                    }
-                    sbctl_core::profile::TunState::Unnamed => "OS default".into(),
-                    sbctl_core::profile::TunState::Absent => "No TUN inbound".into(),
-                };
-                panel.child(
-                    v_flex()
-                        .child(detail_row("Tunnel", tunnel, cx))
-                        .child(detail_row(
-                            "Config file",
-                            profile.path.display().to_string(),
+            .when(expanded, |row| {
+                row.child(self.render_profile_details(profile, store, live, cx))
+            })
+    }
+
+    fn render_profile_details(
+        &self,
+        profile: &Profile,
+        store: &AppStore,
+        live: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let facts = &profile.facts;
+        let tunnel = match facts.tun_state() {
+            sbctl_core::profile::TunState::Named => facts.tun_interface.clone().unwrap_or_default(),
+            sbctl_core::profile::TunState::Unnamed => "OS default".into(),
+            sbctl_core::profile::TunState::Absent => "No TUN inbound".into(),
+        };
+
+        v_flex()
+            .w_full()
+            .px(px(24.0))
+            .pb(px(6.0))
+            .when(!profile.config_parsed, |panel| {
+                panel.child(detail_row(
+                    "Configuration",
+                    "Could not read as JSON".into(),
+                    cx,
+                ))
+            })
+            .when(!profile.missing.is_empty(), |panel| {
+                let fields = profile
+                    .missing
+                    .iter()
+                    .map(|field| field.label())
+                    .collect::<Vec<_>>();
+                panel.child(detail_row("Required fields", fields.join(", "), cx))
+            })
+            .when_some(facts.outbound_type.as_ref(), |panel, protocol| {
+                panel.child(detail_row("Protocol", protocol.clone(), cx))
+            })
+            .child(detail_row("Tunnel", tunnel, cx))
+            .child(detail_row(
+                "Config file",
+                profile.path.display().to_string(),
+                cx,
+            ))
+            .when_some(profile.source_url.as_ref(), |panel, url| {
+                panel.child(detail_row("Source URL", url.clone(), cx))
+            })
+            .when(live, |panel| {
+                let health = &store.snapshot.health;
+                panel
+                    .when_some(store.connected_since, |panel, since| {
+                        panel.child(detail_row(
+                            "Connected for",
+                            format_duration(since.elapsed().as_secs()),
                             cx,
                         ))
-                        .when_some(profile.source_url.as_ref(), |section, url| {
-                            section.child(detail_row("Source URL", url.clone(), cx))
-                        })
-                        .when(is_live, |section| {
-                            let health = &store.snapshot.health;
-                            section
-                                .when_some(health.pid, |section, pid| {
-                                    section.child(detail_row("Process ID", pid.to_string(), cx))
-                                })
-                                .when_some(health.restarts.filter(|n| *n > 0), |section, count| {
-                                    section.child(detail_row("Restarts", count.to_string(), cx))
-                                })
-                                .when_some(health.last_exit.as_ref(), |section, code| {
-                                    section.child(detail_row("Last exit", code.clone(), cx))
-                                })
-                        }),
-                )
+                    })
+                    .when_some(health.pid, |panel, pid| {
+                        panel.child(detail_row("Process ID", pid.to_string(), cx))
+                    })
+                    .when_some(health.restarts.filter(|n| *n > 0), |panel, count| {
+                        panel.child(detail_row("Restarts", count.to_string(), cx))
+                    })
+                    .when_some(health.last_exit.as_ref(), |panel, code| {
+                        panel.child(detail_row("Last exit", code.clone(), cx))
+                    })
             })
     }
 
@@ -858,58 +812,83 @@ impl ProfilesView {
         let path = profile.path.display().to_string();
         let has_source = profile.source_url.is_some();
 
-        Button::new("profile-options")
-            .ghost()
-            .icon(IconName::Ellipsis)
-            .accessibility_label("Profile options")
-            .tooltip("Profile options")
-            .dropdown_menu(move |menu, _, _| {
-                let sync = app.clone();
-                let delete = app.clone();
-                let sync_name = name.clone();
-                let delete_name = name.clone();
-                let path = path.clone();
+        Button::new(gpui_kit::SharedString::from(format!(
+            "options-{}",
+            profile.name
+        )))
+        .ghost()
+        .small()
+        .icon(IconName::Ellipsis)
+        .accessibility_label("Profile options")
+        .tooltip("Profile options")
+        .dropdown_menu(move |menu, _, _| {
+            let sync = app.clone();
+            let delete = app.clone();
+            let sync_name = name.clone();
+            let delete_name = name.clone();
+            let path = path.clone();
 
-                menu.when(has_source, |menu| {
-                    menu.item(
-                        PopupMenuItem::new("Sync from source")
-                            .disabled(busy)
-                            .on_click(move |_, _, cx| {
-                                sync.update(cx, |s, cx| {
-                                    s.sync_profile(sync_name.clone(), NoticeOrigin::Stage, cx)
-                                });
-                            }),
-                    )
-                })
-                .item(
-                    PopupMenuItem::new("Copy config path").on_click(move |_, _, cx| {
-                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(path.clone()));
-                    }),
-                )
-                .separator()
-                .item(
-                    PopupMenuItem::new("Delete profile…")
+            menu.when(has_source, |menu| {
+                menu.item(
+                    PopupMenuItem::new("Sync from source")
                         .disabled(busy)
-                        .on_click(move |_, window, cx| {
-                            open_delete_dialog(
-                                delete_name.clone(),
-                                is_live,
-                                NoticeOrigin::Stage,
-                                delete.clone(),
-                                window,
-                                cx,
-                            );
+                        .on_click(move |_, _, cx| {
+                            sync.update(cx, |s, cx| {
+                                s.sync_profile(sync_name.clone(), NoticeOrigin::Stage, cx)
+                            });
                         }),
                 )
             })
+            .item(
+                PopupMenuItem::new("Copy config path").on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(path.clone()));
+                }),
+            )
+            .separator()
+            .item(
+                PopupMenuItem::new("Delete profile…")
+                    .disabled(busy)
+                    .on_click(move |_, window, cx| {
+                        open_delete_dialog(
+                            delete_name.clone(),
+                            is_live,
+                            NoticeOrigin::Stage,
+                            delete.clone(),
+                            window,
+                            cx,
+                        );
+                    }),
+            )
+        })
     }
+}
+
+fn profile_columns(cx: &App) -> gpui_kit::Div {
+    h_flex()
+        .w_full()
+        .px(px(4.0))
+        .gap(px(10.0))
+        .items_center()
+        .text_color(cx.theme().foreground)
+}
+
+fn connection_error(id: &'static str, reason: &str, cx: &App) -> impl IntoElement {
+    div()
+        .id(id)
+        .px(px(8.0))
+        .pb(px(4.0))
+        .max_h(px(42.0))
+        .overflow_y_scroll()
+        .text_xs()
+        .text_color(cx.theme().danger)
+        .child(reason.to_owned())
 }
 
 fn detail_row(label: &'static str, value: String, cx: &App) -> impl IntoElement {
     h_flex()
         .w_full()
-        .py(px(8.0))
-        .gap(px(12.0))
+        .py(px(4.0))
+        .gap(px(10.0))
         .items_baseline()
         .border_t_1()
         .border_color(cx.theme().border)
@@ -947,8 +926,8 @@ impl Render for ProfilesView {
         if s.editing {
             v_flex()
                 .size_full()
-                .px(px(28.0))
-                .py(px(18.0))
+                .px(px(14.0))
+                .py(px(10.0))
                 .child(self.editor.clone())
                 .into_any_element()
         } else {

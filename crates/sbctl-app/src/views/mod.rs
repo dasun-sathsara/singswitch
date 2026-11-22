@@ -4,9 +4,7 @@ pub mod profiles;
 pub mod settings;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{
-    ActiveTheme as _, IconName, Sizable as _, StyledExt as _, TitleBar, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, TitleBar, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
@@ -116,12 +114,9 @@ impl WorkspaceShell {
         h_flex()
             .w_full()
             .flex_none()
-            .h(px(54.0))
-            .px(px(24.0))
-            .gap(px(6.0))
-            .bg(crate::theme::surface(cx))
-            .border_b_1()
-            .border_color(cx.theme().border)
+            .h_full()
+            .pr(px(12.0))
+            .gap(px(4.0))
             .children(tabs.into_iter().map(|(label, tab)| {
                 let store = self.store.clone();
                 let label = if tab == NavTab::Logs && errors > 0 {
@@ -133,6 +128,7 @@ impl WorkspaceShell {
                     .when(selected == tab, |button| button.secondary())
                     .when(selected != tab, |button| button.ghost())
                     .toggled(selected == tab)
+                    .small()
                     .label(label)
                     .on_click(move |_, _, cx| {
                         store.update(cx, |s, cx| s.set_tab(tab, cx));
@@ -161,20 +157,23 @@ impl Render for WorkspaceShell {
             .text_color(cx.theme().foreground)
             .font_family(fonts::ui_family())
             .text_size(px(15.0))
-            .child(
-                TitleBar::new().child(
+            .child(if cfg!(target_os = "macos") {
+                TitleBar::new().child(self.render_navigation(cx))
+            } else {
+                TitleBar::new().child(div().text_sm().child("sbctl"))
+            })
+            .when(cfg!(target_os = "windows"), |shell| {
+                // Windows reserves the title bar for native caption hit testing.
+                shell.child(
                     div()
-                        .w_full()
-                        .text_sm()
-                        .font_bold()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("sbctl"),
-                ),
-            )
-            .child(self.render_navigation(cx))
+                        .h(px(34.0))
+                        .pl(px(12.0))
+                        .child(self.render_navigation(cx)),
+                )
+            })
             .when_some(
                 notice_strip(&self.store, NoticeOrigin::Toolbar, cx),
-                |el, notice| el.child(div().w_full().px(px(24.0)).py(px(6.0)).child(notice)),
+                |el, notice| el.child(div().w_full().px(px(14.0)).py(px(4.0)).child(notice)),
             )
             .child(
                 div()

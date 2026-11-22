@@ -611,22 +611,22 @@ impl ProfileEditorPanel {
             .gap(px(12.0))
             .flex_none()
             .child(
-                v_flex()
+                h_flex()
                     .flex_1()
                     .min_w(px(0.0))
-                    .items_start()
-                    .gap(px(4.0))
+                    .gap(px(8.0))
+                    .items_center()
                     .child(
                         Button::new("editor-back")
                             .ghost()
                             .small()
                             .icon(IconName::ChevronLeft)
-                            .label("Back to connections")
+                            .label("Profiles")
                             .on_click(cx.listener(|_, _, _, cx| {
                                 cx.dispatch_action(&BackToConnections);
                             })),
                     )
-                    .child(div().text_size(px(24.0)).font_bold().truncate().child(name)),
+                    .child(div().text_base().font_bold().truncate().child(name)),
             )
             .child(
                 h_flex().gap(px(8.0)).items_center().child(
@@ -1179,8 +1179,8 @@ fn form_section(title: &'static str, cx: &App) -> gpui_kit::Div {
     v_flex()
         .w_full()
         .flex_none()
-        .p(px(16.0))
-        .gap_3()
+        .p(px(12.0))
+        .gap_2()
         .rounded(px(12.0))
         .bg(crate::theme::surface(cx))
         .child(div().text_base().font_bold().child(title))

@@ -469,8 +469,8 @@ impl Render for LogsView {
 
         v_flex()
             .size_full()
-            .px(px(28.0))
-            .py(px(22.0))
+            .px(px(14.0))
+            .py(px(10.0))
             .gap(px(0.0))
             .child(
                 h_flex()
@@ -482,7 +482,7 @@ impl Render for LogsView {
                             .flex_1()
                             .min_w(px(0.0))
                             .gap(px(4.0))
-                            .child(div().text_size(px(25.0)).font_bold().child("Logs"))
+                            .child(div().text_size(px(19.0)).font_bold().child("Logs"))
                             .child(
                                 div()
                                     .font_family(crate::fonts::mono_family())
@@ -498,7 +498,7 @@ impl Render for LogsView {
                 crate::views::notice_strip(&self.store, NoticeOrigin::Logs, cx),
                 |el, notice| el.child(div().mt(px(10.0)).child(notice)),
             )
-            .child(div().mt(px(16.0)).child(self.render_tabs(
+            .child(div().mt(px(8.0)).child(self.render_tabs(
                 stream,
                 follow,
                 count,
@@ -507,7 +507,7 @@ impl Render for LogsView {
             )))
             .child(
                 div()
-                    .mt(px(12.0))
+                    .mt(px(6.0))
                     .flex_1()
                     .min_h(px(0.0))
                     .w_full()
