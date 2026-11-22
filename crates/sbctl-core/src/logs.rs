@@ -396,8 +396,133 @@ where
     buf.extend(lines.into_iter().skip(skip_new).map(make));
 }
 
+/// Counts of Error and Warn records in a bounded buffer.
+///
+/// A live log view recounts every poll, which is the whole buffer per appended
+/// line. This keeps the counts incrementally instead, and falls back to a
+/// recount whenever the prefix it relied on has changed: a shorter buffer
+/// (truncation) or a different first record (eviction at the cap, which does
+/// not change the length).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LogCounts {
+    errors: usize,
+    warnings: usize,
+    covered: usize,
+    front: Option<u64>,
+}
+
+impl LogCounts {
+    pub fn errors(&self) -> usize {
+        self.errors
+    }
+
+    pub fn warnings(&self) -> usize {
+        self.warnings
+    }
+
+    /// Bring the counts up to date with `records`, doing only the work that is
+    /// still valid.
+    pub fn sync<T>(
+        &mut self,
+        records: &[T],
+        id: impl Fn(&T) -> u64,
+        level: impl Fn(&T) -> LogLevel,
+    ) {
+        let front = records.first().map(&id);
+        let comparable = records.len() >= self.covered && front == self.front;
+        if comparable && front.is_some() {
+            for rec in &records[self.covered..] {
+                self.tally(level(rec));
+            }
+        } else if records.is_empty() && self.covered == 0 {
+            // Nothing has ever been counted; both are already zero.
+        } else {
+            self.errors = 0;
+            self.warnings = 0;
+            for rec in records {
+                self.tally(level(rec));
+            }
+        }
+        self.covered = records.len();
+        self.front = front;
+    }
+
+    fn tally(&mut self, level: LogLevel) {
+        match level {
+            LogLevel::Error => self.errors += 1,
+            LogLevel::Warn => self.warnings += 1,
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn log_counts_stay_exact_across_append_eviction_and_truncation() {
+        #[derive(Clone, Copy)]
+        struct R {
+            id: u64,
+            level: LogLevel,
+        }
+        let lv = [
+            LogLevel::Error,
+            LogLevel::Warn,
+            LogLevel::Info,
+            LogLevel::Error,
+            LogLevel::Debug,
+        ];
+        let id = |r: &R| r.id;
+        let level = |r: &R| r.level;
+        let truth = |buf: &Vec<R>| {
+            (
+                buf.iter().filter(|r| r.level == LogLevel::Error).count(),
+                buf.iter().filter(|r| r.level == LogLevel::Warn).count(),
+            )
+        };
+
+        let mut counts = LogCounts::default();
+        let mut buf: Vec<R> = Vec::new();
+        let cap = 5;
+        for i in 0..40u64 {
+            buf.push(R {
+                id: i,
+                level: lv[(i as usize * 7) % lv.len()],
+            });
+            // Mirrors append_bounded: evict from the front at the cap.
+            if buf.len() > cap {
+                buf.remove(0);
+            }
+            counts.sync(&buf, id, level);
+            assert_eq!(
+                (counts.errors(), counts.warnings()),
+                truth(&buf),
+                "push {i}"
+            );
+        }
+
+        // Truncation clears the buffer.
+        buf.clear();
+        counts.sync(&buf, id, level);
+        assert_eq!((counts.errors(), counts.warnings()), (0, 0));
+
+        for i in 100..108u64 {
+            buf.push(R {
+                id: i,
+                level: lv[(i as usize) % lv.len()],
+            });
+            if buf.len() > cap {
+                buf.remove(0);
+            }
+            counts.sync(&buf, id, level);
+            assert_eq!(
+                (counts.errors(), counts.warnings()),
+                truth(&buf),
+                "refill {i}"
+            );
+        }
+    }
+
     #[test]
     fn strip_ansi_removes_sgr_and_keeps_text() {
         let raw = "+0530 2026-09-15 02:01:57 \u{1b}[36mINFO\u{1b}[0m network: updated interface";
