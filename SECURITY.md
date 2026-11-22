@@ -28,7 +28,7 @@ Both `sbctl-agent` and the `--elevated-op` UAC fallback deserialize typed JSON `
 | Area | Check |
 | --- | --- |
 | Profile names | Reject `/`, `\`, `..`, leading `-`, whitespace, control characters, DOS device names, and names over 64 bytes; verify symlinks stay inside `profiles/`. |
-| Activation and rollback | Block `TODO_[A-Z0-9_]+` placeholders, run `sing-box check` before swapping config, and revert if the service exits, restarts, or changes PID within 2.5 seconds. |
+| Activation and rollback | Refuse activation while the outbound is missing fields it needs (named in the error), run `sing-box check` before swapping config, and revert if the service exits, restarts, or changes PID within 2.5 seconds. |
 | Remote pulls | Accept `http://` and `https://` URLs only, cap bodies at 8 MiB, require valid JSON, and pass `sing-box check` on a temporary file before saving. |
 | Notifications | Strip control characters and escape quotes and backslashes for `osascript`; strip control characters and XML-escape WinRT toast payloads. |
 | Concurrency | Serialize switches, pulls, syncs, and saves with an exclusive `sbctl.lock` file lock. |
