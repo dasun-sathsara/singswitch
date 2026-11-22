@@ -32,6 +32,11 @@ if [[ "$PURGE_PROFILES" -eq 1 ]]; then
     sudo rm -rf /usr/local/etc/sing-box /var/log/sing-box
 else
     echo "==> Keeping /usr/local/etc/sing-box/profiles (pass --purge to remove)."
+    # The installer handed this tree to the console user. With sbctl gone, that
+    # ownership no longer comes from a validated install, so give it back to root.
+    if [[ -d /usr/local/etc/sing-box ]]; then
+        sudo chown -R root:wheel /usr/local/etc/sing-box
+    fi
 fi
 
 echo "==> Uninstall complete."

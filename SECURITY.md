@@ -6,10 +6,9 @@
 
 ### macOS
 
-No persistent root helper runs for `sbctl`. Both `sbctl` and `sbctl-app` run as the logged-in console user and invoke `sudo -n` only for five exact commands in `/etc/sudoers.d/sbctl`:
+No persistent root helper runs for `sbctl`. Both `sbctl` and `sbctl-app` run as the logged-in console user and invoke `sudo -n` only for four exact commands in `/etc/sudoers.d/sbctl`:
 
 ```text
-<user> ALL=(root) NOPASSWD: /bin/ln -sfn /usr/local/etc/sing-box/profiles/*.json /usr/local/etc/sing-box/config.json
 <user> ALL=(root) NOPASSWD: /bin/launchctl print system/app.lexiflix.singbox
 <user> ALL=(root) NOPASSWD: /bin/launchctl kickstart -k system/app.lexiflix.singbox
 <user> ALL=(root) NOPASSWD: /bin/launchctl bootout system/app.lexiflix.singbox
@@ -40,6 +39,6 @@ Both platforms run a sing-box that ordinary users cannot replace. macOS installs
 
 ## Known limitation: user-writable profiles
 
-Profile files stay writable by the console user so you can edit configs without elevation, while `sing-box` reads the active file as `root` or `LocalSystem`. Directives such as `log.output` or `cache_file` inside a profile make `sing-box` write to paths chosen in that JSON, and a symlink inside `profiles/` still matches the macOS `*.json` sudoers glob.
+Profile files stay writable by the console user so you can edit configs without elevation, while `sing-box` reads the active file as `root` or `LocalSystem`. Directives such as `log.output` or `cache_file` inside a profile make `sing-box` write to paths chosen in that JSON, Treat write access to `profiles/` as privileged on the machine. Activating a profile is an ordinary symlink swap performed as the console user, not a privileged command: the installer gives that user the config directory. No sudoers rule names a wildcard or a user-writable path.
 
-Scoped sudoers rules and typed Windows RPC stop `sbctl` from executing arbitrary commands, not privileged file writes performed by `sing-box`. Treat write access to `profiles/` as privileged on the machine.
+Scoped sudoers rules and typed Windows RPC stop `sbctl` from executing arbitrary commands, not privileged file writes performed by `sing-box`.

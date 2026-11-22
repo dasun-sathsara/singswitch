@@ -45,8 +45,8 @@ pub struct Layout {
     pub error_log_path: PathBuf,
     /// Service stdout/access log file path.
     pub access_log_path: PathBuf,
-    /// Path to `ln` invoked via `sudo` on Darwin.
-    /// Path to `launchctl` invoked via `sudo` on Darwin.
+    /// Path to `launchctl`, used inside a scoped NOPASSWD rule. Fixed absolute
+    /// path, never resolved from PATH.
     pub ctl_bin: PathBuf,
     /// Named pipe path for the Windows unprivileged-GUI helper service.
     pub pipe_name: String,

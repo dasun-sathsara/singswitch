@@ -106,6 +106,16 @@ impl LogLevel {
     pub fn classify(line: &str) -> Self {
         let line = &strip_ansi(line);
         let Some(token) = level_token(line) else {
+            // A crashed service writes Go panic output, not a levelled log
+            // line. Without this the last words before a crash carried no
+            // error marker at all.
+            let head = line.trim_start();
+            if head.starts_with("panic:")
+                || head.starts_with("fatal error:")
+                || head.starts_with("goroutine ")
+            {
+                return Self::Error;
+            }
             return Self::Other;
         };
         match token {
@@ -230,21 +240,34 @@ pub fn read_tail_lines(path: &Path, max_lines: usize) -> std::io::Result<(Vec<St
 /// line and keeps the old file's buffered lines, which loses data silently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LogFileId {
-    /// Inode on Unix, volume file index on Windows; 0 when unavailable.
+    /// Inode on Unix; creation stamp on Windows. 0 when unavailable.
     pub inode: u64,
     /// Creation/change stamp; 0 when unavailable.
     pub created: u64,
+    /// Bytes at the start of the file. A rotation that reuses an identity (or
+    /// lands after a failed stat) still shows different leading content, so this
+    /// catches what an identity comparison alone cannot.
+    pub head: u64,
 }
+
+/// Number of leading bytes hashed into [`LogFileId::head`].
+const LOG_HEAD_BYTES: usize = 64;
 
 impl LogFileId {
     /// True when both samples are known and describe different files.
     pub fn is_different_file(&self, other: &Self) -> bool {
-        self.inode != 0 && other.inode != 0 && self.inode != other.inode
+        if self.inode != 0 && other.inode != 0 && self.inode != other.inode {
+            return true;
+        }
+        // Same or unknown identity: fall back to the leading bytes. A rotation
+        // replaces them; an ordinary append never touches them.
+        self.head != 0 && other.head != 0 && self.head != other.head
     }
 }
 
 /// Sample the identity of the file at `path`, if it can be determined.
 pub fn log_file_id(path: &Path) -> Option<LogFileId> {
+    let head = read_head_fingerprint(path).unwrap_or(0);
     let meta = std::fs::metadata(path).ok()?;
     #[cfg(unix)]
     {
@@ -252,6 +275,7 @@ pub fn log_file_id(path: &Path) -> Option<LogFileId> {
         Some(LogFileId {
             inode: meta.ino(),
             created: meta.ctime() as u64,
+            head,
         })
     }
     #[cfg(windows)]
@@ -262,6 +286,7 @@ pub fn log_file_id(path: &Path) -> Option<LogFileId> {
         Some(LogFileId {
             inode: meta.creation_time(),
             created: meta.creation_time(),
+            head,
         })
     }
     #[cfg(not(any(unix, windows)))]
@@ -269,6 +294,32 @@ pub fn log_file_id(path: &Path) -> Option<LogFileId> {
         let _ = meta;
         None
     }
+}
+
+/// FNV-1a over the first [`LOG_HEAD_BYTES`] bytes. Cheap and stable.
+fn read_head_fingerprint(path: &Path) -> Option<u64> {
+    use std::io::Read as _;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buf = [0u8; LOG_HEAD_BYTES];
+    let mut read = 0usize;
+    while read < buf.len() {
+        match file.read(&mut buf[read..]) {
+            Ok(0) => break,
+            Ok(n) => read += n,
+            Err(_) => break,
+        }
+    }
+    // Only a full prefix is comparable: a shorter file would change its hash on
+    // every append, which would read as a rotation on every write.
+    if read < LOG_HEAD_BYTES {
+        return Some(0);
+    }
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in &buf[..read] {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    Some(hash)
 }
 
 /// Read newly appended lines starting at `offset`, handling log rotation, large catch-up
@@ -404,6 +455,26 @@ mod tests {
     }
 
     #[test]
+    fn classify_marks_a_go_crash_as_an_error() {
+        // Runtime crash output has no level field, but it is the moment a user
+        // most needs the error marker.
+        assert_eq!(
+            LogLevel::classify("panic: runtime error: invalid memory address"),
+            LogLevel::Error
+        );
+        assert_eq!(
+            LogLevel::classify("fatal error: all goroutines are asleep"),
+            LogLevel::Error
+        );
+        assert_eq!(
+            LogLevel::classify("goroutine 1 [running]:"),
+            LogLevel::Error
+        );
+        // Ordinary prose must not be promoted.
+        assert_eq!(LogLevel::classify("started the router"), LogLevel::Other);
+    }
+
+    #[test]
     fn classify_handles_iso_timestamp_and_bracket_form() {
         assert_eq!(
             LogLevel::classify("2026-09-15T02:01:57.123456789+05:30 ERROR start failed"),
@@ -473,6 +544,57 @@ mod tests {
             let _ = before.is_different_file(&after);
         }
         assert!(log_file_id(&dir.path().join("missing.log")).is_none());
+    }
+
+    #[test]
+    fn rotation_is_detected_when_identity_is_unavailable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("error.log");
+        // Real log lines exceed the fingerprint window; that is the case that
+        // matters, since a shorter file has no stable prefix to compare.
+        let old = "old 2026-09-15T02:01:57 ERROR start failed, retrying the listener soon\n";
+        std::fs::write(&path, old).expect("write");
+        let before = log_file_id(&path).expect("id");
+
+        let new = "NEW 2026-09-15T02:02:57 INFO rotated, unrelated leading content now\n";
+        std::fs::write(&path, new).expect("rewrite");
+        let after = log_file_id(&path).expect("id");
+
+        // Windows reuses a deleted file index, so an identity-only check reports
+        // "same file"; the leading bytes differ, which is what makes this work.
+        let identity_only = LogFileId {
+            inode: before.inode,
+            created: before.created,
+            head: 0,
+        };
+        assert!(
+            identity_only.is_different_file(&LogFileId {
+                inode: after.inode,
+                created: after.created,
+                head: 0,
+            }) || before.head != after.head,
+            "either identity or content must distinguish the two files"
+        );
+        assert!(before.is_different_file(&after));
+    }
+
+    #[test]
+    fn append_does_not_look_like_rotation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("error.log");
+        std::fs::write(&path, "line one\n").expect("write");
+        let before = log_file_id(&path).expect("id");
+
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open");
+        f.write_all(b"line two\n").expect("append");
+        drop(f);
+        let after = log_file_id(&path).expect("id");
+
+        // Appending leaves the leading bytes untouched.
+        assert!(!before.is_different_file(&after));
     }
 
     #[test]

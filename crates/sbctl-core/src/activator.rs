@@ -26,8 +26,27 @@ pub trait Activator: Send + Sync {
     fn clear(&self) -> Result<()>;
 }
 
-/// Hook type for performing a privileged symlink swap (for example via `sudo ln -sfn`).
+/// Hook for performing the symlink swap when a caller must not do it directly.
+///
+/// Production uses none: activating is an unprivileged atomic rename inside the
+/// config directory, which the installer hands to the console user.
 pub type SymlinkHook = Arc<dyn Fn(&Path) -> Result<()> + Send + Sync>;
+
+/// Map an activation failure to a message the user can act on.
+///
+/// A bare "permission denied" gives no clue that the config directory has to be
+/// handed to the console user, which is what the installer does.
+#[cfg(unix)]
+fn activation_error(err: std::io::Error, path: &Path) -> SbctlError {
+    if err.kind() == std::io::ErrorKind::PermissionDenied {
+        return SbctlError::permission(format!(
+            "not allowed to update {}",
+            path.display()
+        ))
+        .with_hint("re-run scripts/install-macos.sh so the installer can take ownership of the config directory");
+    }
+    SbctlError::service(format!("could not update {}: {err}", path.display()))
+}
 
 /// Symlink-based activator used on macOS where root-owned `/usr/local/etc/sing-box/config.json`
 /// points into `/usr/local/etc/sing-box/profiles/`.
@@ -61,7 +80,7 @@ impl SymlinkActivator {
             std::os::unix::fs::symlink(target, &staging)?;
             if let Err(err) = fs::rename(&staging, &self.active_config_path) {
                 let _ = fs::remove_file(&staging);
-                return Err(err.into());
+                return Err(activation_error(err, &self.active_config_path));
             }
             Ok(())
         }
