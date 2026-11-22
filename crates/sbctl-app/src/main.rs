@@ -190,6 +190,18 @@ mod desktop {
         ]);
     }
 
+    /// Drop our handle to the main window once it is gone.
+    ///
+    /// Keeping it retains the whole shell: the editor rope, per-profile drafts
+    /// and both log buffers, for as long as the app sits in the tray. Both close
+    /// paths must call this, or clicking the window's close button leaks what
+    /// Cmd-W releases.
+    pub(crate) fn forget_main_window(cx: &mut App) {
+        let g = cx.global_mut::<AppGlobalState>();
+        g.main_window = None;
+        g.main_view = None;
+    }
+
     /// Entry point for the platform reopen callback (Finder/Dock activation).
     pub(crate) fn request_open_window(cx: &mut App) {
         if cx.try_global::<AppGlobalState>().is_none() {
@@ -347,12 +359,14 @@ mod desktop {
         cx.on_action(|action: &SyncProfile, cx: &mut App| {
             let store = cx.global::<AppGlobalState>().store.clone();
             let name = action.name.clone();
-            store.update(cx, |s, cx| s.sync_profile(name, cx));
+            let origin = store.read(cx).notice_origin_for_current_tab();
+            store.update(cx, |s, cx| s.sync_profile(name, origin, cx));
         });
 
         cx.on_action(|_: &SyncAll, cx: &mut App| {
             let store = cx.global::<AppGlobalState>().store.clone();
-            store.update(cx, AppStore::sync_all);
+            let origin = store.read(cx).notice_origin_for_current_tab();
+            store.update(cx, |s, cx| s.sync_all(origin, cx));
         });
 
         cx.on_action(|_: &RefreshIp, cx: &mut App| {
@@ -446,12 +460,7 @@ mod desktop {
                     crate::diag::log("close failed: window handle no longer valid");
                     return;
                 }
-                // Drop the handle to the removed window's view tree. Keeping it
-                // retained the whole shell, editor rope, drafts and both log
-                // buffers for as long as the app sat in the tray.
-                let g = cx.global_mut::<AppGlobalState>();
-                g.main_window = None;
-                g.main_view = None;
+                forget_main_window(cx);
             }
             set_dock_visible(false);
         });

@@ -70,7 +70,14 @@ Every command accepts `--json` and prints one JSON document to stdout, with erro
 stdin is not a terminal, and `add`/`edit` never require `$EDITOR` when `--from` or `--set`
 is given. Profiles report `ready` and a `missing` list naming the fields still to fill, so a
 script can tell "not configured yet" from "configured wrongly". `logs --json --follow`
-emits JSON Lines — one object per line.
+emits JSON Lines — one object per line, plus a `{"gap":...}` line when the log rotated
+mid-stream.
+
+`--set` rejects an unknown key, an out-of-range port, and a malformed value before anything
+is written. It also fails when a value has nowhere to go: setting `tun_mtu` on a config with
+no tunnel is an error naming the missing section, not a silent no-op. Values are written only
+into sections the document already has — a one-field edit never adds a `log` section or a tag
+to an untagged outbound.
 
 ## Development
 
