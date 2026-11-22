@@ -51,7 +51,6 @@ pub fn install_app_menus(cx: &mut App) {
                 MenuItem::action("Open sbctl", OpenMainWindow),
                 MenuItem::action("Settings...", OpenSettingsView),
                 MenuItem::separator(),
-                MenuItem::separator(),
                 MenuItem::action("Quit sbctl", QuitApp),
             ],
             disabled: false,

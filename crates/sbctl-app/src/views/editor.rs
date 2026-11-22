@@ -10,8 +10,9 @@ use gpui_kit::component::{
     ActiveTheme as _, IconName, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
-    Styled as _, Window, div, prelude::FluentBuilder as _, px, relative,
+    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    div, prelude::FluentBuilder as _, px, relative,
 };
 use sbctl_core::form_model::{DEFAULT_SERVER_PORT, DEFAULT_TUN_MTU, ProfileFormModel};
 use std::rc::Rc;
@@ -33,6 +34,7 @@ pub struct ProfileEditorPanel {
     disk_json: String,
     disk_model: Option<ProfileFormModel>,
     external_change_pending: bool,
+    disk_read_failed: bool,
     validated_snapshot: Option<String>,
     active_tab: EditorTab,
     /// Unsaved buffers, keyed by profile name.
@@ -89,6 +91,7 @@ impl ProfileEditorPanel {
             disk_json: String::new(),
             disk_model: None,
             external_change_pending: false,
+            disk_read_failed: false,
             validated_snapshot: None,
             drafts: std::collections::HashMap::new(),
             last_submitted: None,
@@ -131,16 +134,14 @@ impl ProfileEditorPanel {
             // buffer, so keying the stash on the buffer alone lost it. If the
             // form cannot be converted (the file has nowhere to put a field),
             // the buffer is still stashed when dirty rather than dropped.
-            if let Some(prev) = self.loaded_profile.clone()
-                && !self.disk_json.is_empty()
-            {
+            if let Some(prev) = self.loaded_profile.clone() {
                 if self.active_tab == EditorTab::Guided {
                     let _ = self.apply_guided_to_json(window, cx);
                 }
                 let current = self.json_editor.read(cx).value().to_string();
                 if self.is_dirty_against(&current, cx) {
                     self.drafts.insert(prev, current);
-                } else {
+                } else if !self.disk_read_failed {
                     self.drafts.remove(&prev);
                 }
             }
@@ -148,25 +149,23 @@ impl ProfileEditorPanel {
             self.loaded_profile = target.clone();
             self.seen_disk_revision = disk_rev;
             self.external_change_pending = false;
+            self.disk_read_failed = false;
             self.validated_snapshot = None;
+            self.last_submitted = None;
+
             if let Some(name) = target {
                 let content = self.store.read(cx).read_profile_content(&name);
-                if content.is_empty() {
-                    // Unreadable: do not adopt anything as the baseline, or the
-                    // next save would overwrite the real file with it.
-                    self.disk_json.clear();
-                    self.disk_model = None;
-                    self.external_change_pending = true;
-                    return;
-                }
-                self.load_json_into_views(&content, window, cx);
-                if let Some(draft) = self.drafts.get(&name).cloned() {
-                    self.json_editor
-                        .update(cx, |s, cx| s.set_value(draft, window, cx));
+                if let Some(content) = content {
+                    self.load_json_into_views(&content, window, cx);
+                    if let Some(draft) = self.drafts.get(&name).cloned() {
+                        self.set_editor_content(&draft, window, cx);
+                    }
+                } else {
+                    self.load_json_into_views("", window, cx);
+                    self.disk_read_failed = true;
                 }
             } else {
-                self.disk_json.clear();
-                self.disk_model = None;
+                self.load_json_into_views("", window, cx);
             }
             return;
         }
@@ -187,7 +186,11 @@ impl ProfileEditorPanel {
             }
             self.seen_disk_revision = disk_rev;
             if let Some(name) = &self.loaded_profile {
-                let latest = self.store.read(cx).read_profile_content(name);
+                let Some(latest) = self.store.read(cx).read_profile_content(name) else {
+                    self.disk_read_failed = true;
+                    return;
+                };
+                self.disk_read_failed = false;
                 let editor_now = self.json_editor.read(cx).value().to_string();
                 if latest == self.disk_json {
                     self.external_change_pending = false;
@@ -221,7 +224,11 @@ impl ProfileEditorPanel {
 
     pub fn force_reload_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(name) = self.loaded_profile.clone() {
-            let content = self.store.read(cx).read_profile_content(&name);
+            let Some(content) = self.store.read(cx).read_profile_content(&name) else {
+                self.disk_read_failed = true;
+                return;
+            };
+            self.disk_read_failed = false;
             self.load_json_into_views(&content, window, cx);
             self.external_change_pending = false;
             self.validated_snapshot = None;
@@ -231,16 +238,28 @@ impl ProfileEditorPanel {
     }
 
     fn load_json_into_views(&mut self, content: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.disk_json = content.to_string();
-        let value = content.to_string();
+        self.disk_json = content.to_owned();
+        self.disk_model = self.set_editor_content(content, window, cx);
+    }
+
+    fn set_editor_content(
+        &mut self,
+        content: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<ProfileFormModel> {
         self.json_editor
-            .update(cx, |s, cx| s.set_value(value, window, cx));
-        if let Ok(parsed) = ProfileFormModel::from_json_str(content) {
-            self.disk_model = Some(parsed.clone());
-            self.model = parsed;
-            self.push_model_to_inputs(window, cx);
-        } else {
-            self.disk_model = None;
+            .update(cx, |s, cx| s.set_value(content.to_owned(), window, cx));
+        match ProfileFormModel::from_json_str(content) {
+            Ok(parsed) => {
+                self.model = parsed.clone();
+                self.push_model_to_inputs(window, cx);
+                Some(parsed)
+            }
+            Err(_) => {
+                self.active_tab = EditorTab::Json;
+                None
+            }
         }
     }
 
@@ -401,6 +420,9 @@ impl ProfileEditorPanel {
         // render, so a keyboard save straight after changing the selection wrote
         // the previous profile's buffer over the newly selected file.
         self.sync_with_store(window, cx);
+        if self.disk_read_failed {
+            return;
+        }
         let Some(name) = self.loaded_profile.clone() else {
             return;
         };
@@ -553,7 +575,17 @@ impl ProfileEditorPanel {
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(border)
-            .child(div().flex_1().text_xs().text_color(text_col).child(label))
+            .child(
+                div()
+                    .id("editor-validation-message")
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .max_h(px(60.0))
+                    .overflow_y_scroll()
+                    .text_xs()
+                    .text_color(text_col)
+                    .child(label),
+            )
             .when(can_force_draft, |row| {
                 row.child(
                     Button::new("editor-save-draft-anyway")
@@ -572,173 +604,186 @@ impl ProfileEditorPanel {
             })
     }
 
-    /// Pinned editor toolbar: identity and connection state on the left, then
-    /// exactly one live save action. Format, validate, and draft saves live in
-    /// the overflow so the primary choice is never ambiguous.
-    fn render_toolbar(
-        &self,
-        dirty: bool,
-        is_busy: bool,
-        is_active_running: bool,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        let name = self.loaded_profile.clone().unwrap_or_default();
-        let ready = {
-            let s = self.store.read(cx);
-            s.snapshot
-                .profiles
-                .iter()
-                .find(|p| p.name == name)
-                .is_some_and(sbctl_core::profile::Profile::ready)
-        };
-
+    fn render_toolbar(&self, name: String, cx: &Context<Self>) -> impl IntoElement {
         h_flex()
             .w_full()
-            .justify_between()
             .items_center()
-            .gap(px(10.0))
-            .h(px(44.0))
+            .gap(px(12.0))
             .flex_none()
             .child(
-                h_flex()
-                    .gap(px(8.0))
-                    .items_center()
+                v_flex()
+                    .flex_1()
                     .min_w(px(0.0))
+                    .items_start()
+                    .gap(px(4.0))
                     .child(
                         Button::new("editor-back")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .icon(IconName::ChevronLeft)
-                            .tooltip("Back to Connections")
+                            .label("Back to connections")
                             .on_click(cx.listener(|_, _, _, cx| {
                                 cx.dispatch_action(&BackToConnections);
                             })),
                     )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Editing"),
-                    )
-                    .child(div().text_sm().font_bold().truncate().child(name))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(if dirty { "unsaved changes" } else { "" }),
-                    ),
+                    .child(div().text_size(px(24.0)).font_bold().truncate().child(name)),
             )
             .child(
-                h_flex()
-                    .gap(px(8.0))
-                    .items_center()
-                    .child(
-                        TabBar::new("editor-mode-tabs")
-                            .segmented()
-                            .selected_index(match self.active_tab {
-                                EditorTab::Guided => 0,
-                                EditorTab::Json => 1,
-                            })
-                            .child(Tab::new().label("Form"))
-                            .child(Tab::new().label("JSON"))
-                            .on_click(cx.listener(|this, idx, window, cx| {
-                                if *idx == 0 {
-                                    let raw = this.json_editor.read(cx).value().to_string();
-                                    if let Ok(parsed) = ProfileFormModel::from_json_str(&raw) {
-                                        this.model = parsed;
-                                        this.push_model_to_inputs(window, cx);
-                                    }
-                                    this.active_tab = EditorTab::Guided;
-                                } else {
-                                    // Stay on the form when it cannot be converted:
-                                    // switching anyway leaves the two tabs
-                                    // disagreeing and hides the reason.
-                                    match this.apply_guided_to_json(window, cx) {
-                                        Ok(_) => this.active_tab = EditorTab::Json,
-                                        Err(err) => {
-                                            this.store.update(cx, |s, cx| {
-                                                s.set_notice(
-                                                    NoticeOrigin::Editor,
-                                                    BannerTone::Error,
-                                                    err,
-                                                    cx,
-                                                );
-                                            });
-                                        }
-                                    }
+                h_flex().gap(px(8.0)).items_center().child(
+                    TabBar::new("editor-mode-tabs")
+                        .segmented()
+                        .selected_index(match self.active_tab {
+                            EditorTab::Guided => 0,
+                            EditorTab::Json => 1,
+                        })
+                        .child(Tab::new().label("Form"))
+                        .child(Tab::new().label("JSON"))
+                        .on_click(cx.listener(|this, idx, window, cx| {
+                            let next = if *idx == 0 {
+                                EditorTab::Guided
+                            } else {
+                                EditorTab::Json
+                            };
+                            if next == this.active_tab {
+                                return;
+                            }
+                            let result = match next {
+                                EditorTab::Guided => {
+                                    let raw = this.json_editor.read(cx).value();
+                                    ProfileFormModel::from_json_str(&raw)
+                                        .map(|model| {
+                                            this.model = model;
+                                            this.push_model_to_inputs(window, cx);
+                                        })
+                                        .map_err(|err| {
+                                            format!(
+                                                "Fix the JSON before switching to the form. {err}"
+                                            )
+                                        })
                                 }
-                                cx.notify();
-                            })),
-                    )
-                    .child(self.render_overflow(is_busy, cx))
-                    .child(
-                        Button::new("editor-revert")
-                            .outline()
-                            .small()
-                            .label("Revert")
-                            .disabled(!dirty || is_busy)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.force_reload_selected(window, cx);
-                                cx.notify();
-                            })),
-                    )
-                    // Always present, disabled rather than removed: hiding it
-                    // made the same slot mean "write the file" on one profile
-                    // and "write and restart the service" on the live one.
-                    .child(
-                        Button::new("editor-save")
-                            .outline()
-                            .small()
-                            .label("Save")
-                            .disabled(is_busy || !dirty || is_active_running)
-                            .tooltip(if is_active_running {
-                                "Save & Reconnect writes the file and reloads sing-box"
-                            } else {
-                                "Save without touching the running service"
-                            })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.trigger_save(false, window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("editor-save-live")
-                            .primary()
-                            .small()
-                            .label(if is_active_running {
-                                "Save & Reconnect"
-                            } else {
-                                "Save & Connect"
-                            })
-                            .disabled(is_busy || (!dirty && is_active_running) || !ready)
-                            .tooltip(if ready {
-                                "Save and apply to sing-box"
-                            } else {
-                                "Finish the TODO values first"
-                            })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.trigger_save(true, window, cx);
-                            })),
-                    ),
+                                EditorTab::Json => {
+                                    this.apply_guided_to_json(window, cx).map(|_| ())
+                                }
+                            };
+                            match result {
+                                Ok(()) => {
+                                    this.active_tab = next;
+                                    this.store.update(cx, |s, cx| {
+                                        if s.notice_for(NoticeOrigin::Editor).is_some() {
+                                            s.dismiss_notice(cx);
+                                        }
+                                    });
+                                }
+                                Err(err) => {
+                                    this.store.update(cx, |s, cx| {
+                                        s.set_notice(
+                                            NoticeOrigin::Editor,
+                                            BannerTone::Error,
+                                            err,
+                                            cx,
+                                        );
+                                    });
+                                }
+                            }
+                            cx.notify();
+                        })),
+                ),
             )
     }
 
-    /// Secondary editor actions, kept out of the primary action row.
-    fn render_overflow(&self, is_busy: bool, cx: &Context<Self>) -> impl IntoElement {
+    fn render_save_bar(
+        &self,
+        dirty: bool,
+        is_busy: bool,
+        is_active_running: bool,
+        can_activate: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let activation_label = if is_active_running {
+            "Save and reconnect"
+        } else if self.store.read(cx).snapshot.running {
+            "Save and switch"
+        } else {
+            "Save and connect"
+        };
+
+        h_flex()
+            .w_full()
+            .pt(px(10.0))
+            .flex_none()
+            .gap(px(8.0))
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(if dirty {
+                        "Unsaved changes"
+                    } else {
+                        "All changes saved"
+                    }),
+            )
+            .child(self.render_overflow(dirty, is_busy, cx))
+            .when(!is_active_running, |row| {
+                row.child(
+                    Button::new("editor-save")
+                        .primary()
+                        .label("Save")
+                        .disabled(is_busy || !dirty)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.trigger_save(false, window, cx);
+                        })),
+                )
+            })
+            .when(is_active_running || can_activate, |row| {
+                row.child(
+                    Button::new("editor-save-live")
+                        .when(is_active_running, Button::primary)
+                        .when(!is_active_running, Button::secondary)
+                        .label(activation_label)
+                        .disabled(is_busy || !can_activate || (is_active_running && !dirty))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.trigger_save(true, window, cx);
+                        })),
+                )
+            })
+    }
+
+    fn render_overflow(&self, dirty: bool, is_busy: bool, cx: &Context<Self>) -> impl IntoElement {
+        let revert = Rc::new(cx.listener(|this, _, window, cx| {
+            this.force_reload_selected(window, cx);
+            cx.notify();
+        }));
         let validate = Rc::new(cx.listener(|this, _, window, cx| this.validate_live(window, cx)));
         let format = Rc::new(cx.listener(|this, _, window, cx| this.format_json(window, cx)));
+        let can_save_draft = self.loaded_profile != self.store.read(cx).snapshot.active;
         let draft = Rc::new(cx.listener(|this, _, window, cx| {
-            let raw = this.json_editor.read(cx).value().to_string();
             if let Some(name) = this.loaded_profile.clone() {
-                open_save_draft_dialog(name, raw, this.store.clone(), window, cx);
+                let content = match this.active_tab {
+                    EditorTab::Json => this.json_editor.read(cx).value().to_string(),
+                    EditorTab::Guided => match this.apply_guided_to_json(window, cx) {
+                        Ok(content) => content,
+                        Err(err) => {
+                            this.store.update(cx, |s, cx| {
+                                s.set_notice(NoticeOrigin::Editor, BannerTone::Error, err, cx);
+                            });
+                            return;
+                        }
+                    },
+                };
+                open_save_draft_dialog(name, content, this.store.clone(), window, cx);
             }
         }));
 
         Button::new("editor-overflow")
             .ghost()
-            .xsmall()
             .icon(IconName::Ellipsis)
-            .tooltip("More actions")
+            .accessibility_label("Editor options")
+            .tooltip("Editor options")
             .dropdown_menu(move |menu, _, _| {
+                let r = revert.clone();
                 let v = validate.clone();
                 let f = format.clone();
                 let d = draft.clone();
@@ -754,8 +799,13 @@ impl ProfileEditorPanel {
                 )
                 .separator()
                 .item(
-                    PopupMenuItem::new("Save Draft")
-                        .disabled(is_busy)
+                    PopupMenuItem::new("Revert changes")
+                        .disabled(!dirty || is_busy)
+                        .on_click(move |ev, w, cx| r(ev, w, cx)),
+                )
+                .item(
+                    PopupMenuItem::new("Save as draft…")
+                        .disabled(is_busy || !can_save_draft)
                         .on_click(move |ev, w, cx| d(ev, w, cx)),
                 )
             })
@@ -764,40 +814,49 @@ impl ProfileEditorPanel {
     fn render_guided_form(&self, cx: &Context<Self>) -> gpui_kit::AnyElement {
         v_flex()
             .flex_1()
+            .min_h(px(0.0))
             .w_full()
             .overflow_y_scrollbar()
-            .gap_4()
-            .child(section_heading("Outbound", cx))
-            .child(form_row_2(
-                labeled_input("Protocol", &self.in_outbound_type, cx),
-                labeled_input("Log level", &self.in_log_level, cx),
-            ))
-            .child(form_row_2(
-                labeled_input("Server", &self.in_server, cx),
-                labeled_input("Port", &self.in_server_port, cx),
-            ))
-            .child(form_row_2(
-                labeled_input("UUID", &self.in_uuid, cx),
-                labeled_input("Password", &self.in_password, cx),
-            ))
-            .child(labeled_input("Flow", &self.in_flow, cx))
-            .child(section_heading("TLS and Reality", cx))
-            .child(self.render_tls_switches(cx))
-            .child(form_row_2(
-                labeled_input("Server name", &self.in_server_name, cx),
-                labeled_input("uTLS fingerprint", &self.in_utls_fp, cx),
-            ))
-            .child(form_row_2(
-                labeled_input("Reality public key", &self.in_reality_pubkey, cx),
-                labeled_input("Reality short ID", &self.in_reality_short_id, cx),
-            ))
-            .child(section_heading("TUN and routing", cx))
-            .child(labeled_input("Interface", &self.in_tun_iface, cx))
-            .child(form_row_2(
-                labeled_input("Stack", &self.in_tun_stack, cx),
-                labeled_input("MTU", &self.in_tun_mtu, cx),
-            ))
-            .child(self.render_tun_switches(cx))
+            .gap_3()
+            .child(
+                form_section("Server", cx)
+                    .child(form_row_2(
+                        labeled_input("Server address", &self.in_server, cx),
+                        labeled_input("Port", &self.in_server_port, cx),
+                    ))
+                    .child(form_row_2(
+                        labeled_input("Protocol", &self.in_outbound_type, cx),
+                        labeled_input("Flow", &self.in_flow, cx),
+                    ))
+                    .child(form_row_2(
+                        labeled_input("UUID", &self.in_uuid, cx),
+                        labeled_input("Password", &self.in_password, cx),
+                    )),
+            )
+            .child(
+                form_section("TLS and Reality", cx)
+                    .child(self.render_tls_switches(cx))
+                    .child(form_row_2(
+                        labeled_input("Server name", &self.in_server_name, cx),
+                        labeled_input("uTLS fingerprint", &self.in_utls_fp, cx),
+                    ))
+                    .child(form_row_2(
+                        labeled_input("Reality public key", &self.in_reality_pubkey, cx),
+                        labeled_input("Reality short ID", &self.in_reality_short_id, cx),
+                    )),
+            )
+            .child(
+                form_section("Tunnel and routing", cx)
+                    .child(form_row_2(
+                        labeled_input("Interface", &self.in_tun_iface, cx),
+                        labeled_input("Stack", &self.in_tun_stack, cx),
+                    ))
+                    .child(form_row_2(
+                        labeled_input("MTU", &self.in_tun_mtu, cx),
+                        labeled_input("Log level", &self.in_log_level, cx),
+                    ))
+                    .child(self.render_tun_switches(cx)),
+            )
             .into_any_element()
     }
 
@@ -877,7 +936,7 @@ impl ProfileEditorPanel {
         v_flex()
             .flex_1()
             .w_full()
-            .min_h(px(300.0))
+            .min_h(px(0.0))
             .gap_2()
             .child(
                 div()
@@ -902,11 +961,13 @@ impl ProfileEditorPanel {
                         Ok(()) => div().text_color(cx.theme().success).child("Valid JSON"),
                         Err(msg) => div().text_color(cx.theme().danger).truncate().child(msg),
                     })
-                    .child(
-                        div()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Cmd/Ctrl+S to save"),
-                    ),
+                    .child(div().text_color(cx.theme().muted_foreground).child(
+                        if cfg!(target_os = "macos") {
+                            "Cmd+S to save"
+                        } else {
+                            "Ctrl+S to save"
+                        },
+                    )),
             )
             .into_any_element()
     }
@@ -932,6 +993,47 @@ impl Render for ProfileEditorPanel {
                 .into_any_element();
         };
 
+        if self.disk_read_failed {
+            return v_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .child(
+                    div()
+                        .text_base()
+                        .font_bold()
+                        .child(format!("Cannot read {profile_name}")),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .child("Reload the profile to continue editing."),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("unreadable-back")
+                                .ghost()
+                                .label("Back to connections")
+                                .on_click(cx.listener(|_, _, _, cx| {
+                                    cx.dispatch_action(&BackToConnections);
+                                })),
+                        )
+                        .child(
+                            Button::new("unreadable-reload")
+                                .primary()
+                                .label("Reload profile")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.force_reload_selected(window, cx);
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .into_any_element();
+        }
+
         // Materialize once. Todos and syntax are cached against the text, so a
         // repaint for an unrelated reason reuses them instead of re-scanning.
         let live_json = self.json_editor.read(cx).value();
@@ -945,15 +1047,19 @@ impl Render for ProfileEditorPanel {
         // guided form on that tab, the JSON buffer otherwise. Deriving it from
         // the buffer alone meant typing the last value into the form left the
         // strip listing it and "Save & Connect" disabled until a save.
-        let live_missing = match self.active_tab {
+        let readiness = match self.active_tab {
             EditorTab::Guided => self
                 .build_model_from_inputs(cx)
-                .map(|m| m.missing())
-                .unwrap_or_default(),
-            EditorTab::Json => sbctl_core::form_model::ProfileFormModel::from_json_str(&live_json)
-                .map(|m| m.missing())
-                .unwrap_or_default(),
+                .map(|model| model.missing()),
+            EditorTab::Json => ProfileFormModel::from_json_str(&live_json)
+                .map(|model| model.missing())
+                .map_err(|err| err.to_string()),
         };
+        let can_activate = readiness.as_ref().is_ok_and(Vec::is_empty);
+        let form_error = (self.active_tab == EditorTab::Guided)
+            .then(|| readiness.as_ref().err().cloned())
+            .flatten();
+        let live_missing = readiness.unwrap_or_default();
         let syntax_status = match (&self.derived_syntax, self.active_tab) {
             (Some(err), EditorTab::Json) => Err(err.clone()),
             _ => Ok(()),
@@ -973,7 +1079,7 @@ impl Render for ProfileEditorPanel {
             .when(self.external_change_pending, |this| {
                 this.child(self.render_disk_change_banner(cx))
             })
-            .child(self.render_toolbar(dirty, is_busy, is_active_running, cx))
+            .child(self.render_toolbar(profile_name.clone(), cx))
             .when_some(
                 crate::views::notice_strip(&self.store, crate::state::NoticeOrigin::Editor, cx),
                 |el, notice| el.child(notice),
@@ -987,6 +1093,9 @@ impl Render for ProfileEditorPanel {
                     cx,
                 ))
             })
+            .when_some(form_error, |this, error| {
+                this.child(div().text_sm().text_color(cx.theme().danger).child(error))
+            })
             .when(!live_missing.is_empty(), |this| {
                 this.child(render_missing_strip(live_missing, cx))
             })
@@ -994,6 +1103,7 @@ impl Render for ProfileEditorPanel {
                 EditorTab::Guided => self.render_guided_form(cx),
                 EditorTab::Json => self.render_json_pane(syntax_status, cx),
             })
+            .child(self.render_save_bar(dirty, is_busy, is_active_running, can_activate, cx))
             .into_any_element()
     }
 }
@@ -1033,7 +1143,7 @@ fn open_save_draft_dialog(
             .confirm()
             .title(format!("Save {n} as draft?"))
             .description(
-                "Validation failed. Inactive drafts can be saved now and fixed before connecting.",
+                "This saves the current changes without requiring the configuration to pass validation.",
             )
             .ok_text("Save Draft")
             .on_ok(move |_, _, cx| {
@@ -1065,12 +1175,15 @@ fn render_missing_strip(missing: Vec<sbctl_core::readiness::Field>, cx: &App) ->
         )
 }
 
-fn section_heading(title: &'static str, cx: &App) -> impl IntoElement {
-    div()
-        .text_xs()
-        .font_bold()
-        .text_color(cx.theme().muted_foreground)
-        .child(title)
+fn form_section(title: &'static str, cx: &App) -> gpui_kit::Div {
+    v_flex()
+        .w_full()
+        .flex_none()
+        .p(px(16.0))
+        .gap_3()
+        .rounded(px(12.0))
+        .bg(crate::theme::surface(cx))
+        .child(div().text_base().font_bold().child(title))
 }
 
 fn labeled_input(label: &'static str, state: &Entity<InputState>, cx: &App) -> gpui_kit::Div {
@@ -1085,12 +1198,7 @@ fn labeled_input(label: &'static str, state: &Entity<InputState>, cx: &App) -> g
                 .text_color(cx.theme().foreground)
                 .child(label),
         )
-        .child(
-            gpui_kit::component::input::Input::new(state)
-                .focus_bordered(false)
-                .cleanable(true)
-                .small(),
-        )
+        .child(gpui_kit::component::input::Input::new(state).cleanable(true))
 }
 
 fn form_row_2(left: impl IntoElement, right: impl IntoElement) -> impl IntoElement {
