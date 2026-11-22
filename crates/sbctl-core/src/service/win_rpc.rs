@@ -139,7 +139,7 @@ impl PipeResponse {
 #[cfg(windows)]
 pub fn try_send_pipe_request(pipe_name: &str, req: &PipeRequest) -> Result<Option<PipeResponse>> {
     use std::fs::OpenOptions;
-    use std::io::{BufRead, BufReader, Read, Write};
+    use std::io::{BufRead, BufReader, Write};
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
     use windows_sys::Win32::System::Pipes::WaitNamedPipeW;

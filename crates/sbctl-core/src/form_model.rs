@@ -209,7 +209,9 @@ impl ProfileFormModel {
         if !self.apply_outbound_section(root_obj) {
             skipped.push("Outbound");
         }
-        self.apply_ipv6_route_section(root_obj);
+        if !self.apply_ipv6_route_section(root_obj) {
+            skipped.push("Route rules");
+        }
         skipped
     }
 
@@ -306,7 +308,7 @@ impl ProfileFormModel {
         }
     }
 
-    fn apply_ipv6_route_section(&self, root_obj: &mut Map<String, Value>) {
+    fn apply_ipv6_route_section(&self, root_obj: &mut Map<String, Value>) -> bool {
         if let Some(rules) = root_obj
             .get_mut("route")
             .and_then(Value::as_object_mut)
@@ -319,6 +321,11 @@ impl ProfileFormModel {
             } else if !self.reject_ipv6 && has_rule {
                 rules.retain(|r| !is_ipv6_reject_rule(r));
             }
+            true
+        } else {
+            // No route.rules to hold the rule. Only a skipped write if the user
+            // actually toggled it off; leaving it alone is not a silent failure.
+            !self.reject_ipv6
         }
     }
 }
