@@ -148,6 +148,14 @@ pub struct AppStore {
     /// Closing the window with neither a tray nor a Dock icon leaves nothing to
     /// click, so the close path consults this before hiding.
     pub tray_available: bool,
+    /// Cached counts of the error stream, maintained where it changes.
+    error_log_errors: usize,
+    error_log_warnings: usize,
+    /// Stand-in layout for the init-failed state.
+    ///
+    /// Building `Layout::darwin()` walks PATH and stats binaries, and the UI
+    /// deliberately keeps rendering that state, so it is resolved once.
+    fallback_layout: Layout,
     pub log_revision: u64,
     pub disk_revision: u64,
     pub connected_since: Option<Instant>,
@@ -276,6 +284,13 @@ impl AppStore {
             settings,
             window_open: false,
             tray_available: false,
+            error_log_errors: 0,
+            error_log_warnings: 0,
+            fallback_layout: if cfg!(windows) {
+                Layout::windows()
+            } else {
+                Layout::darwin()
+            },
             log_revision: 0,
             disk_revision: 0,
             connected_since: initially_running.then(Instant::now),
@@ -392,26 +407,29 @@ impl AppStore {
         self.ctrl
             .as_ref()
             .map(|c| c.layout.clone())
-            .unwrap_or_else(|| {
-                if cfg!(windows) {
-                    Layout::windows()
-                } else {
-                    Layout::darwin()
-                }
-            })
+            .unwrap_or_else(|| self.fallback_layout.clone())
     }
 
+    /// Error and warning counts for the rail badge.
+    ///
+    /// Read on every shell render; it used to rescan up to 5000 records each
+    /// time. The counts are refreshed when the buffer changes instead, so a
+    /// repaint for any other reason costs nothing.
     pub fn log_counts(&self) -> (usize, usize) {
-        let mut errors = 0usize;
-        let mut warnings = 0usize;
-        for rec in &self.error_logs {
-            match rec.level {
-                LogLevel::Error => errors += 1,
-                LogLevel::Warn => warnings += 1,
-                _ => {}
-            }
-        }
-        (errors, warnings)
+        (self.error_log_errors, self.error_log_warnings)
+    }
+
+    fn recount_error_logs(&mut self) {
+        self.error_log_errors = self
+            .error_logs
+            .iter()
+            .filter(|r| r.level == LogLevel::Error)
+            .count();
+        self.error_log_warnings = self
+            .error_logs
+            .iter()
+            .filter(|r| r.level == LogLevel::Warn)
+            .count();
     }
 
     /// Which setup condition, if any, the user needs to resolve. Ordered by
@@ -1749,6 +1767,7 @@ impl AppStore {
         self.error_log_id = sbctl_core::logs::log_file_id(&layout.error_log_path);
         self.access_log_id = sbctl_core::logs::log_file_id(&layout.access_log_path);
 
+        self.recount_error_logs();
         load_tail_stream(
             &layout.error_log_path,
             &mut self.error_logs,
@@ -1851,6 +1870,9 @@ impl AppStore {
                     &err_path,
                     err_res,
                 );
+                if changed || err_rotated {
+                    store.recount_error_logs();
+                }
                 changed |= apply_log_delta(
                     &mut store.access_logs,
                     &mut store.access_log_offset,

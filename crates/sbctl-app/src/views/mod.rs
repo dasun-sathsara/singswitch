@@ -398,7 +398,9 @@ impl WorkspaceShell {
         let busy = s.busy_phase.is_some();
         let current_phase = s.busy_phase.clone();
         let query = s.profile_search_query.trim().to_string();
-        let profiles: Vec<Profile> = s
+        // Borrow, do not clone: this ran per frame and copied every profile,
+        // including its placeholder vec and parsed facts.
+        let profiles: Vec<&Profile> = s
             .snapshot
             .profiles
             .iter()
@@ -409,7 +411,6 @@ impl WorkspaceShell {
                         .as_deref()
                         .is_some_and(|srv| contains_ignore_ascii_case(srv, &query))
             })
-            .cloned()
             .collect();
         let (log_errors, _) = s.log_counts();
         let doctor_failed = s

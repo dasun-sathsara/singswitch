@@ -100,7 +100,17 @@ impl LogsView {
 
         let count = indices.len();
         self.filtered_indices = Rc::new(indices);
-        self.item_sizes = Rc::new(vec![size(px(1400.0), px(22.0)); count]);
+        // Reuse the existing size buffer when it is uniquely ours. This is one
+        // entry per row and all entries are identical (rows are a fixed height),
+        // so a fresh 5000-element Vec per poll was pure churn.
+        let row = size(px(1400.0), px(22.0));
+        match Rc::get_mut(&mut self.item_sizes) {
+            Some(sizes) => {
+                sizes.clear();
+                sizes.resize(count, row);
+            }
+            None => self.item_sizes = Rc::new(vec![row; count]),
+        }
         self.cached_revision = store.log_revision;
         self.cached_stream = store.log_stream;
         self.cached_severity = store.log_severity;
