@@ -45,6 +45,12 @@ pub fn log(message: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
+    // One generation of rotation keeps this bounded; it is append-only and
+    // otherwise grows for the life of the install.
+    const MAX_LOG_BYTES: u64 = 256 * 1024;
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_LOG_BYTES) {
+        let _ = std::fs::rename(&path, path.with_extension("log.1"));
+    }
     let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

@@ -143,6 +143,11 @@ pub struct AppStore {
     pub snapshot: Snapshot,
     pub settings: UiSettings,
     pub window_open: bool,
+    /// Whether a tray/menu-bar item exists to restore the window from.
+    ///
+    /// Closing the window with neither a tray nor a Dock icon leaves nothing to
+    /// click, so the close path consults this before hiding.
+    pub tray_available: bool,
     pub log_revision: u64,
     pub disk_revision: u64,
     pub connected_since: Option<Instant>,
@@ -270,6 +275,7 @@ impl AppStore {
             snapshot,
             settings,
             window_open: false,
+            tray_available: false,
             log_revision: 0,
             disk_revision: 0,
             connected_since: initially_running.then(Instant::now),

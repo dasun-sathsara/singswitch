@@ -63,50 +63,65 @@ mod desktop {
             env!("CARGO_PKG_VERSION")
         ));
 
-        gpui_kit::application()
+        let app = gpui_kit::application()
             .with_assets(gpui_kit::assets::Assets)
-            .with_quit_mode(QuitMode::Explicit)
-            .run(move |cx: &mut App| {
-                gpui_kit::init(cx);
-                crate::fonts::install(cx);
+            .with_quit_mode(QuitMode::Explicit);
 
-                // The stock 500ms delay reads as "tooltips don't work" on icons
-                // that carry meaning only in their tooltip. 180ms still avoids
-                // flicker while feeling immediate; the grace period lets the
-                // pointer move between neighbouring icon buttons without
-                // re-waiting.
-                gpui_kit::component::tooltip::TooltipDefaults::new()
-                    .with_show_delay(std::time::Duration::from_millis(180))
-                    .with_grace_period(std::time::Duration::from_millis(400))
-                    .install(cx);
+        // Closing the window leaves an Accessory app with no Dock icon, so
+        // double-clicking it in Finder or the Dock did nothing at all. The
+        // callback runs with a fresh app borrow, which is why this is registered
+        // on the builder rather than from inside `run`.
+        app.on_reopen(|cx: &mut App| {
+            crate::desktop::request_open_window(cx);
+        });
 
-                let store = cx.new(AppStore::new);
-                let theme_pref = store.read(cx).settings.theme;
-                apply_theme(theme_pref, None, cx);
-                install_app_menus(cx);
-                bind_global_shortcuts(cx);
+        app.run(move |cx: &mut App| {
+            gpui_kit::init(cx);
+            crate::fonts::install(cx);
 
-                let tray = TrayController::install(&store, cx).ok();
-                match &tray {
-                    Some(_) => crate::diag::log("tray installed"),
-                    None => crate::diag::log("tray unavailable; app runs as a plain window"),
-                }
+            // The stock 500ms delay reads as "tooltips don't work" on icons
+            // that carry meaning only in their tooltip. 180ms still avoids
+            // flicker while feeling immediate; the grace period lets the
+            // pointer move between neighbouring icon buttons without
+            // re-waiting.
+            gpui_kit::component::tooltip::TooltipDefaults::new()
+                .with_show_delay(std::time::Duration::from_millis(180))
+                .with_grace_period(std::time::Duration::from_millis(400))
+                .install(cx);
 
-                cx.set_global(AppGlobalState {
-                    store: store.clone(),
-                    main_window: None,
-                    main_view: None,
-                    tray,
-                });
+            let store = cx.new(AppStore::new);
+            let theme_pref = store.read(cx).settings.theme;
+            apply_theme(theme_pref, None, cx);
+            // Bind first: macOS menu key equivalents are captured once when
+            // the menu is built, so building menus before the bindings gave
+            // every app-action item no shortcut to display.
+            bind_global_shortcuts(cx);
+            install_app_menus(cx);
 
-                register_global_actions(cx);
+            let tray = TrayController::install(&store, cx).ok();
+            let has_tray = tray.is_some();
+            store.update(cx, |s, _| s.tray_available = has_tray);
+            if has_tray {
+                crate::diag::log("tray installed");
+            } else {
+                crate::diag::log("tray unavailable; app runs as a plain window");
+            }
 
-                if start_background {
-                    set_dock_visible(false);
-                } else {
-                    open_or_focus_main_window(cx);
-                }
+            cx.set_global(AppGlobalState {
+                store: store.clone(),
+                main_window: None,
+                main_view: None,
+                tray,
             });
+
+            register_global_actions(cx);
+
+            if start_background {
+                set_dock_visible(false);
+            } else {
+                open_or_focus_main_window(cx);
+            }
+        });
     }
 
     fn bind_global_shortcuts(cx: &mut App) {
@@ -187,6 +202,14 @@ mod desktop {
             KeyBinding::new("ctrl-w", CloseWindow, None),
             KeyBinding::new("ctrl-q", QuitApp, None),
         ]);
+    }
+
+    /// Entry point for the platform reopen callback (Finder/Dock activation).
+    pub(crate) fn request_open_window(cx: &mut App) {
+        if cx.try_global::<AppGlobalState>().is_none() {
+            return;
+        }
+        open_or_focus_main_window(cx);
     }
 
     fn open_or_focus_main_window(cx: &mut App) {
@@ -383,11 +406,6 @@ mod desktop {
         cx.on_action(|_: &crate::actions::RestartService, cx: &mut App| {
             let store = cx.global::<AppGlobalState>().store.clone();
             store.update(cx, AppStore::restart_active);
-        });
-
-        cx.on_action(|_: &crate::actions::RefreshStatus, cx: &mut App| {
-            let store = cx.global::<AppGlobalState>().store.clone();
-            store.update(cx, |s, cx| s.refresh_snapshot(true, cx));
         });
 
         cx.on_action(|_: &crate::actions::DeleteSelectedProfile, cx: &mut App| {

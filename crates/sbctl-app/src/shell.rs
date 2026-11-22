@@ -39,6 +39,10 @@ pub fn set_dock_visible(visible: bool) {
 }
 
 /// Install standard application menus (most visible in the macOS top menu bar).
+///
+/// On Windows the gpui backend stores these but never renders them, so this is
+/// effectively macOS-only. Nothing here is *reachable only* through the menu:
+/// every action also has a key binding, an in-window control, or a tray row.
 pub fn install_app_menus(cx: &mut App) {
     cx.set_menus(vec![
         Menu {
@@ -117,8 +121,6 @@ pub fn install_app_menus(cx: &mut App) {
                         tab: NavTab::Settings,
                     },
                 ),
-                MenuItem::separator(),
-                MenuItem::action("Close Window", CloseWindow),
             ],
             disabled: false,
         },
