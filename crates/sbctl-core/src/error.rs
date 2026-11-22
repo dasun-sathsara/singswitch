@@ -191,6 +191,12 @@ impl SbctlError {
     /// Names the fields rather than the old "replace TODO_ markers", which told
     /// the user nothing they could act on.
     pub fn profile_incomplete(name: &str, missing: &[crate::readiness::Field]) -> Self {
+        if missing.is_empty() {
+            // Not "needs  before it can connect": an empty list here means the
+            // file never parsed, which is a different problem with a different fix.
+            return Self::validation(format!("{name} is not a readable sing-box config"))
+                .with_hint("validate it with: sing-box check -c <path>");
+        }
         let labels = crate::readiness::join_labels(missing);
         Self::validation(format!("{name} needs {labels} before it can connect"))
     }

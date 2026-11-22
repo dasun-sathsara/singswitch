@@ -33,6 +33,15 @@ pub struct ProfileFormModel {
     pub tun_strict_route: bool,
     pub reject_ipv6: bool,
     pub log_level: String,
+    /// Whether the source document contained an outbound this form manages.
+    ///
+    /// Without one (an endpoints-only config, or `direct` only), the form's
+    /// defaults describe nothing real: reporting their fields as missing
+    /// demanded values the file never had, and `apply_to_value` cannot write
+    /// them, so a valid config could never be saved.
+    pub has_managed_outbound: bool,
+    /// `tls.disable_sni` waives the server-name requirement.
+    pub disable_sni: bool,
 }
 
 impl Default for ProfileFormModel {
@@ -59,6 +68,8 @@ impl Default for ProfileFormModel {
             tun_strict_route: true,
             reject_ipv6: true,
             log_level: "info".to_string(),
+            has_managed_outbound: false,
+            disable_sni: false,
         }
     }
 }
@@ -83,7 +94,15 @@ impl ProfileFormModel {
             "type" | "outbound_type" => self.outbound_type = value.trim().to_string(),
             "tag" | "outbound_tag" => self.outbound_tag = value.trim().to_string(),
             "server" => self.server = value.trim().to_string(),
-            "port" | "server_port" => self.server_port = parse_u32(value)? as u16,
+            // Checked, not `as`: 70000 used to be written back as 4464.
+            "port" | "server_port" => {
+                let port = parse_u32(value)?;
+                self.server_port = u16::try_from(port).map_err(|_| {
+                    crate::error::SbctlError::validation(format!(
+                        "port must be between 0 and 65535, got {port}"
+                    ))
+                })?;
+            }
             "uuid" => self.uuid = value.trim().to_string(),
             "password" => self.password = value.to_string(),
             "flow" => self.flow = value.trim().to_string(),
@@ -129,6 +148,12 @@ impl ProfileFormModel {
     pub fn missing(&self) -> Vec<crate::readiness::Field> {
         use crate::readiness::{Field, is_set, required, required_tls};
 
+        // Nothing managed: nothing to fill in. `sing-box check` still decides
+        // whether the file is usable.
+        if !self.has_managed_outbound {
+            return Vec::new();
+        }
+
         let mut missing = Vec::new();
         for field in required(&self.outbound_type) {
             let filled = match field {
@@ -141,7 +166,12 @@ impl ProfileFormModel {
                 missing.push(field);
             }
         }
-        for field in required_tls(self.tls_enabled, self.reality_enabled) {
+        let tls_fields = required_tls(self.tls_enabled, self.reality_enabled);
+        for field in tls_fields {
+            // A config that turns SNI off does not need a name for it.
+            if field == Field::ServerName && self.disable_sni {
+                continue;
+            }
             let filled = match field {
                 Field::ServerName => is_set(&self.server_name),
                 Field::RealityPublicKey => is_set(&self.reality_public_key),
@@ -187,6 +217,12 @@ impl ProfileFormModel {
         }
 
         if let Some(out) = find_primary_outbound(root) {
+            model.has_managed_outbound = true;
+            model.disable_sni = out
+                .get("tls")
+                .and_then(|t| t.get("disable_sni"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let kind = str_field(out, "type");
             if !kind.is_empty() {
                 model.outbound_type = kind;
@@ -265,6 +301,21 @@ impl ProfileFormModel {
         model
     }
 
+    /// Apply changes onto an existing JSON string, reporting any section the
+    /// config has no place for.
+    ///
+    /// A `--set` that silently writes nothing still rewrites and saves the file,
+    /// which reads as success to a script. Callers surface the skipped list.
+    pub fn apply_to_json_str_reporting(&self, raw: &str) -> Result<(String, Vec<&'static str>)> {
+        let mut root: Value = serde_json::from_str(raw)
+            .map_err(|e| SbctlError::validation(format!("invalid JSON: {e}")))?;
+        let skipped = self.apply_to_value(&mut root);
+        let text = serde_json::to_string_pretty(&root)
+            .map(|s| format!("{s}\n"))
+            .map_err(|e| SbctlError::general(format!("could not serialize JSON: {e}")))?;
+        Ok((text, skipped))
+    }
+
     /// Apply changes onto an existing JSON string without discarding unrelated fields.
     pub fn apply_to_json_str(&self, raw: &str) -> Result<String> {
         let mut root: Value = serde_json::from_str(raw)
@@ -285,7 +336,11 @@ impl ProfileFormModel {
         let Some(root_obj) = root.as_object_mut() else {
             return vec!["the config is not a JSON object"];
         };
-        self.apply_log_section(root_obj);
+        // Only write into sections that exist, so a single-field edit does not
+        // add unrelated config the document never had.
+        if root_obj.contains_key("log") {
+            self.apply_log_section(root_obj);
+        }
         if !self.apply_tun_section(root_obj) {
             skipped.push("Tunnel");
         }
@@ -299,8 +354,9 @@ impl ProfileFormModel {
     }
 
     fn apply_log_section(&self, root_obj: &mut Map<String, Value>) {
-        let log_obj = ensure_object(root_obj, "log");
-        log_obj.insert("level".to_string(), Value::String(self.log_level.clone()));
+        if let Some(log_obj) = root_obj.get_mut("log").and_then(Value::as_object_mut) {
+            log_obj.insert("level".to_string(), Value::String(self.log_level.clone()));
+        }
     }
 
     fn apply_tun_section(&self, root_obj: &mut Map<String, Value>) -> bool {
@@ -330,7 +386,10 @@ impl ProfileFormModel {
             "type".to_string(),
             Value::String(self.outbound_type.clone()),
         );
-        if !self.outbound_tag.is_empty() {
+        // Do not give an untagged outbound a tag: it would inherit the form's
+        // default and could collide with an existing one, turning an unrelated
+        // edit into a duplicate-tag rejection.
+        if out.contains_key("tag") && !self.outbound_tag.is_empty() {
             out.insert("tag".to_string(), Value::String(self.outbound_tag.clone()));
         }
         out.insert("server".to_string(), Value::String(self.server.clone()));
@@ -347,6 +406,12 @@ impl ProfileFormModel {
         if !self.tls_enabled {
             if let Some(tls) = out.get_mut("tls").and_then(Value::as_object_mut) {
                 tls.insert("enabled".to_string(), Value::Bool(false));
+                // Reality is a TLS extension: leaving `reality.enabled` true
+                // under a disabled TLS asked for public_key/short_id that no
+                // command could turn off, so the profile could never be saved.
+                if let Some(reality) = tls.get_mut("reality").and_then(Value::as_object_mut) {
+                    reality.insert("enabled".to_string(), Value::Bool(false));
+                }
             }
             return;
         }
@@ -540,6 +605,74 @@ mod tests {
                 field.key()
             );
         }
+    }
+
+    #[test]
+    fn a_config_with_no_managed_outbound_needs_nothing() {
+        // These used to inherit the form's vless/TLS/Reality defaults and report
+        // five missing fields that `apply_to_value` cannot write, so a valid
+        // sing-box config could never be saved.
+        for doc in [
+            r#"{"outbounds":[{"type":"direct","tag":"d"}]}"#,
+            r#"{"endpoints":[{"type":"tailscale","tag":"ts"}],"outbounds":[{"type":"direct"}]}"#,
+        ] {
+            let model = ProfileFormModel::from_json_str(doc).expect("parse");
+            assert!(
+                model.missing().is_empty(),
+                "{doc} reported {:?}",
+                model.missing()
+            );
+        }
+    }
+
+    #[test]
+    fn disable_sni_waives_the_server_name() {
+        let doc = r#"{"outbounds":[{"type":"vless","tag":"p","server":"1.2.3.4","uuid":"u","tls":{"enabled":true,"disable_sni":true}}]}"#;
+        let model = ProfileFormModel::from_json_str(doc).expect("parse");
+        assert!(model.missing().is_empty(), "{:?}", model.missing());
+    }
+
+    #[test]
+    fn turning_tls_off_also_turns_reality_off() {
+        // Reality under a disabled TLS still demanded public_key and short_id,
+        // which no key could clear, so the profile was stuck unready.
+        let doc = r#"{"outbounds":[{"type":"vless","tag":"p","server":"1.2.3.4","uuid":"u","tls":{"enabled":true,"reality":{"enabled":true,"public_key":"","short_id":""}}}]}"#;
+        let mut model = ProfileFormModel::from_json_str(doc).expect("parse");
+        model.set_field("tls", "false").expect("tls");
+        let (out, _) = model.apply_to_json_str_reporting(doc).expect("apply");
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            parsed["outbounds"][0]["tls"]["reality"]["enabled"], false,
+            "reality stayed enabled: {out}"
+        );
+        assert!(
+            ProfileFormModel::from_json_str(&out)
+                .unwrap()
+                .missing()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn port_is_range_checked_not_truncated() {
+        let mut model = ProfileFormModel::default();
+        assert!(model.set_field("port", "70000").is_err());
+        assert!(model.set_field("port", "65536").is_err());
+        assert_eq!(model.server_port, DEFAULT_SERVER_PORT);
+        assert!(model.set_field("port", "443").is_ok());
+        assert_eq!(model.server_port, 443);
+    }
+
+    #[test]
+    fn a_field_with_nowhere_to_go_is_reported_not_dropped() {
+        // `--set tun_mtu` on a config with no tunnel used to write nothing and
+        // still save the file, which reads as success to a script.
+        let doc = r#"{"outbounds":[{"type":"vless","tag":"p","server":"1.2.3.4","uuid":"u"}]}"#;
+        let mut model = ProfileFormModel::from_json_str(doc).expect("parse");
+        model.set_field("tun_mtu", "1400").expect("mtu");
+        let (out, skipped) = model.apply_to_json_str_reporting(doc).expect("apply");
+        assert!(skipped.contains(&"Tunnel"), "skipped: {skipped:?}");
+        assert!(!out.contains("1400"));
     }
 
     #[test]

@@ -304,6 +304,7 @@ fn cmd_list(cli: &Cli, ctrl: &Controller, theme: &Theme) -> sbctl_core::error::R
                     "name": p.name,
                     "active": snap.active.as_deref() == Some(p.name.as_str()) && snap.running,
                     "configured": snap.active.as_deref() == Some(p.name.as_str()),
+                    "ready": p.ready(),
                     "missing": field_keys(&p.missing),
                     "server": p.server,
                     "tun": p.tun,
@@ -450,7 +451,7 @@ fn cmd_logs(
         // a complete document. A single header plus raw lines would be
         // unparseable.
         for line in &initial {
-            emit_json(&json!({ "line": line }))?;
+            emit_json_line(&json!({ "line": line }))?;
         }
     } else {
         for line in &initial {
@@ -463,11 +464,21 @@ fn cmd_logs(
 
     loop {
         std::thread::sleep(Duration::from_millis(350));
-        let (appended, new_offset, _) = read_appended_lines(path, offset)?;
+        let (appended, new_offset, jumped) = read_appended_lines(path, offset)?;
         offset = new_offset;
+        if jumped {
+            // The file was rotated or truncated, so lines were skipped between
+            // what was already printed and what follows. Say so instead of
+            // splicing two unrelated eras of the log silently.
+            if cli.json {
+                emit_json_line(&json!({ "gap": "log rotated or truncated" }))?;
+            } else {
+                eprintln!("-- log rotated or truncated; earlier lines were skipped --");
+            }
+        }
         for line in appended {
             if cli.json {
-                emit_json(&json!({ "line": line }))?;
+                emit_json_line(&json!({ "line": line }))?;
             } else {
                 println!("{line}");
             }
@@ -567,7 +578,17 @@ fn cmd_edit(
                 })?;
                 model.set_field(key.trim(), value)?;
             }
-            content = model.apply_to_json_str(&content)?;
+            let (applied, skipped) = model.apply_to_json_str_reporting(&content)?;
+            content = applied;
+            if !skipped.is_empty() {
+                // Exit non-zero: the caller asked for a change that this config
+                // has nowhere to put, so claiming success would be a lie.
+                return Err(SbctlError::validation(format!(
+                    "{name} has no {} section, so those values were not written",
+                    skipped.join(" or ")
+                ))
+                .with_hint("edit the JSON directly with: sbctl edit --from -"));
+            }
         }
         let reloaded = ctrl.save_profile(name, &content, false)?;
         if cli.json {
@@ -1007,14 +1028,29 @@ fn field_keys(fields: &[sbctl_core::readiness::Field]) -> Vec<&'static str> {
 }
 
 fn emit_json(val: &Value) -> sbctl_core::error::Result<()> {
+    emit_json_with(val, true)
+}
+
+/// Compact form for streams: one complete object per line, so a reader can parse
+/// each line independently. Pretty-printing a follow stream produced multi-line
+/// objects that no line-oriented parser could read.
+fn emit_json_line(val: &Value) -> sbctl_core::error::Result<()> {
+    emit_json_with(val, false)
+}
+
+fn emit_json_with(val: &Value, pretty: bool) -> sbctl_core::error::Result<()> {
     let mut obj = match val {
         Value::Object(map) => map.clone(),
         _ => serde_json::Map::new(),
     };
     obj.insert("schema".into(), json!(SCHEMA_VERSION));
-    let pretty = serde_json::to_string_pretty(&Value::Object(obj))
-        .map_err(|e| SbctlError::general(e.to_string()))?;
-    println!("{pretty}");
+    let body = if pretty {
+        serde_json::to_string_pretty(&Value::Object(obj))
+    } else {
+        serde_json::to_string(&Value::Object(obj))
+    }
+    .map_err(|e| SbctlError::general(e.to_string()))?;
+    println!("{body}");
     Ok(())
 }
 
