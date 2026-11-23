@@ -1,3 +1,4 @@
+use crate::fonts;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -5,9 +6,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{
-    ActiveTheme as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription, Window,
@@ -252,7 +251,7 @@ impl ProfilesView {
                     .gap(px(10.0))
                     .rounded(px(14.0))
                     .bg(crate::theme::surface(cx))
-                    .child(div().text_size(px(22.0)).font_bold().child("Add your first profile"))
+                    .child(div().text_size(px(22.0)).font_weight(fonts::EMPHASIS).child("Add your first profile"))
                     .child(
                         div()
                             .text_sm()
@@ -363,7 +362,13 @@ impl ProfilesView {
                     .gap(px(6.0))
                     .items_center()
                     .child(div().size(px(7.0)).flex_none().rounded_full().bg(tone))
-                    .child(div().text_sm().flex_none().font_bold().child(label))
+                    .child(
+                        div()
+                            .text_sm()
+                            .flex_none()
+                            .font_weight(fonts::EMPHASIS)
+                            .child(label),
+                    )
                     .when_some(activity, |row, text| {
                         row.child(
                             div()
@@ -683,7 +688,7 @@ impl ProfilesView {
                                 .w_full()
                                 .min_w(px(0.0))
                                 .truncate()
-                                .font_bold()
+                                .font_weight(fonts::EMPHASIS)
                                 .child(profile.name.clone()),
                         )
                         .on_click(cx.listener(move |view, _, _, cx| {

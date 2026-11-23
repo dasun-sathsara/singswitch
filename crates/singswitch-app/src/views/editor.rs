@@ -19,6 +19,7 @@ use singswitch_core::form_model::{DEFAULT_SERVER_PORT, DEFAULT_TUN_MTU, ProfileF
 use std::rc::Rc;
 
 use crate::actions::BackToConnections;
+use crate::fonts;
 use crate::state::{AppStore, BannerTone, EditorValidationState, NoticeOrigin};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -702,7 +703,13 @@ impl ProfileEditorPanel {
                                 cx.dispatch_action(&BackToConnections);
                             })),
                     )
-                    .child(div().text_base().font_bold().truncate().child(name)),
+                    .child(
+                        div()
+                            .text_base()
+                            .font_weight(fonts::EMPHASIS)
+                            .truncate()
+                            .child(name),
+                    ),
             )
             .child(
                 h_flex().gap(px(8.0)).items_center().child(
@@ -1064,7 +1071,7 @@ impl Render for ProfileEditorPanel {
                 .child(
                     div()
                         .text_sm()
-                        .font_bold()
+                        .font_weight(fonts::EMPHASIS)
                         .text_color(cx.theme().foreground)
                         .child("Select or create a profile."),
                 )
@@ -1080,7 +1087,7 @@ impl Render for ProfileEditorPanel {
                 .child(
                     div()
                         .text_base()
-                        .font_bold()
+                        .font_weight(fonts::EMPHASIS)
                         .child(format!("Cannot read {profile_name}")),
                 )
                 .child(
@@ -1245,7 +1252,7 @@ fn render_missing_strip(
         .child(
             div()
                 .text_xs()
-                .font_bold()
+                .font_weight(fonts::EMPHASIS)
                 .text_color(cx.theme().warning)
                 .child("Still needed:"),
         )
@@ -1264,7 +1271,7 @@ fn form_section(title: &'static str, cx: &App) -> gpui_kit::Div {
         .gap_2()
         .rounded(px(12.0))
         .bg(crate::theme::surface(cx))
-        .child(div().text_base().font_bold().child(title))
+        .child(div().text_base().font_weight(fonts::EMPHASIS).child(title))
 }
 
 fn labeled_input(label: &'static str, state: &Entity<InputState>, cx: &App) -> gpui_kit::Div {

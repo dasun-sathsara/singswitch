@@ -8,8 +8,7 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{
-    ActiveTheme as _, Sizable as _, StyledExt as _, VirtualListScrollHandle, h_flex, v_flex,
-    v_virtual_list,
+    ActiveTheme as _, Sizable as _, VirtualListScrollHandle, h_flex, v_flex, v_virtual_list,
 };
 use gpui_kit::{
     AppContext as _, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement,
@@ -19,6 +18,7 @@ use gpui_kit::{
 };
 use singswitch_core::logs::{LogLevel, contains_ignore_ascii_case};
 
+use crate::fonts;
 use crate::state::{AppStore, BannerTone, LogSeverityFilter, LogStreamKind, NoticeOrigin};
 use crate::theme::subtle_pill_bg;
 
@@ -479,7 +479,7 @@ impl Render for LogsView {
                             .flex_1()
                             .min_w(px(0.0))
                             .gap(px(4.0))
-                            .child(div().text_size(px(19.0)).font_bold().child("Logs"))
+                            .child(div().text_size(px(19.0)).font_weight(fonts::EMPHASIS).child("Logs"))
                             .child(
                                 div()
                                     .font_family(crate::fonts::mono_family())
@@ -703,7 +703,7 @@ fn render_log_rows(
                             .flex_none()
                             .font_family(mono.clone())
                             .text_size(px(12.0))
-                            .font_bold()
+                            .font_weight(fonts::EMPHASIS)
                             .text_color(lvl_color)
                             .child(lvl_text),
                     )
