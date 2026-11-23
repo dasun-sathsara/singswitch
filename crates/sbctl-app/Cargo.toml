@@ -30,6 +30,7 @@ objc2-app-kit = { workspace = true, features = [
     "NSApplication",
     "NSRunningApplication",
     "NSWindow",
+    "NSWorkspace",
 ] }
 objc2-foundation = { workspace = true, features = [
     "NSArray",
