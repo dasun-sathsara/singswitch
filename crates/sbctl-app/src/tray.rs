@@ -15,19 +15,19 @@ struct TrayIcons {
 }
 
 /// Build one state without taking down the tray if its image cannot be loaded.
-fn fallback_icon(state: TrayVisualState, fallback: &Icon) -> Icon {
-    build_tray_icon(state).unwrap_or_else(|err| {
+fn fallback_icon(state: TrayVisualState, fallback: &Icon, cx: &App) -> Icon {
+    build_tray_icon(state, cx).unwrap_or_else(|err| {
         crate::diag::log(&format!("tray icon unavailable for {state:?}: {err}"));
         fallback.clone()
     })
 }
 
 impl TrayIcons {
-    fn build_all() -> gpui_tray::Result<Self> {
-        let disconnected = build_tray_icon(TrayVisualState::Disconnected)?;
-        let connected = fallback_icon(TrayVisualState::Connected, &disconnected);
-        let transitioning = fallback_icon(TrayVisualState::Transitioning, &disconnected);
-        let broken = fallback_icon(TrayVisualState::Broken, &disconnected);
+    fn build_all(cx: &App) -> gpui_tray::Result<Self> {
+        let disconnected = build_tray_icon(TrayVisualState::Disconnected, cx)?;
+        let connected = fallback_icon(TrayVisualState::Connected, &disconnected, cx);
+        let transitioning = fallback_icon(TrayVisualState::Transitioning, &disconnected, cx);
+        let broken = fallback_icon(TrayVisualState::Broken, &disconnected, cx);
         Ok(Self {
             connected,
             disconnected,
@@ -87,7 +87,7 @@ pub struct TrayController {
 
 impl TrayController {
     pub fn install(store: &Entity<AppStore>, cx: &mut App) -> gpui_tray::Result<Self> {
-        let icons = TrayIcons::build_all()?;
+        let icons = TrayIcons::build_all(cx)?;
         let (initial_visual, initial_tooltip, initial_fp) = {
             let s = store.read(cx);
             (
@@ -106,9 +106,15 @@ impl TrayController {
             .build(cx)?;
 
         #[cfg(target_os = "macos")]
-        let mut orbit = Orbit::default();
+        let mut spin = GlobeSpin::default();
         #[cfg(target_os = "macos")]
-        orbit.update(initial_visual, store.read(cx).is_probing(), &tray, cx);
+        spin.update(
+            initial_visual,
+            store.read(cx).is_probing(),
+            &tray,
+            &icons.transitioning,
+            cx,
+        );
 
         let tray_for_obs = tray.clone();
         let mut prev_visual = initial_visual;
@@ -124,7 +130,7 @@ impl TrayController {
             let fp = MenuFingerprint::from_store(s);
 
             #[cfg(target_os = "macos")]
-            orbit.update(visual, probing, &tray_for_obs, cx);
+            spin.update(visual, probing, &tray_for_obs, &icons.transitioning, cx);
 
             if visual != prev_visual {
                 let _ = tray_for_obs.set_icon(icons.get(visual), cx);
@@ -161,14 +167,21 @@ fn display_visual(store: &AppStore) -> TrayVisualState {
 
 #[cfg(target_os = "macos")]
 #[derive(Default)]
-struct Orbit {
+struct GlobeSpin {
     frames: Option<std::rc::Rc<[Icon]>>,
     task: Option<gpui_kit::Task<()>>,
 }
 
 #[cfg(target_os = "macos")]
-impl Orbit {
-    fn update(&mut self, visual: TrayVisualState, probing: bool, tray: &Tray, cx: &mut App) {
+impl GlobeSpin {
+    fn update(
+        &mut self,
+        visual: TrayVisualState,
+        probing: bool,
+        tray: &Tray,
+        resting: &Icon,
+        cx: &mut App,
+    ) {
         if visual != TrayVisualState::Transitioning || probing {
             self.task = None;
             return;
@@ -177,10 +190,12 @@ impl Orbit {
             return;
         }
         if self.frames.is_none() {
-            self.frames = Some(match crate::icons::build_orbit_frames() {
+            self.frames = Some(match crate::icons::build_spin_frames(cx) {
                 Ok(frames) => frames.into(),
                 Err(err) => {
-                    crate::diag::log(&format!("tray: could not build orbit frames: {err}"));
+                    crate::diag::log(&format!(
+                        "tray: could not build globe animation frames: {err}"
+                    ));
                     Vec::new().into()
                 }
             });
@@ -194,14 +209,15 @@ impl Orbit {
             return;
         };
         let tray = tray.clone();
+        let resting = resting.clone();
         self.task = Some(cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
-            // 36 frames at 110 ms is just under four seconds per orbit.
+            // A meridian sweeps across the globe in about three seconds.
             for frame in frames.iter().cycle().skip(1) {
                 cx.background_executor()
-                    .timer(std::time::Duration::from_millis(110))
+                    .timer(std::time::Duration::from_millis(80))
                     .await;
                 let reduce = reduce_motion();
-                let icon = if reduce { &frames[0] } else { frame };
+                let icon = if reduce { &resting } else { frame };
                 if cx.update(|cx| tray.set_icon(icon.clone(), cx)).is_err() || reduce {
                     break;
                 }
