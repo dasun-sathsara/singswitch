@@ -3,8 +3,9 @@ pub mod logs;
 pub mod profiles;
 pub mod settings;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, IconName, Sizable as _, TitleBar, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, TitleBar, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
@@ -115,9 +116,9 @@ impl WorkspaceShell {
         let (errors, _) = s.log_counts();
         let selected = s.selected_tab;
         let tabs = [
-            ("Connections", NavTab::Profiles),
-            ("Logs", NavTab::Logs),
-            ("Settings", NavTab::Settings),
+            ("Connections", NavTab::Profiles, IconName::Waypoints),
+            ("Logs", NavTab::Logs, IconName::ScrollText),
+            ("Settings", NavTab::Settings, IconName::Settings),
         ];
 
         h_flex()
@@ -126,7 +127,7 @@ impl WorkspaceShell {
             .h_full()
             .pr(px(12.0))
             .gap(px(4.0))
-            .children(tabs.into_iter().map(|(label, tab)| {
+            .children(tabs.into_iter().map(|(label, tab, icon)| {
                 let store = self.store.clone();
                 let label = if tab == NavTab::Logs && errors > 0 {
                     format!("Logs ({errors})")
@@ -138,6 +139,7 @@ impl WorkspaceShell {
                     .when(selected != tab, |button| button.ghost())
                     .toggled(selected == tab)
                     .small()
+                    .icon(icon)
                     .label(label)
                     .on_click(move |_, _, cx| {
                         store.update(cx, |s, cx| s.set_tab(tab, cx));

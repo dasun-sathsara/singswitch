@@ -1,10 +1,9 @@
+use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{
-    ActiveTheme as _, IconName, Sizable as _, StyledExt as _, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     ClipboardItem, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
     Styled as _, Window, div, prelude::FluentBuilder as _, px,
@@ -107,7 +106,7 @@ fn render_appearance_card(
                         .child(theme_button(
                             "theme-system",
                             "System",
-                            None,
+                            Some(IconName::Monitor),
                             ThemePreference::System,
                             current,
                             store,
@@ -277,11 +276,21 @@ fn render_paths_card(
         .rounded(cx.theme().radius_lg)
         .bg(surface(cx))
         .child(
-            div()
-                .text_base()
-                .font_bold()
-                .text_color(cx.theme().foreground)
-                .child("System paths"),
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    Icon::new(IconName::FolderCog)
+                        .small()
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .child(
+                    div()
+                        .text_base()
+                        .font_bold()
+                        .text_color(cx.theme().foreground)
+                        .child("System paths"),
+                ),
         )
         .children(paths.into_iter().enumerate().map(|(ix, (label, value))| {
             let val_copy = value.clone();
