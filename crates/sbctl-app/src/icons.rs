@@ -45,8 +45,8 @@ fn coverage(distance: f32, pixel: f32) -> f32 {
     (0.5 - distance / pixel).clamp(0.0, 1.0)
 }
 
-/// A globe with a bottom-right status badge. All states and all animation
-/// frames use the same canvas, so swapping images cannot resize the tray item.
+/// A globe with a slash when off and a badge in other states. All states and
+/// animation frames use the same canvas to keep the tray item the same size.
 fn globe_rgba(size: u32, state: TrayVisualState, angle: f32, template: bool) -> Vec<u8> {
     let pixel = 1.0 / size as f32;
     let badge = Badge::for_state(state, angle);
@@ -64,19 +64,28 @@ fn globe_rgba(size: u32, state: TrayVisualState, angle: f32, template: bool) -> 
             let equator = (dy.abs() - 0.029).max(distance - 0.337);
             let mut globe = coverage(rim.min(longitude).min(equator), pixel);
 
-            let mut mark = 0.0;
-            if let Some(badge) = badge {
+            let mark = if let Some(badge) = badge {
                 let bx = x - badge.x;
                 let by = y - badge.y;
                 let distance = bx.hypot(by);
                 globe *= 1.0 - coverage(distance - badge.radius - 0.035, pixel);
-                mark = coverage(distance - badge.radius, pixel);
+                let mark = coverage(distance - badge.radius, pixel);
                 if badge.alert {
                     let stem = bx.hypot(by.clamp(-0.065, 0.012) - by) - 0.023;
                     let dot = bx.hypot(by - 0.054) - 0.025;
-                    mark *= 1.0 - coverage(stem.min(dot), pixel);
+                    mark * (1.0 - coverage(stem.min(dot), pixel))
+                } else {
+                    mark
                 }
-            }
+            } else {
+                // Clear a narrow gap around the slash so it stays readable
+                // where it crosses the globe's meridians and rim.
+                let across = (dx - dy) * std::f32::consts::FRAC_1_SQRT_2;
+                let along = (dx + dy) * std::f32::consts::FRAC_1_SQRT_2;
+                let slash = across.hypot((along.abs() - 0.425).max(0.0)) - 0.040;
+                globe *= 1.0 - coverage(slash - 0.040, pixel);
+                coverage(slash, pixel)
+            };
 
             let glyph_alpha = mark + globe * (1.0 - mark);
             if template {
