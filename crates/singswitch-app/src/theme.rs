@@ -6,10 +6,10 @@ use gpui_kit::{App, Window, WindowAppearance, rgb};
 use serde::{Deserialize, Serialize};
 use singswitch_core::error::{Result, SingSwitchError};
 
-pub const MIN_WINDOW_WIDTH: f32 = 820.0;
-pub const MIN_WINDOW_HEIGHT: f32 = 540.0;
-pub const DEFAULT_WINDOW_WIDTH: f32 = 1020.0;
-pub const DEFAULT_WINDOW_HEIGHT: f32 = 680.0;
+pub const MIN_WINDOW_WIDTH: f32 = 760.0;
+pub const MIN_WINDOW_HEIGHT: f32 = 500.0;
+pub const DEFAULT_WINDOW_WIDTH: f32 = 840.0;
+pub const DEFAULT_WINDOW_HEIGHT: f32 = 600.0;
 pub const WINDOW_SIZE_EPSILON: f32 = 2.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,75 +105,76 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
 
     Theme::change(mode, window, cx);
     Theme::update(cx, |theme| {
-        theme.radius = gpui_kit::px(7.0);
+        theme.focus_ring = false;
+        theme.radius = gpui_kit::px(6.0);
         theme.radius_lg = gpui_kit::px(10.0);
-        theme.font_size = gpui_kit::px(15.0);
+        theme.font_size = gpui_kit::px(14.0);
         theme.font_family = crate::fonts::ui_family();
         theme.mono_font_family = crate::fonts::mono_family();
         if theme.mode.is_dark() {
-            theme.background = rgb(0x151722).into();
-            theme.foreground = rgb(0xF1EFFA).into();
-            theme.muted = rgb(0x2A2C3C).into();
-            theme.muted_foreground = rgb(0xB5B5CC).into();
-            theme.border = rgb(0x35374B).into();
-            theme.input = rgb(0x72748B).into();
-            theme.secondary = rgb(0x36304F).into();
-            theme.secondary_foreground = rgb(0xF1EAFF).into();
-            theme.secondary_hover = rgb(0x443C65).into();
-            theme.secondary_active = rgb(0x504570).into();
-            theme.warning_foreground = rgb(0x1D1428).into();
-            theme.popover = rgb(0x222432).into();
-            theme.popover_foreground = rgb(0xF1EFFA).into();
-            theme.title_bar = rgb(0x1C1D2A).into();
-            theme.title_bar_border = rgb(0x35374B).into();
-            theme.accent = rgb(0x393451).into();
-            theme.accent_foreground = rgb(0xF1EAFF).into();
-            theme.primary = rgb(0xBCA9FF).into();
-            theme.primary_hover = rgb(0xCEBFFF).into();
-            theme.primary_active = rgb(0xAB94FC).into();
-            theme.primary_foreground = rgb(0x201634).into();
-            theme.success = rgb(0x7BDCB2).into();
-            theme.warning = rgb(0xEFC57D).into();
-            theme.danger = rgb(0xFF959E).into();
-            theme.button_danger = rgb(0x60293B).into();
-            theme.button_danger_hover = rgb(0x713248).into();
-            theme.button_danger_active = rgb(0x803950).into();
-            theme.button_danger_foreground = rgb(0xFFB7C0).into();
-            theme.ring = rgb(0xBCA9FF).into();
-            theme.selection = rgb(0x483963).into();
-            theme.caret = rgb(0xBCA9FF).into();
+            theme.background = rgb(0x0B0C10).into();
+            theme.foreground = rgb(0xF8FAFC).into();
+            theme.muted = rgb(0x171922).into();
+            theme.muted_foreground = rgb(0x94A3B8).into();
+            theme.border = rgb(0x272B38).into();
+            theme.input = rgb(0x2E3344).into();
+            theme.secondary = rgb(0x1A1C24).into();
+            theme.secondary_foreground = rgb(0xF1F5F9).into();
+            theme.secondary_hover = rgb(0x242834).into();
+            theme.secondary_active = rgb(0x2E3240).into();
+            theme.warning_foreground = rgb(0x0B0C10).into();
+            theme.popover = rgb(0x13151B).into();
+            theme.popover_foreground = rgb(0xF8FAFC).into();
+            theme.title_bar = rgb(0x0E0F14).into();
+            theme.title_bar_border = rgb(0x222530).into();
+            theme.accent = rgb(0x1E222D).into();
+            theme.accent_foreground = rgb(0xF8FAFC).into();
+            theme.primary = rgb(0xF8FAFC).into();
+            theme.primary_hover = rgb(0xE2E8F0).into();
+            theme.primary_active = rgb(0xCBD5E1).into();
+            theme.primary_foreground = rgb(0x0B0C10).into();
+            theme.success = rgb(0x10B981).into();
+            theme.warning = rgb(0xF59E0B).into();
+            theme.danger = rgb(0xF43F5E).into();
+            theme.button_danger = rgb(0x4C121E).into();
+            theme.button_danger_hover = rgb(0x601828).into();
+            theme.button_danger_active = rgb(0x731E31).into();
+            theme.button_danger_foreground = rgb(0xFECDD3).into();
+            theme.ring = rgb(0x3B82F6).into();
+            theme.selection = rgb(0x1E293B).into();
+            theme.caret = rgb(0x60A5FA).into();
         } else {
-            theme.background = rgb(0xF2F2F8).into();
-            theme.foreground = rgb(0x222039).into();
-            theme.muted = rgb(0xEBEAF3).into();
-            theme.muted_foreground = rgb(0x5F5D76).into();
-            theme.border = rgb(0xDFDDEA).into();
-            theme.input = rgb(0x8884A1).into();
-            theme.secondary = rgb(0xE8E3F7).into();
-            theme.secondary_foreground = rgb(0x432E74).into();
-            theme.secondary_hover = rgb(0xE0D8F4).into();
-            theme.secondary_active = rgb(0xDAD0F1).into();
+            theme.background = rgb(0xF8FAFC).into();
+            theme.foreground = rgb(0x0F172A).into();
+            theme.muted = rgb(0xF1F5F9).into();
+            theme.muted_foreground = rgb(0x64748B).into();
+            theme.border = rgb(0xE2E8F0).into();
+            theme.input = rgb(0xCBD5E1).into();
+            theme.secondary = rgb(0xF1F5F9).into();
+            theme.secondary_foreground = rgb(0x0F172A).into();
+            theme.secondary_hover = rgb(0xE2E8F0).into();
+            theme.secondary_active = rgb(0xCBD5E1).into();
             theme.warning_foreground = rgb(0xFFFFFF).into();
             theme.popover = rgb(0xFFFFFF).into();
-            theme.popover_foreground = rgb(0x222039).into();
+            theme.popover_foreground = rgb(0x0F172A).into();
             theme.title_bar = rgb(0xFFFFFF).into();
-            theme.title_bar_border = rgb(0xDFDDEA).into();
-            theme.accent = rgb(0xE9E4F6).into();
-            theme.accent_foreground = rgb(0x372766).into();
-            theme.primary = rgb(0x6344B5).into();
-            theme.primary_hover = rgb(0x5536A3).into();
-            theme.primary_active = rgb(0x4A308F).into();
+            theme.title_bar_border = rgb(0xE2E8F0).into();
+            theme.accent = rgb(0xF1F5F9).into();
+            theme.accent_foreground = rgb(0x0F172A).into();
+            theme.primary = rgb(0x0F172A).into();
+            theme.primary_hover = rgb(0x1E293B).into();
+            theme.primary_active = rgb(0x334155).into();
             theme.primary_foreground = rgb(0xFFFFFF).into();
-            theme.success = rgb(0x126747).into();
-            theme.warning = rgb(0x875309).into();
-            theme.danger = rgb(0xA32C46).into();
-            theme.button_danger = rgb(0xFAE5E9).into();
-            theme.button_danger_hover = rgb(0xF5D6DD).into();
-            theme.button_danger_active = rgb(0xEFC6D0).into();
-            theme.button_danger_foreground = rgb(0x8D2440).into();
-            theme.ring = rgb(0x6344B5).into();
-            theme.selection = rgb(0xE0D7F8).into();
-            theme.caret = rgb(0x6344B5).into();
+            theme.success = rgb(0x059669).into();
+            theme.warning = rgb(0xB45309).into();
+            theme.danger = rgb(0xBE123C).into();
+            theme.button_danger = rgb(0xFFE4E6).into();
+            theme.button_danger_hover = rgb(0xFECDD3).into();
+            theme.button_danger_active = rgb(0xFDA4AF).into();
+            theme.button_danger_foreground = rgb(0xBE123C).into();
+            theme.ring = rgb(0x2563EB).into();
+            theme.selection = rgb(0xDBEAFE).into();
+            theme.caret = rgb(0x2563EB).into();
         }
     });
 }
@@ -181,16 +182,16 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
 /// Fill for cards and panels.
 pub fn surface(cx: &App) -> gpui_kit::Hsla {
     if cx.theme().is_dark() {
-        rgb(0x212332).into()
+        rgb(0x13151B).into()
     } else {
         rgb(0xFFFFFF).into()
     }
 }
 
-pub fn connection_surface(cx: &App, tone: gpui_kit::Hsla) -> gpui_kit::Hsla {
-    surface(cx).blend(tone.opacity(0.09))
-}
-
 pub fn subtle_pill_bg(cx: &App) -> gpui_kit::Hsla {
-    cx.theme().muted
+    if cx.theme().is_dark() {
+        rgb(0x1A1C24).into()
+    } else {
+        rgb(0xF1F5F9).into()
+    }
 }

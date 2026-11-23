@@ -139,11 +139,12 @@ pub struct AppStore {
     fallback_layout: Layout,
     pub log_revision: u64,
     pub disk_revision: u64,
+    pub editor_json_mode: bool,
     pub connected_since: Option<Instant>,
     /// Message from the last failed probe, cleared by the next success.
     snapshot_error: Option<String>,
     /// Whether any probe has answered, successfully or not.
-    probed_once: bool,
+    pub probed_once: bool,
     /// A selection chosen between a snapshot and its poll, which that poll must
     /// not overwrite. Holds the name and how many stale snapshots it may skip;
     /// bounded so a profile that never appears cannot freeze the selection.
@@ -278,6 +279,7 @@ impl AppStore {
             },
             log_revision: 0,
             disk_revision: 0,
+            editor_json_mode: false,
             // The constructor's snapshot is always the empty placeholder, so
             // there is no launch-time baseline to record. The first probe sets
             // both of these in `apply_snapshot`.

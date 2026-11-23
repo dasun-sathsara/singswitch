@@ -5,9 +5,9 @@ pub mod settings;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Sizable as _, TitleBar, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, TitleBar, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    AnyElement, AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
     Subscription, Window, div, prelude::FluentBuilder as _, px,
 };
@@ -122,29 +122,74 @@ impl WorkspaceShell {
         ];
 
         h_flex()
-            .w_full()
-            .flex_none()
+            .flex_1()
             .h_full()
+            .items_center()
             .pr(px(12.0))
-            .gap(px(4.0))
-            .children(tabs.into_iter().map(|(label, tab, icon)| {
-                let store = self.store.clone();
-                let label = if tab == NavTab::Logs && errors > 0 {
-                    format!("Logs ({errors})")
-                } else {
-                    label.to_owned()
-                };
-                Button::new(SharedString::from(format!("nav-{tab:?}")))
-                    .when(selected == tab, |button| button.secondary())
-                    .when(selected != tab, |button| button.ghost())
-                    .toggled(selected == tab)
-                    .small()
-                    .icon(icon)
-                    .label(label)
-                    .on_click(move |_, _, cx| {
-                        store.update(cx, |s, cx| s.set_tab(tab, cx));
-                    })
-            }))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(px(2.0))
+                    .p(px(2.5))
+                    .rounded(px(8.0))
+                    .bg(cx.theme().muted.opacity(0.6))
+                    .border_1()
+                    .border_color(cx.theme().border.opacity(0.5))
+                    .children(tabs.into_iter().map(|(label, tab, icon)| {
+                        let store = self.store.clone();
+                        let is_active = selected == tab;
+                        let has_errors = tab == NavTab::Logs && errors > 0;
+
+                        h_flex()
+                            .id(SharedString::from(format!("nav-{tab:?}")))
+                            .items_center()
+                            .gap(px(6.0))
+                            .px(px(10.0))
+                            .h(px(26.0))
+                            .rounded(px(6.0))
+                            .cursor_pointer()
+                            .bg(if is_active {
+                                cx.theme().background
+                            } else {
+                                gpui_kit::Hsla::transparent_black()
+                            })
+                            .when(is_active, |el| {
+                                el.border_1().border_color(cx.theme().border)
+                            })
+                            .when(!is_active, |el| {
+                                el.hover(|style| style.bg(cx.theme().secondary.opacity(0.7)))
+                            })
+                            .text_size(px(13.0))
+                            .font_weight(if is_active { fonts::EMPHASIS } else { FontWeight::NORMAL })
+                            .text_color(if is_active {
+                                cx.theme().foreground
+                            } else {
+                                cx.theme().muted_foreground
+                            })
+                            .child(Icon::new(icon).small().text_color(if is_active {
+                                cx.theme().foreground
+                            } else {
+                                cx.theme().muted_foreground
+                            }))
+                            .child(div().child(label))
+                            .when(has_errors, |btn| {
+                                btn.child(
+                                    div()
+                                        .px(px(5.0))
+                                        .py(px(1.0))
+                                        .rounded_full()
+                                        .bg(cx.theme().danger.opacity(0.18))
+                                        .text_size(px(11.0))
+                                        .font_weight(fonts::EMPHASIS)
+                                        .text_color(cx.theme().danger)
+                                        .child(errors.to_string()),
+                                )
+                            })
+                            .on_click(move |_, _, cx| {
+                                store.update(cx, |s, cx| s.set_tab(tab, cx));
+                            })
+                    })),
+            )
             .child(div().flex_1())
             .when(selected != NavTab::Profiles || s.editing, |nav| {
                 nav.child(connection_indicator(s, cx))
@@ -167,18 +212,24 @@ impl Render for WorkspaceShell {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .font_family(fonts::ui_family())
-            .text_size(px(15.0))
+            .text_size(px(14.0))
             .child(if cfg!(target_os = "macos") {
                 TitleBar::new().child(self.render_navigation(cx))
             } else {
-                TitleBar::new().child(div().text_sm().child("SingSwitch"))
-            })
-            .when(cfg!(target_os = "windows"), |shell| {
-                // Windows reserves the title bar for native caption hit testing.
-                shell.child(
-                    div()
-                        .h(px(34.0))
-                        .pl(px(12.0))
+                TitleBar::new().child(
+                    h_flex()
+                        .size_full()
+                        .items_center()
+                        .gap(px(12.0))
+                        .pl(px(14.0))
+                        .child(
+                            div()
+                                .font_weight(fonts::EMPHASIS)
+                                .text_sm()
+                                .text_color(cx.theme().foreground)
+                                .child("SingSwitch"),
+                        )
+                        .child(div().h(px(16.0)).w(px(1.0)).bg(cx.theme().border))
                         .child(self.render_navigation(cx)),
                 )
             })
@@ -198,7 +249,8 @@ impl Render for WorkspaceShell {
 
 fn connection_indicator(store: &AppStore, cx: &gpui_kit::App) -> impl IntoElement {
     let label = store.status_label();
-    let color = match store.tray_visual_state() {
+    let visual = store.tray_visual_state();
+    let color = match visual {
         TrayVisualState::Transitioning => cx.theme().warning,
         TrayVisualState::Broken => cx.theme().danger,
         TrayVisualState::Connected => cx.theme().success,
@@ -206,11 +258,22 @@ fn connection_indicator(store: &AppStore, cx: &gpui_kit::App) -> impl IntoElemen
     };
 
     h_flex()
-        .gap(px(8.0))
         .items_center()
-        .min_w(px(0.0))
-        .child(div().size(px(7.0)).flex_none().rounded_full().bg(color))
-        .child(div().text_sm().truncate().child(label))
+        .gap(px(6.0))
+        .px(px(8.0))
+        .h(px(26.0))
+        .rounded_full()
+        .bg(crate::theme::surface(cx))
+        .border_1()
+        .border_color(cx.theme().border)
+        .child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
+        .child(
+            div()
+                .text_size(px(12.0))
+                .font_weight(fonts::EMPHASIS)
+                .text_color(cx.theme().foreground)
+                .child(label),
+        )
         .when_some(
             store
                 .snapshot
@@ -220,9 +283,15 @@ fn connection_indicator(store: &AppStore, cx: &gpui_kit::App) -> impl IntoElemen
             |row, name| {
                 row.child(
                     div()
-                        .max_w(px(160.0))
+                        .text_size(px(12.0))
+                        .text_color(cx.theme().muted_foreground)
+                        .child("·"),
+                )
+                .child(
+                    div()
+                        .max_w(px(140.0))
                         .truncate()
-                        .text_sm()
+                        .text_size(px(12.0))
                         .text_color(cx.theme().muted_foreground)
                         .child(name.clone()),
                 )
@@ -238,22 +307,26 @@ pub fn notice_strip(
 ) -> Option<gpui_kit::AnyElement> {
     use gpui_kit::IntoElement as _;
     let notice = store.read(cx).notice_for(origin)?.clone();
-    let color = match notice.tone {
-        BannerTone::Error => cx.theme().danger,
-        BannerTone::Warning => cx.theme().warning,
-        BannerTone::Success => cx.theme().success,
-        BannerTone::Info => cx.theme().muted_foreground,
+    let (icon, color) = match notice.tone {
+        BannerTone::Error => (IconName::CircleX, cx.theme().danger),
+        BannerTone::Warning => (IconName::TriangleAlert, cx.theme().warning),
+        BannerTone::Success => (IconName::CircleCheck, cx.theme().success),
+        BannerTone::Info => (IconName::Info, cx.theme().info),
     };
     let store_dismiss = store.clone();
     Some(
         h_flex()
-            .gap(px(8.0))
+            .gap(px(10.0))
             .items_center()
             .w_full()
+            .min_h(px(36.0))
             .rounded(px(8.0))
             .px(px(12.0))
-            .py(px(4.0))
-            .bg(color.opacity(0.09))
+            .py(px(6.0))
+            .bg(color.opacity(0.08))
+            .border_1()
+            .border_color(color.opacity(0.28))
+            .child(Icon::new(icon).small().text_color(color).flex_none())
             .child(
                 div()
                     .id(SharedString::from(format!("notice-{origin:?}")))
@@ -261,8 +334,9 @@ pub fn notice_strip(
                     .min_w(px(0.0))
                     .max_h(px(62.0))
                     .overflow_y_scroll()
-                    .text_sm()
-                    .text_color(color)
+                    .text_xs()
+                    .font_weight(fonts::EMPHASIS)
+                    .text_color(cx.theme().foreground)
                     .child(notice.message),
             )
             .child(

@@ -1,0 +1,52 @@
+<!--
+  SingSwitch app icon.
+
+  Vocabulary deliberately matches the tray: the same Tabler globe as
+  assets/icons/tray/world.svg, so the menu bar glyph and the Dock icon read as
+  one product. The globe carries a swap arrow across it, which is the thing the
+  app does: move the tunnel to a different profile.
+
+  Body geometry follows the macOS Big Sur icon grid: an 824x824 rounded square
+  inside a 1024x1024 canvas, corner radius 185, leaving the standard margin.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2B3550"/>
+      <stop offset="1" stop-color="#161C2B"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3DDC97"/>
+      <stop offset="1" stop-color="#2BB57A"/>
+    </linearGradient>
+    <filter id="lift" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="14" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- Rounded-square body -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#body)"/>
+
+  <!-- Top inner highlight, the faint sheen macOS icons carry -->
+  <rect x="100" y="100" width="824" height="412" rx="185" fill="#FFFFFF" opacity="0.05"/>
+
+  <g filter="url(#lift)">
+    <!-- Globe: the tray glyph, scaled and centred -->
+    <g transform="translate(512 512) scale(19.5) translate(-12 -12)"
+       fill="none" stroke="#F2F5FA" stroke-width="1.55"
+       stroke-linecap="round" stroke-linejoin="round" opacity="0.96">
+      <path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0"/>
+      <path d="M3.6 9h16.8"/>
+      <path d="M3.6 15h16.8"/>
+      <path d="M11.5 3a17 17 0 0 0 0 18"/>
+      <path d="M12.5 3a17 17 0 0 1 0 18"/>
+    </g>
+
+    <!-- Swap arc: the switch action, in the accent colour -->
+    <g fill="none" stroke="url(#ring)" stroke-width="34"
+       stroke-linecap="round" stroke-linejoin="round">
+      <path d="M330 300 A 264 264 0 0 1 694 300"/>
+      <path d="M694 300 l 46 62 l -78 6"/>
+    </g>
+  </g>
+</svg>

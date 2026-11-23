@@ -8,7 +8,7 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{
-    ActiveTheme as _, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
+    ActiveTheme as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
     App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
@@ -80,7 +80,7 @@ impl ProfileEditorPanel {
 
         let disk_rev = store.read(cx).disk_revision;
         let mut panel = Self {
-            store,
+            store: store.clone(),
             loaded_profile: None,
             seen_disk_revision: disk_rev,
             disk_json: String::new(),
@@ -91,7 +91,11 @@ impl ProfileEditorPanel {
             last_submitted: None,
             derived_json: SharedString::default(),
             derived_syntax: None,
-            active_tab: EditorTab::Guided,
+            active_tab: if store.read(cx).editor_json_mode {
+                EditorTab::Json
+            } else {
+                EditorTab::Guided
+            },
             json_editor,
             model: ProfileFormModel::default(),
             in_outbound_type: cx.new(|cx| InputState::new(window, cx).placeholder("vless")),
@@ -585,23 +589,31 @@ impl ProfileEditorPanel {
     fn render_disk_change_banner(&self, cx: &Context<Self>) -> impl IntoElement {
         h_flex()
             .w_full()
-            .px_3()
-            .py_2()
+            .px(px(12.0))
+            .py(px(6.0))
             .justify_between()
             .items_center()
-            .gap_3()
-            .rounded(cx.theme().radius)
+            .gap(px(10.0))
+            .rounded(px(8.0))
+            .bg(cx.theme().warning.opacity(0.08))
             .border_1()
-            .border_color(cx.theme().warning)
+            .border_color(cx.theme().warning.opacity(0.28))
             .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().warning)
-                    .child("Modified on disk outside SingSwitch."),
+                h_flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(Icon::new(IconName::TriangleAlert).small().text_color(cx.theme().warning))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(fonts::EMPHASIS)
+                            .text_color(cx.theme().foreground)
+                            .child("Modified on disk outside SingSwitch."),
+                    ),
             )
             .child(
                 Button::new("editor-reload-disk")
-                    .outline()
+                    .secondary()
                     .xsmall()
                     .label("Reload")
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -619,22 +631,24 @@ impl ProfileEditorPanel {
         is_busy: bool,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let (border, text_col, label) = match validation {
+        let (border, text_col, icon, label) = match validation {
             EditorValidationState::Idle => {
-                (cx.theme().border, cx.theme().foreground, String::new())
+                (cx.theme().border, cx.theme().foreground, IconName::Info, String::new())
             }
             EditorValidationState::Validating => (
                 cx.theme().border,
                 cx.theme().muted_foreground,
+                IconName::Info,
                 "Checking config...".to_string(),
             ),
             EditorValidationState::Valid => (
                 cx.theme().success,
                 cx.theme().success,
+                IconName::CircleCheck,
                 "Config valid.".to_string(),
             ),
             EditorValidationState::Invalid(msg) => {
-                (cx.theme().danger, cx.theme().danger, msg.clone())
+                (cx.theme().danger, cx.theme().danger, IconName::CircleX, msg.clone())
             }
         };
 
@@ -644,24 +658,34 @@ impl ProfileEditorPanel {
 
         h_flex()
             .w_full()
-            .px_3()
-            .py_2()
+            .px(px(12.0))
+            .py(px(6.0))
             .justify_between()
             .items_center()
-            .gap_3()
-            .rounded(cx.theme().radius)
+            .gap(px(10.0))
+            .rounded(px(8.0))
+            .bg(border.opacity(0.08))
             .border_1()
-            .border_color(border)
+            .border_color(border.opacity(0.28))
             .child(
-                div()
-                    .id("editor-validation-message")
+                h_flex()
                     .flex_1()
                     .min_w(px(0.0))
-                    .max_h(px(60.0))
-                    .overflow_y_scroll()
-                    .text_xs()
-                    .text_color(text_col)
-                    .child(label),
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(Icon::new(icon).small().text_color(text_col).flex_none())
+                    .child(
+                        div()
+                            .id("editor-validation-message")
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .max_h(px(60.0))
+                            .overflow_y_scroll()
+                            .text_xs()
+                            .font_weight(fonts::EMPHASIS)
+                            .text_color(cx.theme().foreground)
+                            .child(label),
+                    ),
             )
             .when(can_force_draft, |row| {
                 row.child(
@@ -696,7 +720,7 @@ impl ProfileEditorPanel {
                     .child(
                         Button::new("editor-back")
                             .ghost()
-                            .small()
+                            .h(px(26.0))
                             .icon(IconName::ChevronLeft)
                             .label("Profiles")
                             .on_click(cx.listener(|_, _, _, cx| {
@@ -813,6 +837,7 @@ impl ProfileEditorPanel {
                 row.child(
                     Button::new("editor-save")
                         .primary()
+                        .h(px(28.0))
                         .label("Save")
                         .loading(is_busy)
                         .disabled(is_busy || !dirty)
@@ -826,6 +851,7 @@ impl ProfileEditorPanel {
                     Button::new("editor-save-live")
                         .when(is_active_running, Button::primary)
                         .when(!is_active_running, Button::secondary)
+                        .h(px(28.0))
                         .label(activation_label)
                         .loading(is_busy)
                         .disabled(is_busy || !can_activate || (is_active_running && !dirty))
@@ -864,6 +890,8 @@ impl ProfileEditorPanel {
 
         Button::new("editor-overflow")
             .ghost()
+            .h(px(28.0))
+            .w(px(28.0))
             .icon(IconName::Ellipsis)
             .accessibility_label("Editor options")
             .tooltip("Editor options")
@@ -953,6 +981,7 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-tls")
                     .checked(self.model.tls_enabled)
+                    .color(cx.theme().success)
                     .label("TLS")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.tls_enabled = *v;
@@ -962,6 +991,7 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-utls")
                     .checked(self.model.utls_enabled)
+                    .color(cx.theme().success)
                     .label("uTLS")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.utls_enabled = *v;
@@ -971,6 +1001,7 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-reality")
                     .checked(self.model.reality_enabled)
+                    .color(cx.theme().success)
                     .label("Reality")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.reality_enabled = *v;
@@ -987,6 +1018,7 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-auto-route")
                     .checked(self.model.tun_auto_route)
+                    .color(cx.theme().success)
                     .label("Auto route")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.tun_auto_route = *v;
@@ -996,6 +1028,7 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-strict-route")
                     .checked(self.model.tun_strict_route)
+                    .color(cx.theme().success)
                     .label("Strict route")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.tun_strict_route = *v;
@@ -1005,6 +1038,7 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-reject-ipv6")
                     .checked(self.model.reject_ipv6)
+                    .color(cx.theme().success)
                     .label("Block IPv6")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.reject_ipv6 = *v;
@@ -1024,10 +1058,10 @@ impl ProfileEditorPanel {
             .min_h(px(0.0))
             .gap_2()
             .child(
-                div()
+                v_flex()
                     .flex_1()
                     .w_full()
-                    .rounded(cx.theme().radius_lg)
+                    .rounded(px(10.0))
                     .overflow_hidden()
                     .border_1()
                     .border_color(if syntax_status.is_err() {
@@ -1035,24 +1069,39 @@ impl ProfileEditorPanel {
                     } else {
                         cx.theme().border
                     })
-                    .child(Editor::new(&self.json_editor).h(relative(1.0))),
-            )
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .text_xs()
-                    .child(match syntax_status {
-                        Ok(()) => div().text_color(cx.theme().success).child("Valid JSON"),
-                        Err(msg) => div().text_color(cx.theme().danger).truncate().child(msg),
-                    })
-                    .child(div().text_color(cx.theme().muted_foreground).child(
-                        if cfg!(target_os = "macos") {
-                            "Cmd+S to save"
-                        } else {
-                            "Ctrl+S to save"
-                        },
-                    )),
+                    .bg(crate::theme::surface(cx))
+                    .child(div().flex_1().w_full().child(Editor::new(&self.json_editor).h(relative(1.0))))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .px(px(14.0))
+                            .py(px(6.0))
+                            .border_t_1()
+                            .border_color(cx.theme().border.opacity(0.6))
+                            .bg(cx.theme().muted.opacity(0.4))
+                            .justify_between()
+                            .items_center()
+                            .text_xs()
+                            .child(match syntax_status {
+                                Ok(()) => h_flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .child(Icon::new(IconName::CircleCheck).xsmall().text_color(cx.theme().success))
+                                    .child(div().font_weight(fonts::EMPHASIS).text_color(cx.theme().success).child("Valid JSON")),
+                                Err(msg) => h_flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .child(Icon::new(IconName::CircleX).xsmall().text_color(cx.theme().danger))
+                                    .child(div().font_weight(fonts::EMPHASIS).text_color(cx.theme().danger).truncate().child(msg)),
+                            })
+                            .child(div().text_color(cx.theme().muted_foreground).child(
+                                if cfg!(target_os = "macos") {
+                                    "⌘S to save"
+                                } else {
+                                    "Ctrl+S to save"
+                                },
+                            )),
+                    ),
             )
             .into_any_element()
     }
@@ -1286,9 +1335,13 @@ fn labeled_input(label: &'static str, state: &Entity<InputState>, cx: &App) -> g
                 .text_color(cx.theme().foreground)
                 .child(label),
         )
-        .child(gpui_kit::component::input::Input::new(state).cleanable(true))
+        .child(
+            gpui_kit::component::input::Input::new(state)
+                .h(px(28.0))
+                .cleanable(true),
+        )
 }
 
 fn form_row_2(left: impl IntoElement, right: impl IntoElement) -> impl IntoElement {
-    h_flex().w_full().gap_4().child(left).child(right)
+    h_flex().w_full().gap(px(20.0)).child(left).child(right)
 }

@@ -248,24 +248,48 @@ impl ProfilesView {
                     .min_h(px(0.0))
                     .justify_center()
                     .items_center()
-                    .gap(px(10.0))
-                    .rounded(px(14.0))
+                    .gap(px(12.0))
+                    .p(px(32.0))
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(cx.theme().border)
                     .bg(crate::theme::surface(cx))
-                    .child(div().text_size(px(22.0)).font_weight(fonts::EMPHASIS).child("Add your first profile"))
+                    .child(
+                        div()
+                            .size(px(48.0))
+                            .rounded_full()
+                            .bg(cx.theme().muted)
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Icon::new(IconName::Route)
+                                    .size(px(24.0))
+                                    .text_color(cx.theme().muted_foreground),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(18.0))
+                            .font_weight(fonts::EMPHASIS)
+                            .text_color(cx.theme().foreground)
+                            .child("No profiles yet"),
+                    )
                     .child(
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Create a VLESS + Reality profile or import a sing-box configuration."),
+                            .child("Add a VLESS + Reality profile or import a sing-box configuration to start routing."),
                     )
                     .child(
                         h_flex()
-                            .mt(px(6.0))
-                            .gap(px(8.0))
+                            .mt(px(8.0))
+                            .gap(px(10.0))
                             .child(
                                 Button::new("first-profile-new")
                                     .primary()
-                                    .label("New profile")
+                                    .h(px(28.0))
+                                    .icon(IconName::FilePlus)
+                                    .label("Add profile")
                                     .disabled(busy)
                                     .on_click(move |_, window, cx| {
                                         Self::open_new_profile_dialog(create.clone(), window, cx);
@@ -274,6 +298,8 @@ impl ProfilesView {
                             .child(
                                 Button::new("first-profile-import")
                                     .secondary()
+                                    .h(px(28.0))
+                                    .icon(IconName::Link)
                                     .label("Import from URL")
                                     .disabled(busy)
                                     .on_click(move |_, window, cx| {
@@ -352,31 +378,50 @@ impl ProfilesView {
         v_flex()
             .w_full()
             .flex_none()
-            .rounded(px(8.0))
-            .bg(crate::theme::connection_surface(cx, tone))
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(if visual == TrayVisualState::Connected {
+                cx.theme().success.opacity(0.35)
+            } else if visual == TrayVisualState::Broken {
+                cx.theme().danger.opacity(0.35)
+            } else {
+                cx.theme().border
+            })
+            .bg(crate::theme::surface(cx))
+            .p(px(10.0))
             .child(
                 h_flex()
                     .w_full()
-                    .min_h(px(36.0))
-                    .px(px(8.0))
-                    .gap(px(6.0))
+                    .min_h(px(32.0))
+                    .px(px(4.0))
+                    .gap(px(10.0))
                     .items_center()
-                    .child(div().size(px(7.0)).flex_none().rounded_full().bg(tone))
                     .child(
-                        div()
-                            .text_sm()
-                            .flex_none()
-                            .font_weight(fonts::EMPHASIS)
-                            .child(label),
+                        h_flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .px(px(8.0))
+                            .py(px(3.0))
+                            .rounded_full()
+                            .bg(tone.opacity(0.12))
+                            .child(div().size(px(6.5)).flex_none().rounded_full().bg(tone))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(fonts::EMPHASIS)
+                                    .text_color(tone)
+                                    .child(label),
+                            ),
                     )
                     .when_some(activity, |row, text| {
                         row.child(
                             div()
                                 .min_w(px(0.0))
-                                .max_w(px(210.0))
+                                .max_w(px(240.0))
                                 .text_sm()
+                                .font_weight(fonts::EMPHASIS)
+                                .text_color(cx.theme().foreground)
                                 .truncate()
-                                .text_color(cx.theme().muted_foreground)
                                 .child(text),
                         )
                     })
@@ -384,7 +429,7 @@ impl ProfilesView {
                         row.child(
                             Button::new("connection-disconnect")
                                 .ghost()
-                                .small()
+                                .h(px(28.0))
                                 .flex_none()
                                 .icon(IconName::PowerOff)
                                 .label("Disconnect")
@@ -399,7 +444,7 @@ impl ProfilesView {
                         row.child(
                             Button::new("connection-logs")
                                 .ghost()
-                                .small()
+                                .h(px(28.0))
                                 .flex_none()
                                 .icon(IconName::ScrollText)
                                 .label("View logs")
@@ -412,53 +457,61 @@ impl ProfilesView {
                     })
                     .child(div().flex_1())
                     .child(
-                        Icon::new(IconName::Globe)
-                            .xsmall()
-                            .text_color(cx.theme().muted_foreground),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Public IP"),
-                    )
-                    .child(div().text_sm().min_w(px(0.0)).truncate().child(ip))
-                    .when_some(ip_to_copy, |row, (ip, location)| {
-                        row.child(
-                            Button::new("copy-ip")
-                                .ghost()
-                                .small()
-                                .flex_none()
-                                .icon(IconName::Copy)
-                                .accessibility_label("Copy public IP")
-                                .tooltip(if location.is_empty() {
-                                    "Copy public IP".into()
-                                } else {
-                                    format!("Copy public IP · {location}")
-                                })
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
-                                        ip.clone(),
-                                    ));
-                                }),
-                        )
-                    })
-                    .child(
-                        Button::new("refresh-network")
-                            .ghost()
-                            .small()
-                            .flex_none()
-                            .icon(IconName::RefreshCw)
-                            .accessibility_label("Refresh connection and public IP")
-                            .tooltip("Refresh connection and public IP")
-                            .disabled(store.ip_loading)
-                            .on_click(move |_, _, cx| {
-                                refresh.update(cx, |s, cx| {
-                                    s.refresh_snapshot(true, cx);
-                                    s.refresh_ip(cx);
-                                });
-                            }),
+                        h_flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .px(px(10.0))
+                            .h(px(26.0))
+                            .rounded_full()
+                            .bg(cx.theme().muted.opacity(0.5))
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                Icon::new(IconName::Globe)
+                                    .xsmall()
+                                    .text_color(cx.theme().muted_foreground),
+                            )
+                            .child(
+                                div()
+                                    .font_family(fonts::mono_family())
+                                    .text_xs()
+                                    .text_color(cx.theme().foreground)
+                                    .child(ip),
+                            )
+                            .when_some(ip_to_copy, |pill, (ip, location)| {
+                                pill.child(
+                                    Button::new("copy-ip")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Copy)
+                                        .accessibility_label("Copy public IP")
+                                        .tooltip(if location.is_empty() {
+                                            "Copy public IP".into()
+                                        } else {
+                                            format!("Copy public IP · {location}")
+                                        })
+                                        .on_click(move |_, _, cx| {
+                                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                                ip.clone(),
+                                            ));
+                                        }),
+                                )
+                            })
+                            .child(
+                                Button::new("refresh-network")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::RefreshCw)
+                                    .accessibility_label("Refresh connection and public IP")
+                                    .tooltip("Refresh connection and public IP")
+                                    .disabled(store.ip_loading)
+                                    .on_click(move |_, _, cx| {
+                                        refresh.update(cx, |s, cx| {
+                                            s.refresh_snapshot(true, cx);
+                                            s.refresh_ip(cx);
+                                        });
+                                    }),
+                            ),
                     )
                     .when(snap.running, |row| {
                         row.child(
@@ -507,11 +560,12 @@ impl ProfilesView {
 
         h_flex()
             .gap(px(8.0))
+            .items_center()
             .when(has_remote, |row| {
                 row.child(
                     Button::new("library-sync-all")
                         .ghost()
-                        .small()
+                        .h(px(28.0))
                         .icon(IconName::CloudDownload)
                         .label("Sync remote profiles")
                         .disabled(busy)
@@ -523,7 +577,7 @@ impl ProfilesView {
             .child(
                 Button::new("library-add")
                     .secondary()
-                    .small()
+                    .h(px(28.0))
                     .icon(IconName::CirclePlus)
                     .label("Add profile")
                     .disabled(busy)
@@ -568,58 +622,71 @@ impl ProfilesView {
             .w_full()
             .flex_1()
             .min_h(px(0.0))
+            .gap(px(10.0))
             .child(
                 h_flex()
                     .w_full()
                     .flex_none()
-                    .pb(px(6.0))
                     .gap(px(8.0))
                     .justify_between()
+                    .items_center()
                     .child(
-                        div().w(px(220.0)).child(
+                        div().w(px(240.0)).child(
                             Input::new(&self.search_input)
-                                .small()
+                                .h(px(28.0))
                                 .cleanable(true)
-                                .prefix(Icon::new(IconName::Search).xsmall()),
+                                .prefix(Icon::new(IconName::Search).small()),
                         ),
                     )
                     .child(self.render_add_actions(store)),
             )
             .child(
-                profile_columns(cx)
-                    .h(px(26.0))
-                    .flex_none()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(div().flex_1().min_w(px(0.0)).pl(px(8.0)).child("Profile"))
-                    .child(div().flex_1().min_w(px(0.0)).child("Server"))
-                    .child(div().w(px(90.0)).flex_none().child("Status"))
-                    .child(div().w(px(192.0)).flex_none()),
-            )
-            .child(
                 v_flex()
-                    .id("profile-library")
+                    .w_full()
                     .flex_1()
                     .min_h(px(0.0))
-                    .overflow_y_scroll()
-                    .when(none, |list| {
-                        // "No matching profiles" is a search message. A first-run
-                        // user with no profiles yet is waiting on the probe, not
-                        // failing to match a query.
-                        let empty = store.snapshot.profiles.is_empty();
-                        list.child(
-                            div()
-                                .p(px(8.0))
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(if empty {
-                                    "Looking for profiles…"
-                                } else {
-                                    "No matching profiles"
-                                }),
-                        )
-                    })
-                    .children(profiles.map(|profile| self.render_profile(profile, store, cx))),
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(crate::theme::surface(cx))
+                    .overflow_hidden()
+                    .child(
+                        profile_columns(cx)
+                            .h(px(32.0))
+                            .flex_none()
+                            .bg(cx.theme().muted.opacity(0.4))
+                            .border_b_1()
+                            .border_color(cx.theme().border)
+                            .text_xs()
+                            .font_weight(fonts::EMPHASIS)
+                            .text_color(cx.theme().muted_foreground)
+                            .child(div().flex_1().min_w(px(180.0)).pl(px(32.0)).child("PROFILE"))
+                            .child(div().flex_1().min_w(px(180.0)).child("SERVER / ENDPOINT"))
+                            .child(div().w(px(100.0)).flex_none().child("STATUS"))
+                            .child(div().w(px(180.0)).flex_none()),
+                    )
+                    .child(
+                        v_flex()
+                            .id("profile-library")
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .overflow_y_scroll()
+                            .when(none, |list| {
+                                let empty = store.snapshot.profiles.is_empty();
+                                list.child(
+                                    div()
+                                        .p(px(16.0))
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(if empty {
+                                            "Looking for profiles…"
+                                        } else {
+                                            "No matching profiles"
+                                        }),
+                                )
+                            })
+                            .children(profiles.map(|profile| self.render_profile(profile, store, cx))),
+                    ),
             )
     }
 
@@ -653,76 +720,112 @@ impl ProfilesView {
         v_flex()
             .w_full()
             .flex_none()
-            // The live row is what the user is looking for; selection is the
-            // weaker signal of the two.
+            .border_b_1()
+            .border_color(cx.theme().border.opacity(0.6))
             .bg(if live {
-                crate::theme::connection_surface(cx, cx.theme().success)
+                cx.theme().success.opacity(0.06)
             } else if selected {
-                cx.theme().muted
+                cx.theme().muted.opacity(0.4)
             } else {
-                crate::theme::surface(cx)
+                gpui_kit::Hsla::transparent_black()
             })
             .child(
                 profile_columns(cx)
-                    .min_h(px(36.0))
-                    .border_t_1()
-                    .border_color(cx.theme().border)
+                    .min_h(px(44.0))
                     .child(
-                        Button::new(gpui_kit::SharedString::from(format!(
-                            "profile-{}",
-                            profile.name
-                        )))
-                        .ghost()
-                        .small()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .icon(if expanded {
-                            IconName::ChevronDown
-                        } else {
-                            IconName::ChevronRight
-                        })
-                        .toggled(expanded)
-                        .accessibility_label(format!("{} details", profile.name))
-                        .child(
-                            div()
-                                .w_full()
-                                .min_w(px(0.0))
-                                .truncate()
-                                .font_weight(fonts::EMPHASIS)
-                                .child(profile.name.clone()),
-                        )
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.expanded_profile =
-                                if view.expanded_profile.as_ref() == Some(&detail_name) {
-                                    None
+                        h_flex()
+                            .flex_1()
+                            .min_w(px(180.0))
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                Button::new(gpui_kit::SharedString::from(format!(
+                                    "expand-{}",
+                                    profile.name
+                                )))
+                                .ghost()
+                                .xsmall()
+                                .icon(if expanded {
+                                    IconName::ChevronDown
                                 } else {
-                                    Some(detail_name.clone())
-                                };
-                            select.update(cx, |s, cx| {
-                                s.select_profile(Some(detail_name.clone()), cx)
-                            });
-                            cx.notify();
-                        })),
+                                    IconName::ChevronRight
+                                })
+                                .toggled(expanded)
+                                .accessibility_label(format!("{} details", profile.name))
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.expanded_profile =
+                                        if view.expanded_profile.as_ref() == Some(&detail_name) {
+                                            None
+                                        } else {
+                                            Some(detail_name.clone())
+                                        };
+                                    select.update(cx, |s, cx| {
+                                        s.select_profile(Some(detail_name.clone()), cx)
+                                    });
+                                    cx.notify();
+                                })),
+                            )
+                            .child(
+                                Icon::new(if live {
+                                    IconName::Route
+                                } else if ready {
+                                    IconName::Waypoints
+                                } else {
+                                    IconName::Cable
+                                })
+                                .small()
+                                .text_color(color),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(fonts::EMPHASIS)
+                                    .text_color(cx.theme().foreground)
+                                    .truncate()
+                                    .child(profile.name.clone()),
+                            )
+                            .when(live, |row| {
+                                row.child(
+                                    div()
+                                        .px(px(6.0))
+                                        .py(px(1.0))
+                                        .rounded(px(4.0))
+                                        .bg(cx.theme().success.opacity(0.15))
+                                        .text_size(px(10.5))
+                                        .font_weight(fonts::EMPHASIS)
+                                        .text_color(cx.theme().success)
+                                        .child("ACTIVE"),
+                                )
+                            }),
                     )
                     .child(
                         div()
                             .flex_1()
-                            .min_w(px(0.0))
-                            .text_sm()
+                            .min_w(px(180.0))
+                            .font_family(fonts::mono_family())
+                            .text_size(px(12.5))
+                            .text_color(cx.theme().muted_foreground)
                             .truncate()
                             .child(endpoint.unwrap_or_else(|| "—".into())),
                     )
                     .child(
-                        div()
-                            .w(px(90.0))
+                        h_flex()
+                            .w(px(100.0))
                             .flex_none()
-                            .text_xs()
-                            .text_color(color)
-                            .child(status),
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(fonts::EMPHASIS)
+                                    .text_color(color)
+                                    .child(status),
+                            ),
                     )
                     .child(
                         h_flex()
-                            .w(px(192.0))
+                            .w(px(180.0))
                             .flex_none()
                             .justify_end()
                             .gap(px(4.0))
@@ -732,9 +835,9 @@ impl ProfilesView {
                                         "connect-{}",
                                         profile.name
                                     )))
-                                    .small()
+                                    .h(px(26.0))
                                     .when(selected, Button::primary)
-                                    .when(!selected, Button::ghost)
+                                    .when(!selected, Button::secondary)
                                     .label(if running { "Switch" } else { "Connect" })
                                     .loading(busy)
                                     .disabled(busy)
@@ -756,7 +859,7 @@ impl ProfilesView {
                                     "edit-{}",
                                     profile.name
                                 )))
-                                .small()
+                                .h(px(26.0))
                                 .when(ready, Button::ghost)
                                 .when(!ready, Button::secondary)
                                 .label(if ready { "Edit" } else { "Finish setup" })
@@ -876,7 +979,8 @@ impl ProfilesView {
             profile.name
         )))
         .ghost()
-        .small()
+        .h(px(26.0))
+        .w(px(26.0))
         .icon(IconName::Ellipsis)
         .accessibility_label("Profile options")
         .tooltip("Profile options")
@@ -929,7 +1033,7 @@ impl ProfilesView {
 fn profile_columns(cx: &App) -> gpui_kit::Div {
     h_flex()
         .w_full()
-        .px(px(4.0))
+        .px(px(14.0))
         .gap(px(10.0))
         .items_center()
         .text_color(cx.theme().foreground)

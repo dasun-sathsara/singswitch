@@ -36,12 +36,25 @@ impl Render for SettingsView {
             .overflow_y_scrollbar()
             .px(px(14.0))
             .py(px(10.0))
-            .gap_2()
+            .gap(px(8.0))
             .child(
-                div()
-                    .text_size(px(19.0))
-                    .font_weight(fonts::EMPHASIS)
-                    .child("Settings"),
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap(px(10.0))
+                    .child(
+                        div()
+                            .text_size(px(16.0))
+                            .font_weight(fonts::EMPHASIS)
+                            .child("Settings"),
+                    )
+                    .child(div().h(px(14.0)).w(px(1.0)).bg(cx.theme().border))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Preferences and daemon layout"),
+                    ),
             )
             .when_some(notice, |el, notice| el.child(notice))
             .child(render_appearance_card(settings.theme, &self.store, cx))
@@ -57,16 +70,18 @@ fn render_appearance_card(
 ) -> impl IntoElement {
     v_flex()
         .w_full()
-        .p_3()
-        .gap_2()
-        .rounded(cx.theme().radius_lg)
+        .p(px(12.0))
+        .gap(px(8.0))
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(cx.theme().border)
         .bg(surface(cx))
         .child(
             div()
-                .text_base()
+                .text_xs()
                 .font_weight(fonts::EMPHASIS)
-                .text_color(cx.theme().foreground)
-                .child("Appearance"),
+                .text_color(cx.theme().muted_foreground)
+                .child("APPEARANCE"),
         )
         .child(
             h_flex()
@@ -75,11 +90,11 @@ fn render_appearance_card(
                 .items_center()
                 .child(
                     v_flex()
-                        .gap_1()
+                        .gap(px(2.0))
                         .child(
                             div()
                                 .text_sm()
-                                .font_normal()
+                                .font_medium()
                                 .text_color(cx.theme().foreground)
                                 .child("Theme"),
                         )
@@ -87,12 +102,18 @@ fn render_appearance_card(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Light, dark, or system theme."),
+                                .child("Light, dark, or follow system appearance."),
                         ),
                 )
                 .child(
                     h_flex()
-                        .gap_2()
+                        .items_center()
+                        .gap(px(2.0))
+                        .p(px(2.0))
+                        .rounded(px(8.0))
+                        .bg(cx.theme().muted.opacity(0.6))
+                        .border_1()
+                        .border_color(cx.theme().border.opacity(0.5))
                         .child(theme_button(
                             "theme-light",
                             "Light",
@@ -131,10 +152,10 @@ fn theme_button(
 ) -> Button {
     let st = store.clone();
     Button::new(id)
-        .small()
+        .h(px(26.0))
         .when_some(icon, Button::icon)
-        .when(current == target, Button::primary)
-        .when(current != target, Button::secondary)
+        .when(current == target, Button::secondary)
+        .when(current != target, Button::ghost)
         .label(label)
         .on_click(move |_, _, cx| {
             st.update(cx, |s, cx| s.set_theme_preference(target, cx));
@@ -152,22 +173,25 @@ fn render_behavior_card(
 
     v_flex()
         .w_full()
-        .p_3()
-        .gap_2()
-        .rounded(cx.theme().radius_lg)
+        .p(px(12.0))
+        .gap(px(8.0))
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(cx.theme().border)
         .bg(surface(cx))
         .child(
             div()
-                .text_base()
+                .text_xs()
                 .font_weight(fonts::EMPHASIS)
-                .text_color(cx.theme().foreground)
-                .child("Startup and notifications"),
+                .text_color(cx.theme().muted_foreground)
+                .child("STARTUP AND NOTIFICATIONS"),
         )
         .child(setting_switch_row(
             "set-launch-login",
             "Open at login",
             "Start SingSwitch in the menu bar or tray when you sign in.",
             settings.launch_at_login,
+            false,
             false,
             move |checked, _, cx| {
                 store_login.update(cx, |s, cx| s.toggle_launch_at_login(*checked, cx));
@@ -180,6 +204,7 @@ fn render_behavior_card(
             "Look up the public IP at launch and after each switch.",
             settings.auto_refresh_ip,
             false,
+            true,
             move |checked, _, cx| {
                 store_ip.update(cx, |s, cx| s.set_auto_refresh_ip(*checked, cx));
             },
@@ -191,6 +216,7 @@ fn render_behavior_card(
             "Show a system notification when the service switches or fails.",
             settings.desktop_notifications,
             false,
+            true,
             move |checked, _, cx| {
                 store_notify.update(cx, |s, cx| s.set_desktop_notifications(*checked, cx));
             },
@@ -204,6 +230,7 @@ fn setting_switch_row(
     description: &'static str,
     checked: bool,
     disabled: bool,
+    border_top: bool,
     on_change: impl Fn(&bool, &mut Window, &mut gpui_kit::App) + 'static,
     cx: &gpui_kit::App,
 ) -> impl IntoElement {
@@ -211,13 +238,17 @@ fn setting_switch_row(
         .w_full()
         .justify_between()
         .items_center()
+        .pt(if border_top { px(10.0) } else { px(0.0) })
+        .when(border_top, |row| {
+            row.border_t_1().border_color(cx.theme().border.opacity(0.5))
+        })
         .child(
             v_flex()
-                .gap_1()
+                .gap(px(2.0))
                 .child(
                     div()
                         .text_sm()
-                        .font_normal()
+                        .font_medium()
                         .text_color(cx.theme().foreground)
                         .child(title),
                 )
@@ -231,6 +262,7 @@ fn setting_switch_row(
         .child(
             Switch::new(id)
                 .checked(checked)
+                .color(cx.theme().success)
                 .disabled(disabled)
                 .on_change(on_change),
         )
@@ -255,9 +287,6 @@ fn render_paths_card(
         ("Error log", layout.error_log_path.display().to_string()),
         ("Access log", layout.access_log_path.display().to_string()),
         (
-            // Two different identifiers, never fused into one un-copyable
-            // string: the macOS service label, or the Windows service name plus
-            // the control pipe as its own row.
             "Service",
             if layout.launchd_label.is_empty() {
                 layout.service_name.clone()
@@ -277,13 +306,15 @@ fn render_paths_card(
 
     v_flex()
         .w_full()
-        .p_3()
-        .gap_3()
-        .rounded(cx.theme().radius_lg)
+        .p(px(12.0))
+        .gap(px(6.0))
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(cx.theme().border)
         .bg(surface(cx))
         .child(
             h_flex()
-                .gap_2()
+                .gap(px(8.0))
                 .items_center()
                 .child(
                     Icon::new(IconName::FolderCog)
@@ -292,10 +323,10 @@ fn render_paths_card(
                 )
                 .child(
                     div()
-                        .text_base()
+                        .text_xs()
                         .font_weight(fonts::EMPHASIS)
-                        .text_color(cx.theme().foreground)
-                        .child("System paths"),
+                        .text_color(cx.theme().muted_foreground)
+                        .child("SYSTEM PATHS"),
                 ),
         )
         .children(paths.into_iter().enumerate().map(|(ix, (label, value))| {
@@ -305,7 +336,10 @@ fn render_paths_card(
                 .w_full()
                 .justify_between()
                 .items_center()
-                .gap_3()
+                .gap(px(12.0))
+                .py(px(4.0))
+                .border_t_1()
+                .border_color(cx.theme().border.opacity(0.4))
                 .child(
                     div()
                         .w(px(160.0))
@@ -316,7 +350,7 @@ fn render_paths_card(
                 .child(
                     div()
                         .flex_1()
-                        .text_xs()
+                        .text_size(px(12.0))
                         .font_family(mono_font.clone())
                         .text_color(cx.theme().foreground)
                         .truncate()
@@ -325,15 +359,17 @@ fn render_paths_card(
                 .child(
                     Button::new(SharedString::from(format!("copy-path-{ix}")))
                         .ghost()
-                        .small()
+                        .h(px(24.0))
+                        .w(px(24.0))
                         .icon(IconName::Copy)
+                        .tooltip("Copy path")
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(val_copy.clone()));
                             store_copy.update(cx, |s, cx| {
                                 s.set_notice(
                                     NoticeOrigin::Settings,
                                     BannerTone::Success,
-                                    "Copied path",
+                                    "Copied to clipboard",
                                     cx,
                                 );
                             });

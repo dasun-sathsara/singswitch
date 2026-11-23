@@ -1,32 +1,34 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 extern crate gpui_kit as gpui;
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod actions;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod assets;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod diag;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod fonts;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod icons;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod notifier;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+mod preview;
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod shell;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod state;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod theme;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod tray;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod views;
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod desktop {
     use gpui_kit::component::TitleBar;
     use gpui_kit::{
@@ -92,6 +94,12 @@ mod desktop {
                 .install(cx);
 
             let store = cx.new(AppStore::new);
+            if let Some(theme) = crate::preview::preview_theme() {
+                store.update(cx, |s, _| s.settings.theme = theme);
+            }
+            if let Some(scene) = crate::preview::preview_scene() {
+                crate::preview::apply_preview_state(&scene, &store, cx);
+            }
             let theme_pref = store.read(cx).settings.theme;
             apply_theme(theme_pref, None, cx);
             // Bind first: macOS menu key equivalents are captured once when
@@ -486,12 +494,12 @@ mod desktop {
     }
 }
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 fn main() {
     desktop::main();
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 fn main() {
     eprintln!("singswitch-app requires macOS or Windows. Run singswitch instead.");
     std::process::exit(1);
