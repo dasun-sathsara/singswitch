@@ -1,4 +1,4 @@
-# singswitch desktop UI: design plan (v3)
+# SingSwitch desktop UI: design plan (v3)
 
 > **Historical.** This is the design record for the v3 shell, kept because the
 > reasoning still explains the layout. It is not current: the Doctor feature
@@ -19,18 +19,18 @@ Mode: **Operate**. macOS primary, Windows parity.
 | Two live save actions (`Save`, `Save & Reconnect`) | Both hit the service; the difference is invisible and the choice is meaningless. | One live action: `Save & Reconnect`. |
 | Rail rows switch on hover | Hover-only actions are unreachable by keyboard and touch, and reserving space for them shrinks names. | The rail inspects. Switching is the stage's primary action, `Return`, and the tray. |
 | Active profile pinned when scrolling | The list reorders while the user scrolls and can duplicate a row. | Stable order by name. The running profile is named in the status strip with a `Reveal` action. |
-| "Last active" | `Snapshot.active` is the persisted selection, not a record of a successful connection. `connected_since` starts when the app *observes* running. | `Selected`. Uptime reads `up since singswitch started watching` when the app did not watch the start. |
+| "Last active" | `Snapshot.active` is the persisted selection, not a record of a successful connection. `connected_since` starts when the app *observes* running. | `Selected`. Uptime reads `up since SingSwitch started watching` when the app did not watch the start. |
 | Rollback assumed to succeed | `recover_inner` has four outcomes: no previous profile, rollback failed, reverted but restart failed, reverted and kept stopped. | Four distinct messages, verbatim from the error's hints. |
 | Setup suppressed for users who dismissed the old guide | Dismissal must never hide a failure. `needs_onboarding` already fires on a blocking Doctor check. | Dismissal hides the welcome copy only. Empty library, unfinished TODOs, permission blocks, init failure, and rollback always show. |
 | `subscription URL` | Import fetches a complete sing-box JSON document over HTTP(S) (`pull_profile`). | `Import from URL`. |
 | Logs 20px in §6.2, 22px in §5.3 | Inconsistency. | 20px everywhere below the hero screen. |
 | Shortcuts silently renumbered | v1 had Dashboard 1, Profiles 2, Logs 3, Doctor 4, Settings 5. | Documented migration, §7. |
-| Native menus unmentioned | `shell.rs` installs singswitch, File, Connection, Edit, Window menus with Undo/Cut/Copy/Paste. | Kept; §7.2 states what changes. |
+| Native menus unmentioned | `shell.rs` installs SingSwitch, File, Connection, Edit, Window menus with Undo/Cut/Copy/Paste. | Kept; §7.2 states what changes. |
 | Windows notifications under "Menu bar (macOS only)" | `notifier.rs` posts on both platforms. | Cross-platform `Notifications` row. |
 
 ## 1. What it is
 
-`singswitch` points a privileged TUN proxy at one of N saved configs and keeps it alive. The window is a
+SingSwitch points a privileged TUN proxy at one of N saved configs and keeps it alive. The window is a
 profile switcher with a diagnostic bench attached.
 
 Frequency of use: once at setup; daily from the menu bar (confirm state, switch, stop); weekly from
@@ -54,7 +54,7 @@ Doctor).
 ┌───────────────────────────────────────────────────────────────────────────────┐
 │ ○ ○ ○        (native title bar, 34px)                                         │
 ├───────────────┬───────────────────────────────────────────────────────────────┤
-│ singswitch · Connections                    ● Connected: home-vless    ⟳   ⋯      │ 44 toolbar
+│ SingSwitch · Connections                    ● Connected: home-vless    ⟳   ⋯      │ 44 toolbar
 ├───────────────┼───────────────────────────────────────────────────────────────┤
 │ Profiles  4   │  home-vless                              [Edit] [Save & Reconnect]│
 │ ⌕ Filter      │  13.215.132.32:443 · VLESS + Reality · source saved            │
@@ -63,7 +63,7 @@ Doctor).
 │   sg-direct   │  Tunnel                utun123 · from the profile              │
 │   aws-sg-ads  │  Egress                unset in this profile                   │
 │   work-tokyo  │                                                                │
-│   3 TODO      │  Up since singswitch started watching · 2h 14m   PID 49398  1 restart│
+│   3 TODO      │  Up since SingSwitch started watching · 2h 14m   PID 49398  1 restart│
 │               │                                                                │
 │               │  Transport   VLESS + Reality        SNI      www.microsoft.com │
 │ ───────────── │  Flow        xtls-rprx-vision       uTLS     chrome            │
@@ -78,7 +78,7 @@ Doctor).
 - **Title bar**: stock `TitleBar`, 34px, native controls and drag.
 - **Toolbar** (44px): mark, screen name, then global service state and `Disconnect`/`Connect`,
   refresh, overflow. The connection control exists on every screen.
-- **Rail** (240–320, default 264): inspect-only list plus utility nav.
+- **Rail** (240-320, default 264): inspect-only list plus utility nav.
 - **Stage**: one screen.
 - **Status strip** (30px, `StatusBar`): service headline, tunnel and PID, the observed IP sample,
   Doctor failure count.
@@ -101,7 +101,7 @@ Rules:
 - `Connected: name` requires `running && active == name`. Running with no active profile reads
   `Connected: unknown profile`, which is what the daemon state actually says.
 - Uptime: `connected_since` is set when the app observes running, so the label is
-  `up since singswitch started watching` for any sample older than one poll. `Connected for 2h 14m` is
+  `up since SingSwitch started watching` for any sample older than one poll. `Connected for 2h 14m` is
   only used when the app watched the transition itself.
 - Restart count is a total, shown whenever non-zero, running or stopped. `Restarting repeatedly` is
   never asserted from a single sample; it requires the count to rise across two or more snapshots.
@@ -128,10 +128,10 @@ redesign makes the target explicit and never connects an unready profile:
 
 ### 5.1 Connections (`⌘1`)
 
-**Rail** — inspect only.
+**Rail.** inspect only.
 
 1. `Profiles` 15/700, count in mono `--muted`; `+` new, `↧` import.
-2. Filter, 26px, `--surface` with hairline, `⌘F`. With no matches: `No profile matches “wifi”.` +
+2. Filter, 26px, `--surface` with hairline, `⌘F`. With no matches: `No profile matches "wifi".` +
    `Clear filter`.
 3. Rows 52px, stable order by name:
    - name 15 (700 when selected), `Selected` marker on the remembered active row, `Needs setup`
@@ -147,29 +147,29 @@ redesign makes the target explicit and never connects an unready profile:
 1. **Head**: name 24/700, tracking -0.02em. Meta 12.5: primary endpoint (mono) · transport ·
    source state (`source saved` / `no source`).
    Actions: `Switch` / `Reconnect` (ink fill), `Edit` (hairline), `⋯`.
-2. **Provenance** (three rows, 36px, hairline-separated) — everything here comes from the profile's
+2. **Provenance** (three rows, 36px, hairline-separated). Everything here comes from the profile's
    own JSON, nothing from the daemon:
-   - `Configured outbound` — `<type> · <tag> · <server>:<port>`, e.g. `vless · proxy ·
+   - `Configured outbound`: `<type> · <tag> · <server>:<port>`, e.g. `vless · proxy ·
      13.215.132.32:443`. If the first eligible outbound is not the one routing selects, the row
      says `first outbound in the config` in `--muted`. If the JSON can't be parsed:
      `unavailable · config could not be parsed`.
-   - `Tunnel` — three distinct states: `utun123 · from the profile`; `OS default · no interface
+   - `Tunnel`: three distinct states: `utun123 · from the profile`; `OS default · no interface
      set`; `none · no TUN inbound in this config`.
-   - `Egress` — from the profile's own `route`/`outbounds` when it sets one, else
+   - `Egress`: from the profile's own `route`/`outbounds` when it sets one, else
      `unset in this profile`. Never the machine's public IP. (The observed IP is machine-wide and
      lives in the status strip.)
 3. **Runtime** (only when running): uptime with its honest label, `PID`, restart total,
    `last exit`. Mono 12, labels `--muted`, values `--ink2`, 24px gaps.
 4. **Config facts**, two columns at ≥1000px, one below: `Transport`, `Flow`, `SNI`, `uTLS`,
    `TUN stack`, `TUN MTU`, `Log level`, `Config` (full path, copyable, middle-truncated in display
-   only), `Source` (URL + inline `Sync` when the sidecar exists). Missing values `—` in `--muted`.
+   only), `Source` (URL + inline `Sync` when the sidecar exists). Missing values show `n/a` in `--muted`.
 5. **Overflow `⋯`**: `Restart service`, `Refresh status`, `Sync from source`, `Sync all`,
    `Copy public IP`, `Copy config path`, `Reveal config`, `Delete…`.
 6. **Broken config**: a row above the facts with `Snapshot.broken` verbatim and `Run Doctor`.
 7. **Empty library**: setup §5.5.
 8. **Snapshot failure at startup**: when `Controller::snapshot()` fails, `AppStore` currently
    stores an empty snapshot and the window looks like a fresh install. The redesign keeps
-   `init_error`/snapshot error distinct and shows `singswitch could not read the service state` with the
+   `init_error`/snapshot error distinct and shows `SingSwitch could not read the service state` with the
    error and `Retry`, never the empty-library guide.
 
 `Delete` states that a running profile's service is stopped first, then confirms.
@@ -194,7 +194,7 @@ redesign makes the target explicit and never connects an unready profile:
   New, Import, tray navigation, tray `Quit`, `⌘Q`, and the native window close. Native close
   returns `false` immediately, then resumes the pending exit once after `Discard` or a successful
   save; the draft and focus survive a failed save. Writes are checked against the specific file's
-  revision at write time, under the save lock — not the global disk revision.
+  revision at write time, under the save lock, not the global disk revision.
 
 ### 5.3 Logs (`⌘2`)
 
@@ -232,13 +232,13 @@ redesign makes the target explicit and never connects an unready profile:
 
 Always shown when a condition holds, regardless of `onboarding_dismissed`:
 
-1. **Init failure** — `singswitch cannot reach the service`, error text, `Run Doctor`.
-2. **Empty library** — three steps (managed sing-box, permissions, a profile).
-3. **Profiles exist, none ready** — `Every profile still has TODO values.` + a row and `Fix` per
+1. **Init failure.** `SingSwitch cannot reach the service`, error text, `Run Doctor`.
+2. **Empty library.** three steps (managed sing-box, permissions, a profile).
+3. **Profiles exist, none ready.** `Every profile still has TODO values.` + a row and `Fix` per
    incomplete profile.
-4. **Permission block** — macOS sudoers missing, or Windows helper stopped but not recoverable by
+4. **Permission block.** macOS sudoers missing, or Windows helper stopped but not recoverable by
    UAC: one row with the fix (preview and confirm for sudoers).
-5. **Activation rolled back** — the actual outcome from `recover_inner`, one of four variants
+5. **Activation rolled back.** the actual outcome from `recover_inner`, one of four variants
    (§0), plus `Open Doctor` and `View logs`.
 
 `onboarding_dismissed` suppresses only the welcome wording on a healthy install. It can never hide
@@ -252,17 +252,17 @@ filled button. Copy uses the bundled-sing-box reality (`./scripts/install-macos.
 
 Rows 52px, hairlines, groups 26px apart.
 
-- **Appearance**: `Theme` — `Light | Dark | System`.
+- **Appearance**: `Theme`: `Light | Dark | System`.
 - **Notifications** (both platforms): `Desktop notifications`; on macOS also `Show the connected
   profile name in the menu bar`.
 - **Behaviour**: `Open at login` (failure surfaced inline, as today); `Refresh the public IP after
-  connect` — describes the real behaviour: one lookup on launch when enabled, and after each
+  connect`: describes the real behaviour: one lookup on launch when enabled, and after each
   switch, never on a timer.
 - **System**: `Platform`, `Profiles directory`, `Active configuration`, `Error log`, `Access log`,
   `Service target` (`system/app.lexiflix.singswitch-daemon` or `sing-box (\\.\pipe\singswitch-control)`),
   `Managed sing-box`. Mono 12, copyable, full value on hover.
 - **Setup**: `Show setup again` (clears `onboarding_dismissed`).
-- **About**: version, licence, `Open log folder`, `Quit singswitch`.
+- **About**: version, licence, `Open log folder`, `Quit SingSwitch`.
 
 **Migration.** `ui-settings.json` keeps `theme`, `launch_at_login`, `show_profile_in_menubar`,
 `auto_refresh_ip`, `desktop_notifications`, window size, `onboarding_dismissed`. `sidebar_collapsed`
@@ -294,8 +294,8 @@ Settings…
 Quit singswitch
 ```
 
-- Tooltip is `tray_tooltip()`'s text unchanged: `singswitch: Connected to home-vless`,
-  `singswitch: <broken reason>`, `singswitch: <phase>`. This is separate from the menu headline.
+- Tooltip is `tray_tooltip()`'s text unchanged: `SingSwitch · Connected to home-vless`,
+  `SingSwitch · <broken reason>`, `SingSwitch · <phase>`. This is separate from the menu headline.
 - Menu title states carry the same words as the window, plus the observed IP and location.
 - `broken` shows `Attention needed: <reason>` first, with `Run Doctor…` directly under it.
 - `Needs setup` rows stay visible and disabled.
@@ -326,9 +326,9 @@ Measured, sRGB alpha composited:
 
 | Surface | Text ink / ink2 / muted | Ring base / selected |
 |---|---|---|
-| Light ground | 16.7 / 7.2 / 5.0 | 7.14 / — |
+| Light ground | 16.7 / 7.2 / 5.0 | 7.14 / n/a |
 | Light rail, 7% wash `#F2F2F9` | 16.25 / 7.00 / **4.84** | 7.72 / 6.93 |
-| Dark ground | 15.6 / 8.5 / 6.2 | 7.04 / — |
+| Dark ground | 15.6 / 8.5 / 6.2 | 7.04 / n/a |
 | Dark rail, 12% wash `#2C2B34` | 11.97 / 6.55 / **4.75** | 6.57 / 5.40 |
 
 Two rules follow from the numbers: the selection wash is used **only on rail rows** (on light
@@ -345,9 +345,9 @@ never colour alone.
 | Screen title (Connections, Editor) | Feixen | 700 | 24 |
 | Sub-screen title (Logs, Doctor, Settings) | Feixen | 700 | 20 |
 | Row name, section heading, profile name | Feixen | 700 | 15 |
-| Body, label, button | Feixen | 400 (700 emphasis) | 13–15 |
-| Meta, hint, label | Feixen | 400 | 11.5–12.5 |
-| Values, identifiers, logs, paths | Geist | 400 (700 emphasis) | 12–13 |
+| Body, label, button | Feixen | 400 (700 emphasis) | 13-15 |
+| Meta, hint, label | Feixen | 400 | 11.5-12.5 |
+| Values, identifiers, logs, paths | Geist | 400 (700 emphasis) | 12-13 |
 
 - Two weights only, matching the four shipped files. Never 500/600.
 - Base 15; controls and dense lists 13; values in mono 12.
@@ -389,7 +389,7 @@ destructive and privileged actions.
 | Save / save & reconnect | `⌘S` / `⇧⌘S` | `Ctrl+S` / `Ctrl+Shift+S` |
 | New / import | `⌘N` / `⌘I` | `Ctrl+N` / `Ctrl+I` |
 | Refresh IP | `⌘R` | `Ctrl+R` |
-| Open window from tray | `⌘0` | — |
+| Open window from tray | `⌘0` | none |
 | Close window | `⌘W` | `Ctrl+W` |
 | Quit | `⌘Q` | `Ctrl+Q` |
 

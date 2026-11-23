@@ -596,7 +596,7 @@ impl ProfileEditorPanel {
                 div()
                     .text_xs()
                     .text_color(cx.theme().warning)
-                    .child("Modified on disk outside singswitch."),
+                    .child("Modified on disk outside SingSwitch."),
             )
             .child(
                 Button::new("editor-reload-disk")

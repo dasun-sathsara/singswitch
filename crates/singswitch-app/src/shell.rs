@@ -48,10 +48,10 @@ pub fn install_app_menus(cx: &mut App) {
         Menu {
             name: "SingSwitch".into(),
             items: vec![
-                MenuItem::action("Open singswitch", OpenMainWindow),
+                MenuItem::action("Open SingSwitch", OpenMainWindow),
                 MenuItem::action("Settings...", OpenSettingsView),
                 MenuItem::separator(),
-                MenuItem::action("Quit singswitch", QuitApp),
+                MenuItem::action("Quit SingSwitch", QuitApp),
             ],
             disabled: false,
         },
