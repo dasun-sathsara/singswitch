@@ -111,7 +111,8 @@ fn spin_svg(phase: f32) -> String {
     let mut grid = String::new();
     for meridian in 0..4 {
         let angle = phase + FRAC_PI_2 * meridian as f32;
-        if angle.cos() <= 0.0 {
+        let depth = angle.cos();
+        if depth <= 0.0 {
             continue;
         }
         let x = angle.sin() * 9.0;
@@ -119,9 +120,12 @@ fn spin_svg(phase: f32) -> String {
             grid.push_str(r#"<path d="M12 3v18"/>"#);
         } else {
             let sweep = u8::from(x > 0.0);
+            // Blend only the meridian closest to the edge into the fixed rim.
+            let t = (depth / 0.35).min(1.0);
+            let opacity = t * t * (3.0 - 2.0 * t);
             let _ = write!(
                 grid,
-                r#"<path d="M12 3a{:.3} 9 0 0 {sweep} 0 18"/>"#,
+                r#"<path d="M12 3a{:.3} 9 0 0 {sweep} 0 18" stroke-opacity="{opacity:.3}"/>"#,
                 x.abs()
             );
         }
@@ -131,7 +135,7 @@ fn spin_svg(phase: f32) -> String {
 
 #[cfg(target_os = "macos")]
 pub fn build_spin_frames(cx: &App) -> gpui_tray::Result<Vec<Icon>> {
-    const FRAMES: usize = 36;
+    const FRAMES: usize = 42;
     // Four evenly spaced meridians repeat after a quarter turn.
     (0..FRAMES)
         .map(|frame| {
