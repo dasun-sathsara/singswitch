@@ -20,8 +20,7 @@ struct Badge {
 impl Badge {
     fn for_state(state: TrayVisualState, angle: f32) -> Option<Self> {
         let (x, y, radius, color, alert) = match state {
-            TrayVisualState::Disconnected => return None,
-            TrayVisualState::Connected => (0.75, 0.75, 0.096, [94, 234, 158], false),
+            TrayVisualState::Connected | TrayVisualState::Disconnected => return None,
             TrayVisualState::Broken => (0.75, 0.75, 0.119, [255, 138, 133], true),
             TrayVisualState::Transitioning => (
                 0.5 + 0.365 * angle.cos(),
@@ -45,11 +44,13 @@ fn coverage(distance: f32, pixel: f32) -> f32 {
     (0.5 - distance / pixel).clamp(0.0, 1.0)
 }
 
-/// A globe with a slash when off and a badge in other states. All states and
+/// The outline and filled globes share the same geometry. All states and
 /// animation frames use the same canvas to keep the tray item the same size.
 fn globe_rgba(size: u32, state: TrayVisualState, angle: f32, template: bool) -> Vec<u8> {
     let pixel = 1.0 / size as f32;
     let badge = Badge::for_state(state, angle);
+    let connected = state == TrayVisualState::Connected;
+    let globe_color = if connected { [94, 234, 158] } else { [244; 3] };
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);
 
     for y in 0..size {
@@ -62,7 +63,14 @@ fn globe_rgba(size: u32, state: TrayVisualState, angle: f32, template: bool) -> 
             let rim = (distance - 0.337).abs() - 0.036;
             let longitude = ((dx / 0.154).hypot(dy / 0.337) - 1.0).abs() * 0.154 - 0.027;
             let equator = (dy.abs() - 0.029).max(distance - 0.337);
-            let mut globe = coverage(rim.min(longitude).min(equator), pixel);
+            let grid = longitude.min(equator);
+            let mut globe = if connected {
+                // Carve the grid into the disk, leaving a continuous rim.
+                let cutout = (grid + 0.002).max(distance - 0.313);
+                coverage(distance - 0.373, pixel) * (1.0 - coverage(cutout, pixel))
+            } else {
+                coverage(rim.min(grid), pixel)
+            };
 
             let mark = if let Some(badge) = badge {
                 let bx = x - badge.x;
@@ -78,13 +86,7 @@ fn globe_rgba(size: u32, state: TrayVisualState, angle: f32, template: bool) -> 
                     mark
                 }
             } else {
-                // Clear a narrow gap around the slash so it stays readable
-                // where it crosses the globe's meridians and rim.
-                let across = (dx - dy) * std::f32::consts::FRAC_1_SQRT_2;
-                let along = (dx + dy) * std::f32::consts::FRAC_1_SQRT_2;
-                let slash = across.hypot((along.abs() - 0.425).max(0.0)) - 0.040;
-                globe *= 1.0 - coverage(slash - 0.040, pixel);
-                coverage(slash, pixel)
+                0.0
             };
 
             let glyph_alpha = mark + globe * (1.0 - mark);
@@ -94,10 +96,15 @@ fn globe_rgba(size: u32, state: TrayVisualState, angle: f32, template: bool) -> 
                 // A dark backing keeps the white globe readable on light and dark taskbars.
                 let backing = coverage(distance - 0.46, pixel) * (1.0 - glyph_alpha);
                 let alpha = glyph_alpha + backing;
-                let badge_color = badge.map_or([244; 3], |badge| badge.color);
-                for (channel, dark) in badge_color.into_iter().zip([18.0, 27.0, 43.0]) {
-                    let color =
-                        channel as f32 * mark + 244.0 * globe * (1.0 - mark) + dark * backing;
+                let badge_color = badge.map_or(globe_color, |badge| badge.color);
+                for ((badge_channel, globe_channel), dark) in badge_color
+                    .into_iter()
+                    .zip(globe_color)
+                    .zip([18.0, 27.0, 43.0])
+                {
+                    let color = badge_channel as f32 * mark
+                        + globe_channel as f32 * globe * (1.0 - mark)
+                        + dark * backing;
                     rgba.push((color / alpha.max(f32::EPSILON)).round() as u8);
                 }
                 rgba.push((alpha * 255.0).round() as u8);
