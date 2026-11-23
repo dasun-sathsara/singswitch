@@ -27,6 +27,7 @@ chmod 755 "$APP_BUNDLE/Contents/MacOS/sbctl-app" "$APP_BUNDLE/Contents/MacOS/sbc
 
 cp "$ROOT_DIR/resources/macos/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 cp "$ROOT_DIR/assets/icons/app.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+cp "$ROOT_DIR/assets/icons/tray/LICENSE" "$APP_BUNDLE/Contents/Resources/tabler-license.txt"
 
 echo "==> Bundling the managed sing-box binary..."
 "$ROOT_DIR/scripts/fetch-sing-box.sh" "$SINGBOX_PLATFORM" "$APP_BUNDLE/Contents/Resources"
