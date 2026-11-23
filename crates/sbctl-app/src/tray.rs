@@ -211,10 +211,10 @@ impl GlobeSpin {
         let tray = tray.clone();
         let resting = resting.clone();
         self.task = Some(cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
-            // A meridian sweeps across the globe in about three seconds.
+            // 42 frames at 60 ms give a 2.52-second sweep.
             for frame in frames.iter().cycle().skip(1) {
                 cx.background_executor()
-                    .timer(std::time::Duration::from_millis(80))
+                    .timer(std::time::Duration::from_millis(60))
                     .await;
                 let reduce = reduce_motion();
                 let icon = if reduce { &resting } else { frame };
