@@ -6,10 +6,10 @@ use gpui_kit::{App, Window, WindowAppearance, rgb};
 use serde::{Deserialize, Serialize};
 use singswitch_core::error::{Result, SingSwitchError};
 
-pub const MIN_WINDOW_WIDTH: f32 = 760.0;
-pub const MIN_WINDOW_HEIGHT: f32 = 500.0;
-pub const DEFAULT_WINDOW_WIDTH: f32 = 840.0;
-pub const DEFAULT_WINDOW_HEIGHT: f32 = 600.0;
+pub const MIN_WINDOW_WIDTH: f32 = 740.0;
+pub const MIN_WINDOW_HEIGHT: f32 = 440.0;
+pub const DEFAULT_WINDOW_WIDTH: f32 = 820.0;
+pub const DEFAULT_WINDOW_HEIGHT: f32 = 480.0;
 pub const WINDOW_SIZE_EPSILON: f32 = 2.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

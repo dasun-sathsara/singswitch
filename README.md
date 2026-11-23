@@ -1,5 +1,7 @@
 <p align="center">
-  <img src="assets/icons/app-icon.png" width="96" height="96" alt="SingSwitch Icon" />
+  <img src="assets/icons/app-icon.png" width="96" height="96" alt="SingSwitch Dark Icon" />
+  &nbsp;&nbsp;&nbsp;
+  <img src="assets/icons/app-icon-light.png" width="96" height="96" alt="SingSwitch Light Icon" />
 </p>
 
 <h1 align="center">SingSwitch</h1>
@@ -27,7 +29,7 @@
 <br />
 
 <p align="center">
-  <img src="docs/screenshots/01_connections_dark.png" width="840" alt="SingSwitch Connections Dashboard" />
+  <img src="docs/screenshots/hero_connections.png" width="860" alt="SingSwitch Connections Dashboard" />
 </p>
 
 ---
@@ -55,7 +57,7 @@ Manage active routing endpoints, monitor public egress IP addresses with one-cli
 
 | Dark Theme | Light Theme |
 | :---: | :---: |
-| <img src="docs/screenshots/01_connections_dark.png" width="410" alt="Connections Dark" /> | <img src="docs/screenshots/01_connections_light.png" width="410" alt="Connections Light" /> |
+| <img src="docs/screenshots/hero_connections.png" width="410" alt="Connections Dark" /> | <img src="docs/screenshots/01_connections_light.png" width="410" alt="Connections Light" /> |
 
 ### Dual-Mode Configuration Editor
 Edit profiles via guided visual forms or direct JSON with real-time syntax checking and keyboard shortcuts (`⌘S` / `Ctrl+S`).
