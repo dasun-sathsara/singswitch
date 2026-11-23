@@ -1,17 +1,19 @@
 # Bundled typefaces
 
-Two Geist faces under the SIL Open Font License 1.1, from
+Two Geist families under the SIL Open Font License 1.1, from
 [vercel/geist-font](https://github.com/vercel/geist-font) v1.9.2.
 
-- `Geist-Regular.ttf`, `Geist-Bold.ttf`: Geist Sans, proportional. Family name `Geist`. Carries
-  the interface.
-- `GeistStandard-Regular.ttf`, `GeistStandard-Bold.ttf`: Geist Mono, fixed width. Family name
-  `Geist Standard`. Carries values, identifiers, logs and paths, where digits and addresses need
-  to line up under each other.
+- `Geist-*.ttf`: Geist Sans, proportional. Family `Geist`. Carries the interface.
+- `GeistMono-*.ttf`: Geist Mono, fixed width. Family `Geist Mono`. Carries values, identifiers,
+  logs and paths, where digits and addresses need to line up under each other.
 
-Only Regular and Bold are bundled for each, because those are the only weights the app asks for.
-It never requests 500 or 600, which the text system would synthesise.
+Three weights each: Regular 400, Medium 500, Bold 700.
 
-`crates/singswitch-app/src/fonts.rs` embeds all four at compile time. If the assets are missing
-the build still succeeds and text falls back to the platform UI face; the failure is logged
-rather than fatal.
+Medium is the emphasis weight. Geist at 700 is heavier than the Studio Feixen cut the interface
+used to run, and at 13-15px it read as shouting; `fonts::EMPHASIS` points every title, heading,
+profile name and log level at Medium instead. Bold is bundled but currently unused, kept so the
+choice stays available.
+
+`crates/singswitch-app/src/fonts.rs` embeds all six at compile time. If the assets are missing the
+build still succeeds and text falls back to the platform UI face; the failure is logged rather
+than fatal.

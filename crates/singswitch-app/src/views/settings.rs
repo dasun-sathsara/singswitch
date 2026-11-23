@@ -10,6 +10,7 @@ use gpui_kit::{
 };
 use singswitch_core::layout::Layout;
 
+use crate::fonts;
 use crate::state::{AppStore, BannerTone, NoticeOrigin};
 use crate::theme::{ThemePreference, surface};
 
@@ -36,7 +37,12 @@ impl Render for SettingsView {
             .px(px(14.0))
             .py(px(10.0))
             .gap_2()
-            .child(div().text_size(px(19.0)).font_bold().child("Settings"))
+            .child(
+                div()
+                    .text_size(px(19.0))
+                    .font_weight(fonts::EMPHASIS)
+                    .child("Settings"),
+            )
             .when_some(notice, |el, notice| el.child(notice))
             .child(render_appearance_card(settings.theme, &self.store, cx))
             .child(render_behavior_card(&settings, &self.store, cx))
@@ -58,7 +64,7 @@ fn render_appearance_card(
         .child(
             div()
                 .text_base()
-                .font_bold()
+                .font_weight(fonts::EMPHASIS)
                 .text_color(cx.theme().foreground)
                 .child("Appearance"),
         )
@@ -153,7 +159,7 @@ fn render_behavior_card(
         .child(
             div()
                 .text_base()
-                .font_bold()
+                .font_weight(fonts::EMPHASIS)
                 .text_color(cx.theme().foreground)
                 .child("Startup and notifications"),
         )
@@ -287,7 +293,7 @@ fn render_paths_card(
                 .child(
                     div()
                         .text_base()
-                        .font_bold()
+                        .font_weight(fonts::EMPHASIS)
                         .text_color(cx.theme().foreground)
                         .child("System paths"),
                 ),
