@@ -8,6 +8,6 @@ Only Regular and Bold are bundled because only those two weights exist in the
 supplied cuts. The app names these families and never requests 500 or 600,
 which the text system would synthesise.
 
-The binaries are embedded at compile time by `crates/sbctl-app/src/fonts.rs`.
+The binaries are embedded at compile time by `crates/singswitch-app/src/fonts.rs`.
 If the assets are removed, the build still succeeds and text falls back to the
 platform UI face; the failure is logged rather than fatal.

@@ -1,0 +1,52 @@
+[package]
+name = "singswitch-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Desktop app and tray controller for singswitch"
+
+[[bin]]
+name = "singswitch-app"
+path = "src/main.rs"
+
+[dependencies]
+
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+dirs.workspace = true
+gpui-kit.workspace = true
+gpui-tray.workspace = true
+notify.workspace = true
+singswitch-core = { path = "../singswitch-core" }
+serde.workspace = true
+serde_json.workspace = true
+smol.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2.workspace = true
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "NSApplication",
+    "NSRunningApplication",
+    "NSWindow",
+    "NSWorkspace",
+] }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSBundle",
+    "NSObject",
+    "NSString",
+] }
+objc2-user-notifications = { version = "0.3.2", features = [
+    "UNNotificationContent",
+    "UNNotificationRequest",
+    "UNUserNotificationCenter",
+] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+    "Win32_UI_WindowsAndMessaging",
+] }

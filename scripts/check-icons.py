@@ -5,7 +5,7 @@ A missing SVG does not fail the build: `Icon` renders nothing and the button
 silently loses its glyph. This walks every `IconName::` use, resolves it through
 the full Lucide catalog, and checks the path is reachable from either
 `gpui_kit::assets::Assets` (the default bundle) or the `DomainIcons` list in
-`crates/sbctl-app/src/assets.rs`.
+`crates/singswitch-app/src/assets.rs`.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-APP = ROOT / "crates" / "sbctl-app" / "src"
+APP = ROOT / "crates" / "singswitch-app" / "src"
 ASSETS_RS = APP / "assets.rs"
 
 

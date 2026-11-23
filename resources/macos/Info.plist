@@ -5,17 +5,17 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>sbctl</string>
+    <string>SingSwitch</string>
     <key>CFBundleExecutable</key>
-    <string>sbctl-app</string>
+    <string>singswitch-app</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon.icns</string>
     <key>CFBundleIdentifier</key>
-    <string>app.lexiflix.sbctl</string>
+    <string>app.lexiflix.singswitch</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>sbctl</string>
+    <string>SingSwitch</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

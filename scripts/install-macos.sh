@@ -7,10 +7,10 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_SRC="${ROOT_DIR}/dist/sbctl.app"
+APP_SRC="${ROOT_DIR}/dist/SingSwitch.app"
 TARGET_USER="${SUDO_USER:-$USER}"
 SING_BOX_SRC="${APP_SRC}/Contents/Resources/sing-box/sing-box"
-MANAGED_BIN_DIR="/usr/local/libexec/sbctl"
+MANAGED_BIN_DIR="/usr/local/libexec/singswitch"
 SING_BOX_BIN="${MANAGED_BIN_DIR}/sing-box"
 
 if [[ ! -d "$APP_SRC" ]]; then
@@ -23,11 +23,11 @@ if [[ ! -x "$SING_BOX_SRC" ]]; then
     exit 1
 fi
 
-echo "==> Installing /Applications/sbctl.app and /usr/local/bin/sbctl..."
-sudo rm -rf /Applications/sbctl.app
-sudo cp -R "$APP_SRC" /Applications/sbctl.app
+echo "==> Installing /Applications/SingSwitch.app and /usr/local/bin/singswitch..."
+sudo rm -rf /Applications/SingSwitch.app
+sudo cp -R "$APP_SRC" /Applications/SingSwitch.app
 sudo install -d -m 755 /usr/local/bin
-sudo install -m 755 /Applications/sbctl.app/Contents/MacOS/sbctl /usr/local/bin/sbctl
+sudo install -m 755 /Applications/SingSwitch.app/Contents/MacOS/singswitch /usr/local/bin/singswitch
 
 echo "==> Installing the managed sing-box binary..."
 sudo install -d -m 755 -o root -g wheel "$MANAGED_BIN_DIR"
@@ -43,15 +43,15 @@ sudo chmod 644 /var/log/sing-box/error.log /var/log/sing-box/access.log
 
 # Rotate the service logs. sing-box writes at info level with no output cap, so
 # without this they grow without bound for as long as the daemon runs.
-NEWSYSLOG=/etc/newsyslog.d/sbctl.conf
+NEWSYSLOG=/etc/newsyslog.d/singswitch.conf
 sudo tee "$NEWSYSLOG" >/dev/null <<'NEWSYSLOG_EOF'
-# Managed by sbctl. sing-box service logs, rotated weekly or at 10 MB, 5 kept.
+# Managed by singswitch. sing-box service logs, rotated weekly or at 10 MB, 5 kept.
 /var/log/sing-box/error.log   root:wheel  644  5  10240  *  J
 /var/log/sing-box/access.log  root:wheel  644  5  10240  *  J
 NEWSYSLOG_EOF
 sudo chmod 644 "$NEWSYSLOG"
 
-echo "==> Installing LaunchDaemon /Library/LaunchDaemons/app.lexiflix.singbox.plist..."
+echo "==> Installing LaunchDaemon /Library/LaunchDaemons/app.lexiflix.singswitch-daemon.plist..."
 PLIST_TMP="$(mktemp)"
 cat > "$PLIST_TMP" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -59,7 +59,7 @@ cat > "$PLIST_TMP" <<PLIST
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>app.lexiflix.singbox</string>
+    <string>app.lexiflix.singswitch-daemon</string>
     <key>ProgramArguments</key>
     <array>
         <string>${SING_BOX_BIN}</string>
@@ -81,22 +81,22 @@ cat > "$PLIST_TMP" <<PLIST
 </dict>
 </plist>
 PLIST
-sudo install -m 644 -o root -g wheel "$PLIST_TMP" /Library/LaunchDaemons/app.lexiflix.singbox.plist
+sudo install -m 644 -o root -g wheel "$PLIST_TMP" /Library/LaunchDaemons/app.lexiflix.singswitch-daemon.plist
 rm -f "$PLIST_TMP"
 
 echo "==> Installing scoped sudoers rules (visudo checked)..."
 SUDOERS_TMP="$(mktemp)"
-/usr/local/bin/sbctl print-sudoers --user "$TARGET_USER" > "$SUDOERS_TMP"
+/usr/local/bin/singswitch print-sudoers --user "$TARGET_USER" > "$SUDOERS_TMP"
 chmod 0440 "$SUDOERS_TMP"
 visudo -cf "$SUDOERS_TMP"
-sudo install -m 0440 -o root -g wheel "$SUDOERS_TMP" /etc/sudoers.d/sbctl
+sudo install -m 0440 -o root -g wheel "$SUDOERS_TMP" /etc/sudoers.d/singswitch
 rm -f "$SUDOERS_TMP"
 
 echo "==> Registering the LaunchDaemon..."
-PLIST_PATH="/Library/LaunchDaemons/app.lexiflix.singbox.plist"
+PLIST_PATH="/Library/LaunchDaemons/app.lexiflix.singswitch-daemon.plist"
 # Writing the plist does not register the service; without this the daemon is
 # never loaded and re-running the installer cannot fix anything.
-sudo launchctl bootout system/app.lexiflix.singbox >/dev/null 2>&1 || true
+sudo launchctl bootout system/app.lexiflix.singswitch-daemon >/dev/null 2>&1 || true
 sudo launchctl bootstrap system "$PLIST_PATH"
 
-echo "==> Done. Open /Applications/sbctl.app."
+echo "==> Done. Open /Applications/SingSwitch.app."

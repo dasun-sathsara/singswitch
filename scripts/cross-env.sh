@@ -12,17 +12,17 @@ export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
 export SDKROOT="$MAC_SDK"
 
 if ! command -v ld64.lld >/dev/null 2>&1 || ! command -v llvm-ar >/dev/null 2>&1; then
-    SBCTL_CROSS_SHIM_DIR="$(mktemp -d)"
-    export SBCTL_CROSS_SHIM_DIR
+    SINGSWITCH_CROSS_SHIM_DIR="$(mktemp -d)"
+    export SINGSWITCH_CROSS_SHIM_DIR
     if command -v ld64.lld-18 >/dev/null 2>&1; then
-        ln -sf "$(command -v ld64.lld-18)" "${SBCTL_CROSS_SHIM_DIR}/ld64.lld"
+        ln -sf "$(command -v ld64.lld-18)" "${SINGSWITCH_CROSS_SHIM_DIR}/ld64.lld"
     elif command -v lld-18 >/dev/null 2>&1; then
-        ln -sf "$(command -v lld-18)" "${SBCTL_CROSS_SHIM_DIR}/ld64.lld"
+        ln -sf "$(command -v lld-18)" "${SINGSWITCH_CROSS_SHIM_DIR}/ld64.lld"
     fi
     if command -v llvm-ar-18 >/dev/null 2>&1; then
-        ln -sf "$(command -v llvm-ar-18)" "${SBCTL_CROSS_SHIM_DIR}/llvm-ar"
+        ln -sf "$(command -v llvm-ar-18)" "${SINGSWITCH_CROSS_SHIM_DIR}/llvm-ar"
     fi
-    export PATH="${SBCTL_CROSS_SHIM_DIR}:${PATH}"
+    export PATH="${SINGSWITCH_CROSS_SHIM_DIR}:${PATH}"
 fi
 
 CLANG_BIN="${CLANG_BIN:-$(command -v clang)}"

@@ -6,14 +6,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$InstallDir = "$env:ProgramFiles\sbctl"
+$InstallDir = "$env:ProgramFiles\singswitch"
 $SingBoxData = "$env:ProgramData\sing-box"
-$SbctlState = "$env:ProgramData\sbctl"
+$SingSwitchState = "$env:ProgramData\singswitch"
 
-Write-Host "==> Stopping and removing sbctl-agent and sing-box services..."
-if (Get-Service -Name "sbctl-agent" -ErrorAction SilentlyContinue) {
-    Stop-Service -Name "sbctl-agent" -Force -ErrorAction SilentlyContinue
-    sc.exe delete "sbctl-agent" | Out-Null
+Write-Host "==> Stopping and removing singswitch-agent and sing-box services..."
+if (Get-Service -Name "singswitch-agent" -ErrorAction SilentlyContinue) {
+    Stop-Service -Name "singswitch-agent" -Force -ErrorAction SilentlyContinue
+    sc.exe delete "singswitch-agent" | Out-Null
 }
 if (Get-Service -Name "sing-box" -ErrorAction SilentlyContinue) {
     Stop-Service -Name "sing-box" -Force -ErrorAction SilentlyContinue
@@ -21,16 +21,16 @@ if (Get-Service -Name "sing-box" -ErrorAction SilentlyContinue) {
 }
 
 Write-Host "==> Removing Start Menu shortcut, HKCU Run entry, and binaries..."
-Remove-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\sbctl.lnk" -Force -ErrorAction SilentlyContinue
-Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "sbctl" -ErrorAction SilentlyContinue
+Remove-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\singswitch.lnk" -Force -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "singswitch" -ErrorAction SilentlyContinue
 Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
 # The managed sing-box copy is ours, unlike profiles and logs, so it always goes.
-Remove-Item -Path "$SbctlState\bin" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$SingSwitchState\bin" -Recurse -Force -ErrorAction SilentlyContinue
 
 if ($Purge) {
-    Write-Host "==> Removing $SingBoxData and $SbctlState..."
+    Write-Host "==> Removing $SingBoxData and $SingSwitchState..."
     Remove-Item -Path $SingBoxData -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path $SbctlState  -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path $SingSwitchState  -Recurse -Force -ErrorAction SilentlyContinue
 } else {
     Write-Host "==> Keeping $SingBoxData\profiles (pass -Purge to remove)."
 }
