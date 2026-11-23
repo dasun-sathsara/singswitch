@@ -1,25 +1,32 @@
 //! Embedded typefaces.
 //!
-//! Feixen Standard for the interface and Geist Standard for values, identifiers,
-//! logs, and paths. Both ship only Regular and Bold, so the design uses two
-//! weights and never asks the text system for 500 or 600, which would be
-//! synthesised and look wrong at 12–15px.
+//! Two Geist faces, doing different jobs. Geist Sans is proportional and carries
+//! the interface; Geist Mono is fixed-width and carries values, identifiers,
+//! logs and paths, where digits and addresses need to line up in columns under
+//! other digits and addresses.
+//!
+//! Each ships only Regular and Bold, so the design uses two weights per face and
+//! never asks the text system for 500 or 600, which would be synthesised and
+//! look wrong at 12-15px.
 //!
 //! gpui resolves a font by a single family name and then walks its own fallback
-//! stack (`.ZedSans`, Helvetica, Segoe UI, …) for anything it cannot find, so the
-//! families are named plainly here rather than as a CSS-style chain. If the
+//! stack (`.ZedSans`, Helvetica, Segoe UI, ...) for anything it cannot find, so
+//! the families are named plainly here rather than as a CSS-style chain. If the
 //! bundled files ever fail to register, text still renders in the platform face.
 
 use gpui_kit::App;
 use gpui_kit::SharedString;
 
-/// Interface face.
-pub const UI_FAMILY: &str = "Feixen Standard";
-/// Face for values, identifiers, logs, and paths.
+/// Proportional face for the interface.
+pub const UI_FAMILY: &str = "Geist";
+/// Fixed-width face for values, identifiers, logs and paths.
+///
+/// The supplied cut is Geist Mono, but its internal family name is
+/// "Geist Standard", so that is what the text system registers.
 pub const MONO_FAMILY: &str = "Geist Standard";
 
-const UI_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/FeixenStandard-Regular.ttf");
-const UI_BOLD: &[u8] = include_bytes!("../../../assets/fonts/FeixenStandard-Bold.ttf");
+const UI_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Geist-Regular.ttf");
+const UI_BOLD: &[u8] = include_bytes!("../../../assets/fonts/Geist-Bold.ttf");
 const MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/GeistStandard-Regular.ttf");
 const MONO_BOLD: &[u8] = include_bytes!("../../../assets/fonts/GeistStandard-Bold.ttf");
 
