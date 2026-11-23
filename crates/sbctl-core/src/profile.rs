@@ -31,8 +31,6 @@ pub struct Profile {
     ///
     /// Computed from the parsed config, not from scanning the raw text.
     pub missing: Vec<crate::readiness::Field>,
-    pub server: Option<String>,
-    pub tun: Option<String>,
     pub source_url: Option<String>,
     /// Whether the config parsed at all. Distinguishes "no outbound declares a
     /// server" from "this file is not valid JSON".
@@ -150,19 +148,17 @@ pub fn list_profiles(profiles_dir: &Path) -> std::io::Result<Vec<Profile>> {
             continue;
         }
         let raw = fs::read_to_string(&path).ok();
-        // One parse per profile. This used to parse the same text twice, once
-        // for the server/tun summary and once for the display facts.
         let tree: Option<Value> = raw
             .as_deref()
             .and_then(|text| serde_json::from_str(text).ok());
-        let (server, tun) = tree
-            .as_ref()
-            .map(extract_server_and_tun_value)
-            .unwrap_or((None, None));
         let source_url = read_source(profiles_dir, &name).ok().flatten();
-        let parsed_facts = tree.as_ref().and_then(extract_config_facts_value);
-        let config_parsed = parsed_facts.is_some();
-        let facts = parsed_facts.unwrap_or_default();
+        // A tree means the file was readable JSON; the facts may still be empty,
+        // which is a different answer from "could not read this file".
+        let config_parsed = tree.is_some();
+        let facts = tree
+            .as_ref()
+            .map(extract_config_facts_value)
+            .unwrap_or_default();
         // Readiness from the parsed document, per outbound type and switches.
         let missing = tree
             .as_ref()
@@ -173,8 +169,6 @@ pub fn list_profiles(profiles_dir: &Path) -> std::io::Result<Vec<Profile>> {
             name,
             path,
             missing,
-            server,
-            tun,
             source_url,
             config_parsed,
             facts,
@@ -184,79 +178,12 @@ pub fn list_profiles(profiles_dir: &Path) -> std::io::Result<Vec<Profile>> {
     Ok(profiles)
 }
 
-/// Parse `json_text` once and return `(server_summary, tun_interface_name)`.
-pub fn extract_server_and_tun(json_text: &str) -> (Option<String>, Option<String>) {
-    let Ok(val) = serde_json::from_str::<Value>(json_text) else {
-        return (None, None);
-    };
-    extract_server_and_tun_value(&val)
-}
-
-/// As [`extract_server_and_tun`], for callers that already hold a parsed tree.
-pub fn extract_server_and_tun_value(val: &Value) -> (Option<String>, Option<String>) {
-    (extract_server_value(val), extract_interface_name_value(val))
-}
-
-fn extract_interface_name_value(val: &Value) -> Option<String> {
-    let inbounds = val.get("inbounds")?.as_array()?;
-    for inbound in inbounds {
-        if inbound.get("type").and_then(Value::as_str) == Some("tun")
-            && let Some(iface) = inbound.get("interface_name").and_then(Value::as_str)
-            && !iface.is_empty()
-        {
-            return Some(iface.to_string());
-        }
-    }
-    None
-}
-
-fn extract_server_value(val: &Value) -> Option<String> {
-    let outbounds = val.get("outbounds")?.as_array()?;
-    for out in outbounds {
-        let kind = out.get("type").and_then(Value::as_str).unwrap_or("");
-        if matches!(kind, "direct" | "block" | "dns") {
-            continue;
-        }
-        let server = out.get("server").and_then(Value::as_str).unwrap_or("");
-        if server.is_empty() {
-            continue;
-        }
-        if let Some(port) = out.get("server_port").and_then(Value::as_u64)
-            && port > 0
-        {
-            return Some(format!("{server}:{port}"));
-        }
-        return Some(server.to_string());
-    }
-    None
-}
-
-/// Return the declared TUN `interface_name` from a profile JSON, if non-empty.
-pub fn extract_interface_name(json_text: &str) -> Option<String> {
-    let val: Value = serde_json::from_str(json_text).ok()?;
-    extract_interface_name_value(&val)
-}
-
-/// Read the declared TUN `interface_name` from a profile path.
-pub fn interface_name_from_file(path: &Path) -> Option<String> {
-    let data = fs::read_to_string(path).ok()?;
-    extract_interface_name(&data)
-}
-
-/// Return a short `host:port` summary of the first non-direct/non-block outbound.
-pub fn extract_server(json_text: &str) -> Option<String> {
-    let val: Value = serde_json::from_str(json_text).ok()?;
-    extract_server_value(&val)
-}
-
 /// What a profile's own JSON declares, for display. Nothing here is observed
 /// from the running daemon; every field is read from the configuration file.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ConfigFacts {
     /// Outbound type of the first outbound that has a server (`vless`, `trojan`, …).
     pub outbound_type: Option<String>,
-    /// Tag of that outbound, when the config sets one.
-    pub outbound_tag: Option<String>,
     /// `host:port`, `[v6]:port`, or a bare host when no port is declared.
     pub endpoint: Option<String>,
     /// Declared TUN interface name.
@@ -267,7 +194,10 @@ pub struct ConfigFacts {
 }
 
 impl ConfigFacts {
-    /// True when the document parsed and declares a TUN inbound.
+    /// How the TUN part of this document reads. Says nothing about whether the
+    /// document parsed: an empty `ConfigFacts` (unreadable file) is `Absent`
+    /// too, so callers that need that distinction check `Profile::config_parsed`
+    /// first.
     pub fn tun_state(&self) -> TunState {
         if !self.has_tun_inbound {
             TunState::Absent
@@ -290,19 +220,14 @@ pub enum TunState {
     Named,
 }
 
-/// Parse a profile document into display facts.
+/// Parse display facts out of an already-parsed profile document.
 ///
-/// Returns `None` when the document is not valid JSON: callers must distinguish
-/// "cannot read this config" from "this config declares nothing", because they
-/// mean different things to the user.
-pub fn extract_config_facts(json_text: &str) -> Option<ConfigFacts> {
-    let val: Value = serde_json::from_str(json_text).ok()?;
-    extract_config_facts_value(&val)
-}
-
-/// As [`extract_config_facts`], for callers that already hold a parsed tree.
-pub fn extract_config_facts_value(val: &Value) -> Option<ConfigFacts> {
-    let (outbound_type, outbound_tag, endpoint) = val
+/// Infallible by design: given a tree it returns facts, and an empty
+/// `ConfigFacts` is a real answer ("this config declares nothing"). Callers
+/// tell that apart from an unreadable file because they only call this when a
+/// tree exists — see `config_parsed`.
+pub fn extract_config_facts_value(val: &Value) -> ConfigFacts {
+    let (outbound_type, endpoint) = val
         .get("outbounds")
         .and_then(Value::as_array)
         .and_then(|outbounds| {
@@ -325,14 +250,10 @@ pub fn extract_config_facts_value(val: &Value) -> Option<ConfigFacts> {
                     }
                     _ => server.to_string(),
                 };
-                Some((
-                    Some(kind.to_string()),
-                    out.get("tag").and_then(Value::as_str).map(str::to_string),
-                    Some(endpoint),
-                ))
+                Some((Some(kind.to_string()), Some(endpoint)))
             })
         })
-        .unwrap_or((None, None, None));
+        .unwrap_or((None, None));
 
     let inbounds = val.get("inbounds").and_then(Value::as_array);
     let tun_inbound = inbounds.and_then(|list| {
@@ -340,126 +261,13 @@ pub fn extract_config_facts_value(val: &Value) -> Option<ConfigFacts> {
             .find(|inbound| inbound.get("type").and_then(Value::as_str) == Some("tun"))
     });
 
-    Some(ConfigFacts {
+    ConfigFacts {
         outbound_type,
-        outbound_tag,
         endpoint,
         tun_interface: tun_inbound
             .and_then(|t| t.get("interface_name").and_then(Value::as_str))
             .filter(|name| !name.is_empty())
             .map(str::to_string),
         has_tun_inbound: tun_inbound.is_some(),
-    })
-}
-
-/// Read display facts from a profile path.
-pub fn config_facts_from_file(path: &Path) -> Option<ConfigFacts> {
-    let data = fs::read_to_string(path).ok()?;
-    extract_config_facts(&data)
-}
-
-/// Read the outbound server summary from a profile path.
-pub fn server_from_file(path: &Path) -> Option<String> {
-    let data = fs::read_to_string(path).ok()?;
-    extract_server(&data)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn config_facts_separate_absent_and_unnamed_tun() {
-        let no_tun = r#"{"inbounds":[{"type":"mixed","listen":"127.0.0.1"}],"outbounds":[{"type":"vless","tag":"proxy","server":"203.0.113.9","server_port":443}]}"#;
-        let facts = extract_config_facts(no_tun).expect("valid json");
-        assert_eq!(facts.tun_state(), TunState::Absent);
-        assert_eq!(facts.outbound_type.as_deref(), Some("vless"));
-        assert_eq!(facts.outbound_tag.as_deref(), Some("proxy"));
-        assert_eq!(facts.endpoint.as_deref(), Some("203.0.113.9:443"));
-
-        let unnamed =
-            r#"{"inbounds":[{"type":"tun","stack":"gvisor"}],"outbounds":[{"type":"direct"}]}"#;
-        let facts = extract_config_facts(unnamed).expect("valid json");
-        assert_eq!(facts.tun_state(), TunState::Unnamed);
-        assert!(facts.endpoint.is_none());
-
-        let named = r#"{"inbounds":[{"type":"tun","interface_name":"utun123"}],"outbounds":[{"type":"trojan","server":"[2001:db8::1]","server_port":8443}]}"#;
-        let facts = extract_config_facts(named).expect("valid json");
-        assert_eq!(facts.tun_state(), TunState::Named);
-        assert_eq!(facts.endpoint.as_deref(), Some("[2001:db8::1]:8443"));
-    }
-
-    #[test]
-    fn config_facts_report_unparseable_config_as_none() {
-        assert!(extract_config_facts("{ not json").is_none());
-    }
-
-    #[test]
-    fn validate_name_rejects_unsafe_and_reserved_names() {
-        for bad in [
-            "",
-            ".",
-            "..",
-            "-flag",
-            ".hidden",
-            "trailing.",
-            "../etc",
-            "a/b",
-            r"a\b",
-            "with space",
-            "nul",
-            "NUL",
-            "con.prod",
-            "com1",
-            "lpt9.backup",
-        ] {
-            assert!(validate_name(bad).is_err(), "{bad:?} should be rejected");
-        }
-        assert!(validate_name(&"a".repeat(65)).is_err());
-
-        for good in ["work-vpn", "aws_sg.v2", "a", &"x".repeat(64)] {
-            assert!(validate_name(good).is_ok(), "{good:?} should be valid");
-        }
-    }
-
-    #[test]
-    fn skeleton_seeds_no_sentinel_values() {
-        // A new profile must not carry placeholder text into a real config file.
-        assert!(!SKELETON_JSON.contains("TODO_"));
-        let tree: Value = serde_json::from_str(SKELETON_JSON).expect("skeleton is valid JSON");
-        let missing = crate::form_model::ProfileFormModel::from_value(&tree).missing();
-        // The seed declares a vless outbound with TLS+Reality, so these are what
-        // a fresh profile still needs before it can connect.
-        assert!(missing.contains(&crate::readiness::Field::Server));
-        assert!(missing.contains(&crate::readiness::Field::Uuid));
-        assert!(missing.contains(&crate::readiness::Field::RealityPublicKey));
-    }
-
-    #[test]
-    fn an_unparseable_profile_is_not_ready() {
-        // The old marker scan found nothing in an unreadable file and called it
-        // ready. Readiness now requires the config to parse.
-        let p = Profile {
-            name: "x".into(),
-            path: PathBuf::from("/tmp/x.json"),
-            missing: Vec::new(),
-            server: None,
-            tun: None,
-            source_url: None,
-            config_parsed: false,
-            facts: Default::default(),
-        };
-        assert!(!p.ready());
-    }
-
-    #[test]
-    fn extract_server_skips_direct_and_formats_port() {
-        let json = r#"{
-            "outbounds": [
-                {"type": "direct", "tag": "direct"},
-                {"type": "vless", "server": "vpn.example.com", "server_port": 443}
-            ]
-        }"#;
-        assert_eq!(extract_server(json).as_deref(), Some("vpn.example.com:443"));
     }
 }

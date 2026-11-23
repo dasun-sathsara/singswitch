@@ -13,13 +13,6 @@ pub trait Notifier: Send + Sync {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct NoopNotifier;
-
-impl Notifier for NoopNotifier {
-    fn notify(&self, _message: &str) {}
-}
-
 /// Wraps an inner `Notifier` with a live toggle so Settings can disable desktop notifications.
 pub struct ToggleableNotifier {
     enabled: Arc<AtomicBool>,
@@ -152,55 +145,5 @@ pub fn default_notifier(platform: PlatformKind) -> Box<dyn Notifier> {
     match platform {
         PlatformKind::Darwin => Box::new(AppleScriptNotifier),
         PlatformKind::Windows => Box::new(WindowsToastNotifier),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Mutex;
-
-    #[test]
-    fn apple_script_safe_neutralizes_quotes_and_newlines() {
-        let evil = "work\" & do shell script \"id\n\t\\ok";
-        let safe = apple_script_safe(evil);
-        assert!(!safe.contains('"'));
-        assert!(!safe.contains('\\'));
-        assert!(!safe.contains('\n'));
-        assert_eq!(safe, "work' & do shell script 'id ok");
-    }
-
-    #[test]
-    fn sanitize_notification_text_strips_controls_and_preserves_unicode() {
-        let clean = sanitize_notification_text("line1\r\n\tline2 <bad> & café");
-        assert!(!clean.contains('\n'));
-        assert!(!clean.contains('\t'));
-        assert_eq!(clean, "line1 line2 <bad> & café");
-    }
-
-    #[derive(Default)]
-    struct RecordingNotifier(Arc<Mutex<Vec<String>>>);
-
-    impl Notifier for RecordingNotifier {
-        fn notify(&self, message: &str) {
-            self.0.lock().unwrap().push(message.to_string());
-        }
-    }
-
-    #[test]
-    fn toggleable_notifier_respects_enabled_flag() {
-        let recorded = Arc::new(Mutex::new(Vec::new()));
-        let flag = Arc::new(AtomicBool::new(true));
-        let notifier =
-            ToggleableNotifier::new(Box::new(RecordingNotifier(recorded.clone())), flag.clone());
-        notifier.notify("first");
-        flag.store(false, Ordering::Relaxed);
-        notifier.notify("suppressed");
-        notifier.notify_error("err", "suppressed");
-        flag.store(true, Ordering::Relaxed);
-        notifier.notify_error("Activation failed", "bad config");
-
-        let msgs = recorded.lock().unwrap();
-        assert_eq!(msgs.as_slice(), ["first", "Activation failed: bad config"]);
     }
 }

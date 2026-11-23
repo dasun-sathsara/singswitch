@@ -55,6 +55,9 @@ impl TrayIcons {
 #[derive(Clone, PartialEq, Eq)]
 struct MenuFingerprint {
     running: bool,
+    /// The first answer can equal the placeholder, so nothing else in this
+    /// fingerprint changes when "Checking…" must stop being shown.
+    probing: bool,
     visual: TrayVisualState,
     active: Option<String>,
     selected: Option<String>,
@@ -74,6 +77,7 @@ impl MenuFingerprint {
             .collect();
         Self {
             running: store.snapshot.running,
+            probing: store.is_probing(),
             visual: store.tray_visual_state(),
             active: store.snapshot.active.clone(),
             selected: store.selected_profile.clone(),
@@ -90,25 +94,39 @@ pub struct TrayController {
 impl TrayController {
     pub fn install(store: &Entity<AppStore>, cx: &mut App) -> gpui_tray::Result<Self> {
         let icons = TrayIcons::build_all()?;
-        let (initial_visual, initial_tooltip, initial_fp) = {
+        let (initial_visual, initial_tooltip, initial_fp, probing) = {
             let s = store.read(cx);
             (
                 s.tray_visual_state(),
                 s.tray_tooltip(),
                 MenuFingerprint::from_store(s),
+                s.is_probing(),
             )
         };
 
         let store_for_menu = store.clone();
         let tray = Tray::builder()
-            .icon(icons.get(initial_visual))
+            // The first probe has not answered yet, so do not install a state
+            // the app has not observed.
+            .icon(if probing {
+                fallback_icon(TrayVisualState::Transitioning, &icons.get(initial_visual))
+            } else {
+                icons.get(initial_visual)
+            })
             .tooltip(initial_tooltip.clone())
             .on_activate(OpenMainWindow)
             .menu(move |cx| build_tray_menu(store_for_menu.read(cx)))
             .build(cx)?;
         let tray_for_obs = tray.clone();
 
-        let mut prev_visual = initial_visual;
+        // Start from what is actually on screen: while probing the icon is the
+        // neutral one, so a first probe that settles on Disconnected must still
+        // replace it.
+        let mut prev_visual = if probing {
+            TrayVisualState::Transitioning
+        } else {
+            initial_visual
+        };
         let mut prev_tooltip = initial_tooltip;
         let mut prev_fp = initial_fp;
 
@@ -149,21 +167,27 @@ const INLINE_PROFILE_LIMIT: usize = 4;
 fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
     let snap = &store.snapshot;
     let visual = store.tray_visual_state();
-    let busy = visual == TrayVisualState::Transitioning;
+    // Ask the store rather than re-deriving "busy" from the visual state.
+    let busy = store.is_busy();
     let live = snap.active.as_deref().filter(|_| snap.running);
-    let status = match visual {
-        TrayVisualState::Connected => {
-            live.map_or_else(|| "Connected".into(), |name| format!("Connected to {name}"))
+    let status = if store.is_probing() {
+        // Nothing has been observed yet; naming a state here would be a guess.
+        "Checking…".to_string()
+    } else {
+        match visual {
+            TrayVisualState::Connected => {
+                live.map_or_else(|| "Connected".into(), |name| format!("Connected to {name}"))
+            }
+            TrayVisualState::Disconnected => "Disconnected".into(),
+            TrayVisualState::Transitioning => "Updating connection…".into(),
+            TrayVisualState::Broken => "Connection issue".into(),
         }
-        TrayVisualState::Disconnected => "Disconnected".into(),
-        TrayVisualState::Transitioning => "Updating connection…".into(),
-        TrayVisualState::Broken => "Connection issue".into(),
     };
     let mut items = vec![MenuItem::action(status, Noop).disabled(true)];
     let target = (!snap.running)
         .then(|| store.ready_connection_target())
         .flatten();
-    let unavailable = busy || store.init_error.is_some();
+    let unavailable = busy;
 
     if snap.running {
         items.push(MenuItem::action("Disconnect", DisconnectService).disabled(unavailable));

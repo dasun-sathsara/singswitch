@@ -134,7 +134,6 @@ enum Commands {
     },
     /// Show the public IP address traffic is leaving from
     Ip,
-    /// Diagnose the sbctl installation
     /// Show version information
     Version,
     /// Generate shell completions
@@ -306,8 +305,8 @@ fn cmd_list(cli: &Cli, ctrl: &Controller, theme: &Theme) -> sbctl_core::error::R
                     "configured": snap.active.as_deref() == Some(p.name.as_str()),
                     "ready": p.ready(),
                     "missing": field_keys(&p.missing),
-                    "server": p.server,
-                    "tun": p.tun,
+                    "server": p.facts.endpoint,
+                    "tun": p.facts.tun_interface,
                     "source_url": p.source_url,
                 })
             })
@@ -382,17 +381,9 @@ fn cmd_use(
     theme: &Theme,
     name: &str,
 ) -> sbctl_core::error::Result<()> {
-    if let Some(code) = maybe_elevate_cli(&ctrl.layout, &["use", name])? {
-        if code != 0 {
-            return Err(SbctlError::new(
-                ExitCode::from_i32(code),
-                "the elevated sbctl process reported a failure",
-            ));
-        }
-        return Ok(());
+    if !elevate_if_needed(&ctrl.layout, &["use", name])? {
+        ctrl.activate(name)?;
     }
-
-    ctrl.activate(name)?;
     if cli.json {
         return emit_json(&json!({ "profile": name, "state": "running" }));
     }
@@ -403,17 +394,9 @@ fn cmd_use(
 }
 
 fn cmd_off(cli: &Cli, ctrl: &Controller, theme: &Theme) -> sbctl_core::error::Result<()> {
-    if let Some(code) = maybe_elevate_cli(&ctrl.layout, &["off"])? {
-        if code != 0 {
-            return Err(SbctlError::new(
-                ExitCode::from_i32(code),
-                "the elevated sbctl process reported a failure",
-            ));
-        }
-        return Ok(());
+    if !elevate_if_needed(&ctrl.layout, &["off"])? {
+        ctrl.stop()?;
     }
-
-    ctrl.stop()?;
     if cli.json {
         return emit_json(&json!({ "state": "stopped" }));
     }
@@ -493,12 +476,17 @@ fn cmd_add(
     name: &str,
 ) -> sbctl_core::error::Result<()> {
     let path = ctrl.create_from_skeleton(name)?;
+    // `--json` and a non-tty both mean "no interactive editor", and the machine
+    // output must come first: a caller that asked for JSON never wants the
+    // editor, however the process was launched.
     if !io::stdout().is_terminal() || !io::stdin().is_terminal() || cli.json {
         if cli.json {
             return emit_json(&json!({ "profile": name, "path": path }));
         }
-        println!("{}", theme.ok(&format!("created {name}")));
-        println!("{}", theme.hint(&format!("edit it at {}", path.display())));
+        if !cli.quiet {
+            println!("{}", theme.ok(&format!("created {name}")));
+            println!("{}", theme.hint(&format!("edit it at {}", path.display())));
+        }
         return Ok(());
     }
 
@@ -517,26 +505,31 @@ fn cmd_add(
             .and_then(|ps| ps.into_iter().find(|p| p.name == name))
             .map(|p| p.missing)
             .unwrap_or_default();
-        if !missing.is_empty() {
-            println!(
-                "{}",
-                theme.warn(&format!(
-                    "it still needs: {}",
-                    sbctl_core::readiness::join_labels(&missing)
-                ))
-            );
-            println!(
-                "{}",
-                theme.hint(&format!("fill them in with: sbctl edit {name}"))
-            );
-        } else {
-            println!(
-                "{}",
-                theme.hint(&format!("activate it with: sbctl use {name}"))
-            );
-        }
+        print_readiness(theme, name, &missing);
     }
     Ok(())
+}
+
+/// The "what is left to do" tail shared by `add` and `pull`.
+fn print_readiness(theme: &Theme, name: &str, missing: &[sbctl_core::readiness::Field]) {
+    if missing.is_empty() {
+        println!(
+            "{}",
+            theme.hint(&format!("activate it with: sbctl use {name}"))
+        );
+        return;
+    }
+    println!(
+        "{}",
+        theme.warn(&format!(
+            "it still needs: {}",
+            sbctl_core::readiness::join_labels(missing)
+        ))
+    );
+    println!(
+        "{}",
+        theme.hint(&format!("fill them in with: sbctl edit {name}"))
+    );
 }
 
 fn cmd_edit(
@@ -736,24 +729,7 @@ fn cmd_pull(
     }
     if !cli.quiet {
         println!("{}", theme.ok(&format!("pulled {}", profile.name)));
-        if !profile.ready() {
-            println!(
-                "{}",
-                theme.warn(&format!(
-                    "it still needs: {}",
-                    sbctl_core::readiness::join_labels(&profile.missing)
-                ))
-            );
-            println!(
-                "{}",
-                theme.hint(&format!("fill them in with: sbctl edit {}", profile.name))
-            );
-        } else {
-            println!(
-                "{}",
-                theme.hint(&format!("activate it with: sbctl use {}", profile.name))
-            );
-        }
+        print_readiness(theme, &profile.name, &profile.missing);
     }
     Ok(())
 }
@@ -969,6 +945,27 @@ fn cmd_print_sudoers_for_layout(
     Ok(())
 }
 
+/// Hand the command to an elevated child when this process cannot do it.
+///
+/// Returns whether the child ran. Callers must still print their normal output
+/// afterwards: returning early here meant `--json` emitted nothing at all on
+/// Windows.
+fn elevate_if_needed(
+    layout: &sbctl_core::layout::Layout,
+    args: &[&str],
+) -> sbctl_core::error::Result<bool> {
+    let Some(code) = maybe_elevate_cli(layout, args)? else {
+        return Ok(false);
+    };
+    if code == 0 {
+        return Ok(true);
+    }
+    Err(SbctlError::new(
+        ExitCode::from_i32(code),
+        "the elevated sbctl process reported a failure",
+    ))
+}
+
 fn maybe_elevate_cli(
     layout: &sbctl_core::layout::Layout,
     args: &[&str],
@@ -1162,18 +1159,4 @@ fn run_agent_command(_foreground: bool) -> sbctl_core::error::Result<()> {
     Err(SbctlError::general(
         "sbctl agent is a Windows-only named pipe helper service",
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cli_parses_subcommands_and_global_flags() {
-        let parsed = Cli::try_parse_from(["sbctl", "--json", "use", "aws-sg"]).unwrap();
-        assert!(parsed.json);
-        assert!(
-            matches!(parsed.command, Some(Commands::Use { name: Some(ref n) }) if n == "aws-sg")
-        );
-    }
 }

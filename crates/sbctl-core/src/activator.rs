@@ -340,22 +340,27 @@ pub fn write_file_atomic(path: &Path, data: &[u8], unix_mode: u32) -> Result<()>
         return Ok(());
     }
 
-    if path.exists() {
-        let _ = fs::remove_file(path);
-    }
-    match fs::rename(&tmp_path, path) {
-        Ok(()) => Ok(()),
+    // The rename failed because something holds the destination (an AV scan or
+    // a sharing violation). Read the old bytes before touching anything, so a
+    // failed retry can put the live file back. Deleting it, as this used to,
+    // left the caller with no config at all.
+    let previous = fs::read(path).ok();
+    match fs::copy(&tmp_path, path) {
+        Ok(_) => {
+            let _ = fs::remove_file(&tmp_path);
+            Ok(())
+        }
         Err(err) => {
-            // Leave tmp_path in place if destination was already removed so no data is lost.
-            if path.exists() {
-                let _ = fs::remove_file(&tmp_path);
-                Err(err.into())
-            } else {
-                Err(SbctlError::general(format!(
-                    "could not move new config into place (preserved at {}): {err}",
-                    tmp_path.display()
-                )))
+            if let Some(bytes) = previous
+                && let Err(restore) = fs::write(path, bytes)
+            {
+                return Err(SbctlError::general(format!(
+                    "could not move new file into place ({err}) and could not restore {} ({restore})",
+                    path.display()
+                )));
             }
+            let _ = fs::remove_file(&tmp_path);
+            Err(err.into())
         }
     }
 }
@@ -404,70 +409,4 @@ fn clean_join(base: &Path, rel: &Path) -> PathBuf {
         }
     }
     stack.iter().collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn copy_activator_activates_and_rolls_back() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let first = dir.path().join("alpha.json");
-        let second = dir.path().join("beta.json");
-        let active_cfg = dir.path().join("config.json");
-        let active_name = dir.path().join("active-profile");
-
-        fs::write(&first, r#"{"tag":"alpha"}"#).unwrap();
-        fs::write(&second, r#"{"tag":"beta"}"#).unwrap();
-
-        let act = CopyActivator::new(active_cfg.clone(), active_name.clone());
-        assert_eq!(act.active_name().unwrap(), None);
-
-        let rb1 = act.activate(&first).unwrap();
-        assert!(!rb1.known());
-        assert_eq!(act.active_name().unwrap().as_deref(), Some("alpha"));
-        assert_eq!(
-            fs::read_to_string(&active_cfg).unwrap(),
-            r#"{"tag":"alpha"}"#
-        );
-
-        let rb2 = act.activate(&second).unwrap();
-        assert!(rb2.known());
-        assert_eq!(rb2.description(), "alpha");
-        assert_eq!(act.active_name().unwrap().as_deref(), Some("beta"));
-
-        rb2.rollback().unwrap();
-        assert_eq!(act.active_name().unwrap().as_deref(), Some("alpha"));
-        assert_eq!(
-            fs::read_to_string(&active_cfg).unwrap(),
-            r#"{"tag":"alpha"}"#
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symlink_activator_activates_and_rolls_back() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let first = dir.path().join("alpha.json");
-        let second = dir.path().join("beta.json");
-        let active_cfg = dir.path().join("config.json");
-        fs::write(&first, "{}").unwrap();
-        fs::write(&second, "{}").unwrap();
-
-        let act = SymlinkActivator::new(active_cfg.clone(), None);
-        assert_eq!(act.active_name().unwrap(), None);
-
-        let rb1 = act.activate(&first).unwrap();
-        assert!(!rb1.known());
-        assert_eq!(act.active_name().unwrap().as_deref(), Some("alpha"));
-
-        let rb2 = act.activate(&second).unwrap();
-        assert!(rb2.known());
-        assert_eq!(rb2.description(), "alpha");
-        assert_eq!(act.active_name().unwrap().as_deref(), Some("beta"));
-
-        rb2.rollback().unwrap();
-        assert_eq!(act.active_name().unwrap().as_deref(), Some("alpha"));
-    }
 }

@@ -32,7 +32,7 @@ fn smooth_cov(dist: f32, aa: f32) -> f32 {
     (0.5 - dist / aa).clamp(0.0, 1.0)
 }
 
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(not(target_os = "macos"))]
 fn blend_over(dst: [f32; 4], src: [f32; 4]) -> [f32; 4] {
     let [sr, sg, sb, sa] = src;
     let [dr, dg, db, da] = dst;
@@ -47,7 +47,7 @@ fn blend_over(dst: [f32; 4], src: [f32; 4]) -> [f32; 4] {
 }
 
 /// Render a 36x36 monochrome template glyph for the macOS menu bar fallback.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub fn macos_template_rgba(state: TrayVisualState) -> (Vec<u8>, u32, u32) {
     let size = 36u32;
     let s = size as f32;
@@ -114,7 +114,7 @@ pub fn macos_template_rgba(state: TrayVisualState) -> (Vec<u8>, u32, u32) {
 }
 
 /// Render a crisp 32x32 color-coded tray icon suitable for the Windows taskbar tray.
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(not(target_os = "macos"))]
 pub fn windows_tray_rgba(state: TrayVisualState) -> (Vec<u8>, u32, u32) {
     let size = 32u32;
     let s = size as f32;

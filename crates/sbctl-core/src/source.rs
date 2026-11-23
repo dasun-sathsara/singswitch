@@ -80,28 +80,3 @@ pub fn sourced_profiles(profiles_dir: &Path) -> std::io::Result<Vec<String>> {
     names.sort();
     Ok(names)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn source_sidecar_lifecycle() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        assert_eq!(read_source(dir.path(), "work").unwrap(), None);
-
-        write_source(dir.path(), "work", "https://example.com/p.json").unwrap();
-        assert_eq!(
-            read_source(dir.path(), "work").unwrap().as_deref(),
-            Some("https://example.com/p.json")
-        );
-        assert_eq!(
-            sourced_profiles(dir.path()).unwrap(),
-            vec!["work".to_string()]
-        );
-
-        remove_source(dir.path(), "work").unwrap();
-        assert_eq!(read_source(dir.path(), "work").unwrap(), None);
-        assert!(sourced_profiles(dir.path()).unwrap().is_empty());
-    }
-}

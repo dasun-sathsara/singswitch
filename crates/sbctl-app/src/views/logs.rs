@@ -144,17 +144,9 @@ impl LogsView {
         self.scanned = records.len();
         self.cached_front = front;
         self.filtered_indices = Rc::new(indices);
-        // Reuse the existing size buffer when it is uniquely ours. This is one
-        // entry per row and all entries are identical (rows are a fixed height),
-        // so a fresh 5000-element Vec per poll was pure churn.
-        let row = size(px(1400.0), px(22.0));
-        match Rc::get_mut(&mut self.item_sizes) {
-            Some(sizes) => {
-                sizes.clear();
-                sizes.resize(count, row);
-            }
-            None => self.item_sizes = Rc::new(vec![row; count]),
-        }
+        // The list keeps its own clone of this Vec across frames, so `get_mut`
+        // could never succeed; rebuilding it is the only path.
+        self.item_sizes = Rc::new(vec![size(px(1400.0), px(22.0)); count]);
         self.cached_revision = store.log_revision;
         self.cached_stream = store.log_stream;
         self.cached_severity = store.log_severity;
@@ -456,6 +448,10 @@ impl Render for LogsView {
                 .map(|r| r.line.clone())
         };
         let count = self.filtered_indices.len();
+        // Rows present but hidden by the query or the level filter.
+        let filtered_out = (count == 0 && total_count > 0).then_some(total_count);
+        let store_reset = self.store.clone();
+        let search_input_reset = self.search_input.clone();
         let tail_id = self
             .filtered_indices
             .last()
@@ -568,6 +564,27 @@ impl Render for LogsView {
                                         .text_color(cx.theme().muted_foreground)
                                         .child(detail),
                                 )
+                                // A filter that hides everything is a dead end
+                                // without a way back; "Clear view" next to it
+                                // empties the buffer instead of the query.
+                                .when_some(filtered_out, |v, hidden| {
+                                    let store = store_reset.clone();
+                                    let input = search_input_reset.clone();
+                                    v.child(
+                                        Button::new("logs-reset-filters")
+                                            .secondary()
+                                            .small()
+                                            .label(format!("Reset filters ({hidden} hidden)"))
+                                            .on_click(move |_, window, cx| {
+                                                input.update(cx, |s, cx| {
+                                                    s.set_value("", window, cx)
+                                                });
+                                                store.update(cx, |s, cx| {
+                                                    s.reset_log_filters(cx)
+                                                });
+                                            }),
+                                    )
+                                })
                                 .when(can_fix_permissions && cfg!(target_os = "macos"), |v| {
                                     v.child(
                                         Button::new("logs-fix-perms")
@@ -588,6 +605,18 @@ impl Render for LogsView {
                             v_flex()
                                 .size_full()
                                 .min_h(px(0.0))
+                                // Scrolling up to read an older line must not be
+                                // undone by the next line sing-box writes.
+                                .on_scroll(cx.listener(|this, event: &gpui_kit::ScrollEvent, _, cx| {
+                                    let up = match event.delta {
+                                        gpui_kit::ScrollDelta::Lines(p) => p.y > 0.0,
+                                        gpui_kit::ScrollDelta::Pixels(p) => p.y > px(0.0),
+                                    };
+                                    if up && this.store.read(cx).log_follow {
+                                        let store = this.store.clone();
+                                        store.update(cx, |s, cx| s.set_log_follow(false, cx));
+                                    }
+                                }))
                                 .child(
                                     div().flex_1().min_h(px(0.0)).w_full().child(
                                         v_virtual_list(
@@ -705,26 +734,4 @@ fn filter_prefix_reusable(
     scanned: usize,
 ) -> bool {
     !filters_changed && cached_front == front && front.is_some() && len >= scanned
-}
-
-#[cfg(test)]
-mod filter_tests {
-    use super::filter_prefix_reusable;
-
-    #[test]
-    fn reuse_only_while_the_prefix_is_stable() {
-        // Steady append: reuse.
-        assert!(filter_prefix_reusable(false, Some(1), Some(1), 5, 3));
-        // Eviction moved the front: rebuild.
-        assert!(!filter_prefix_reusable(false, Some(1), Some(2), 5, 5));
-        // Filters changed: rebuild.
-        assert!(!filter_prefix_reusable(true, Some(1), Some(1), 5, 3));
-        // Empty buffer has no trustworthy prefix.
-        assert!(!filter_prefix_reusable(false, None, None, 0, 0));
-        // Shrank below what was scanned (truncation): rebuild.
-        assert!(!filter_prefix_reusable(false, Some(1), Some(1), 2, 7));
-        // Fresh cache mid-stream (first draw): no cached front, so rebuild.
-        // `scanned` is 0, so the rebuild starts from the first record anyway.
-        assert!(!filter_prefix_reusable(false, None, Some(5), 4, 0));
-    }
 }

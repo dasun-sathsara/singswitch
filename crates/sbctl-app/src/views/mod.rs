@@ -40,7 +40,10 @@ impl WorkspaceShell {
         window.on_window_should_close(cx, move |window, cx| {
             let has_tray = store_close.read(cx).tray_available;
             if !has_tray {
-                crate::diag::log("close ignored: no tray to restore the window from");
+                // Nothing to reopen it from, and the app is QuitMode::Explicit,
+                // so the close button has to mean quit here.
+                crate::diag::log("close with no tray: quitting");
+                cx.dispatch_action(&crate::actions::QuitApp);
                 return false;
             }
             let b = window.bounds().size;
@@ -50,8 +53,9 @@ impl WorkspaceShell {
                 s.set_window_open(false, cx);
             });
             set_dock_visible(false);
-            // Same release as Cmd-W: without it the closed window's shell, editor
-            // rope, drafts and log buffers stay alive in the tray.
+            // Same release as Cmd-W: without it the closed window's shell, its
+            // editor rope and both log buffers stay alive in the tray. Unsaved
+            // buffers survive in the store, stashed by forget_main_window.
             crate::desktop::forget_main_window(cx);
             true
         });
@@ -84,6 +88,11 @@ impl WorkspaceShell {
             settings,
             _subs: subs,
         }
+    }
+
+    /// Stash the editor's unsaved buffer before the window is released.
+    pub fn stash_editor_draft(&mut self, cx: &mut Context<Self>) {
+        self.profiles.update(cx, |p, cx| p.stash_draft(cx));
     }
 
     pub fn trigger_save_profile(
@@ -186,11 +195,12 @@ impl Render for WorkspaceShell {
 }
 
 fn connection_indicator(store: &AppStore, cx: &gpui_kit::App) -> impl IntoElement {
-    let (label, color) = match store.tray_visual_state() {
-        TrayVisualState::Transitioning => ("Working…", cx.theme().warning),
-        TrayVisualState::Broken => ("Service issue", cx.theme().danger),
-        TrayVisualState::Connected => ("Connected", cx.theme().success),
-        TrayVisualState::Disconnected => ("Disconnected", cx.theme().muted_foreground),
+    let label = store.status_label();
+    let color = match store.tray_visual_state() {
+        TrayVisualState::Transitioning => cx.theme().warning,
+        TrayVisualState::Broken => cx.theme().danger,
+        TrayVisualState::Connected => cx.theme().success,
+        TrayVisualState::Disconnected => cx.theme().muted_foreground,
     };
 
     h_flex()

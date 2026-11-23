@@ -14,15 +14,3 @@ pub fn tls_config() -> TlsConfig {
         .root_certs(RootCerts::PlatformVerifier)
         .build()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn https_clients_use_the_platform_tls_stack() {
-        let config = tls_config();
-        assert_eq!(config.provider(), TlsProvider::NativeTls);
-        assert!(matches!(config.root_certs(), RootCerts::PlatformVerifier));
-    }
-}

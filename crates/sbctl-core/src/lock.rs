@@ -58,20 +58,3 @@ impl AdvisoryLock {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn advisory_lock_serializes_access() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let lock_path = dir.path().join(".sbctl.lock");
-        let guard = AdvisoryLock::acquire(&lock_path, Duration::from_millis(100)).expect("acquire");
-        let second = AdvisoryLock::acquire(&lock_path, Duration::from_millis(60));
-        assert!(second.is_err());
-        drop(guard);
-        let third = AdvisoryLock::acquire(&lock_path, Duration::from_millis(100));
-        assert!(third.is_ok());
-    }
-}

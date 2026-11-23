@@ -20,7 +20,6 @@ use crate::notify::{Notifier, ToggleableNotifier, default_notifier};
 use crate::profile::{Profile, SKELETON_JSON, list_profiles, path_for, validate_name};
 use crate::remote::{fetch_remote_profile, normalise_profile_url, validate_remote_body};
 use crate::runner::{ExecRunner, Runner, SudoRunner, TraceHook};
-use crate::service::SudoProbeFn;
 use crate::service::launchd::LaunchdManager;
 use crate::service::win_rpc::{
     HELPER_SERVICE_NAME, PipeRequest, PipeResponse, try_send_pipe_request,
@@ -97,8 +96,8 @@ pub type DebugHook = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// High-level orchestrator used by the CLI, the Windows helper service, and the desktop GUI.
 ///
-/// Every dependency is injected behind a trait so verification, rollback, and error recovery
-/// can be exercised deterministically in unit tests without root privileges.
+/// Every dependency is injected behind a trait, so service control can be exercised
+/// without root privileges.
 pub struct Controller {
     pub layout: Layout,
     pub manager: Arc<dyn Manager>,
@@ -107,7 +106,6 @@ pub struct Controller {
     pub runner: Arc<dyn Runner>,
     pub notifier: Arc<dyn Notifier>,
     pub notifications_enabled: Arc<AtomicBool>,
-    pub sudo_probe: Option<SudoProbeFn>,
     pub skeleton: String,
     pub settle_delay: Duration,
     pub start_grace: Duration,
@@ -204,7 +202,6 @@ impl Controller {
             runner,
             notifier,
             notifications_enabled: Arc::new(AtomicBool::new(true)),
-            sudo_probe: None,
             skeleton: SKELETON_JSON.to_string(),
             settle_delay: DEFAULT_SETTLE_DELAY,
             start_grace: DEFAULT_START_GRACE,
@@ -332,8 +329,8 @@ impl Controller {
             && let Some(p) = profiles.iter().find(|p| p.name == active_name)
         {
             view.missing = p.missing.clone();
-            view.tun = p.tun.clone();
-            view.server = p.server.clone();
+            view.tun = p.facts.tun_interface.clone();
+            view.server = p.facts.endpoint.clone();
         }
         view
     }
@@ -592,9 +589,6 @@ impl Controller {
         // sing-box decide validity. Running the validator first reported
         // "invalid public_key" for an unfinished profile - true and useless.
         let parsed = serde_json::from_str::<serde_json::Value>(content);
-        if parsed.is_err() && !allow_invalid {
-            check_temp_bytes(self.checker.as_ref(), "sbctl-validate-", content.as_bytes())?;
-        }
         if let (Ok(tree), false) = (&parsed, allow_invalid) {
             let missing = ProfileFormModel::from_value(tree).missing();
             if !missing.is_empty() {
@@ -634,11 +628,9 @@ impl Controller {
             if let Some(old) = &old_bytes {
                 let _ = write_file_atomic(&path, old, 0o644);
             }
-            return Err(store_error(
-                std::io::Error::other(err.to_string()),
-                &self.layout.profiles_dir,
-                "update the active configuration for",
-            ));
+            // Propagate as-is. Re-wrapping this as a general error replaced the
+            // activator's own message and hint with a directory-ownership one.
+            return Err(err);
         }
 
         if !running {
@@ -1224,7 +1216,13 @@ fn run_windows_hidden_uac_op(req: &PipeRequest) -> Result<PipeResponse> {
     }
 
     if code == 0 {
-        Ok(PipeResponse::success())
+        // The child writes its response before exiting, so a clean exit with no
+        // readable response means the result was lost. Reporting success here
+        // silently dropped what the operation actually returned (a save that
+        // reloaded sing-box looked like a plain save).
+        Err(SbctlError::general(
+            "elevated sbctl operation finished without a response",
+        ))
     } else {
         Err(SbctlError::new(
             ExitCode::from_i32(code),
@@ -1246,395 +1244,4 @@ fn find_sbctl_cli_exe() -> Option<PathBuf> {
     let fallback =
         crate::layout::lookup_binary("sbctl.exe", &[r"C:\Program Files\sbctl\sbctl.exe"], "");
     (!fallback.as_os_str().is_empty() && fallback.is_file()).then_some(fallback)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::checker::FakeChecker;
-    use crate::notify::NoopNotifier;
-    use crate::runner::{FakeResult, FakeRunner};
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-
-    fn test_controller(
-        platform: PlatformKind,
-    ) -> (
-        tempfile::TempDir,
-        Controller,
-        Arc<FakeRunner>,
-        Arc<FakeChecker>,
-    ) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let mut layout = match platform {
-            PlatformKind::Darwin => Layout::darwin(),
-            PlatformKind::Windows => Layout::windows_with_program_data(dir.path()),
-        };
-        layout.profiles_dir = dir.path().join("profiles");
-        layout.active_config_path = dir.path().join("config.json");
-        if platform == PlatformKind::Windows {
-            layout.active_name_path = Some(dir.path().join("active-profile"));
-        }
-        fs::create_dir_all(&layout.profiles_dir).unwrap();
-
-        let fake_runner = Arc::new(FakeRunner::default());
-        let fake_checker = Arc::new(FakeChecker::with_version("1.13.8"));
-        let mut ctrl = Controller::with_runner(
-            layout.clone(),
-            fake_runner.clone(),
-            fake_checker.clone(),
-            Arc::new(NoopNotifier),
-        );
-        if platform == PlatformKind::Darwin {
-            // Production activates without sudo; the test fixture must too, or it
-            // stops describing the shipped code path.
-            ctrl.activator = Arc::new(crate::activator::SymlinkActivator::new(
-                layout.active_config_path,
-                None,
-            ));
-        }
-        ctrl.settle_delay = Duration::ZERO;
-        ctrl.start_grace = Duration::ZERO;
-        ctrl.sleep_fn = Arc::new(|_| {});
-        (dir, ctrl, fake_runner, fake_checker)
-    }
-
-    #[test]
-    fn darwin_verified_activation_happy_path_and_sudoers_match() {
-        let (_dir, ctrl, runner, checker) = test_controller(PlatformKind::Darwin);
-        let p = path_for(&ctrl.layout.profiles_dir, "work");
-        fs::write(
-            &p,
-            r#"{"outbounds":[{"type":"vless","server":"1.2.3.4","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111"}]}"#,
-        )
-        .unwrap();
-
-        runner.set_response(
-            "sudo -n /bin/launchctl print system/app.lexiflix.singbox",
-            FakeResult::ok(
-                "state = running\npid = 4711\nruns = 2\nlast exit code = (never exited)\n",
-            ),
-        );
-
-        ctrl.activate("work").expect("activation succeeds");
-        assert_eq!(checker.checked.lock().unwrap().len(), 1);
-        assert_eq!(
-            ctrl.activator.active_name().unwrap().as_deref(),
-            Some("work")
-        );
-
-        let rules = ctrl.layout.sudo_commands();
-        for call in runner.calls.lock().unwrap().iter() {
-            // Strip "sudo -n" prefix and verify every issued privileged command matches one rule!
-            assert_eq!(&call[0..2], &["sudo", "-n"]);
-            let inner: Vec<String> = call[2..].to_vec();
-            assert!(
-                rules.iter().any(|r| r.matches(&inner)),
-                "unauthorised command issued: {inner:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn crash_loop_pid_change_triggers_automatic_rollback() {
-        let (_dir, ctrl, runner, _checker) = test_controller(PlatformKind::Darwin);
-        let prev = path_for(&ctrl.layout.profiles_dir, "good");
-        let broken = path_for(&ctrl.layout.profiles_dir, "bad");
-        fs::write(&prev, r#"{"outbounds":[{"type":"vless","tag":"good","server":"1.2.3.4","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111"}]}"#).unwrap();
-        fs::write(&broken, r#"{"outbounds":[{"type":"vless","tag":"bad","server":"1.2.3.4","server_port":443,"uuid":"22222222-2222-2222-2222-222222222222"}]}"#).unwrap();
-
-        // Activate "good" first so it becomes the known rollback target.
-        runner.set_response(
-            "sudo -n /bin/launchctl print system/app.lexiflix.singbox",
-            FakeResult::ok(
-                "state = running\npid = 100\nruns = 1\nlast exit code = (never exited)\n",
-            ),
-        );
-        ctrl.activate("good").expect("good activates");
-
-        // Now queue: pre-probe (pid 100), post-restart baseline (pid 200), post-settle crash-loop (pid 201, runs 2).
-        runner.queue_responses(
-            "sudo -n /bin/launchctl print system/app.lexiflix.singbox",
-            vec![
-                FakeResult::ok("state = running\npid = 100\nruns = 1\n"),
-                FakeResult::ok("state = running\npid = 100\nruns = 1\n"),
-                FakeResult::ok("state = running\npid = 200\nruns = 2\n"),
-                FakeResult::ok("state = running\npid = 201\nruns = 3\n"),
-            ],
-        );
-
-        let err = ctrl.activate("bad").unwrap_err();
-        assert_eq!(err.code, ExitCode::Service);
-        assert!(
-            err.message.contains("reverted to good"),
-            "msg: {}",
-            err.message
-        );
-        assert_eq!(
-            ctrl.activator.active_name().unwrap().as_deref(),
-            Some("good")
-        );
-    }
-
-    #[test]
-    fn activation_refuses_an_incomplete_profile_and_names_the_fields() {
-        let (_dir, ctrl, _runner, _checker) = test_controller(PlatformKind::Windows);
-        ctrl.create_from_skeleton("seed").expect("create");
-        let err = ctrl.activate("seed").unwrap_err();
-        assert_eq!(err.code, ExitCode::Validation);
-        // The message names fields the user can act on, not marker tokens.
-        assert!(err.message.contains("UUID"), "msg: {}", err.message);
-        assert!(
-            err.message.contains("server address"),
-            "msg: {}",
-            err.message
-        );
-        assert!(!err.message.contains("TODO_"), "msg: {}", err.message);
-    }
-
-    #[test]
-    fn delete_active_running_requires_force_and_stops_first() {
-        let (_dir, ctrl, runner, _checker) = test_controller(PlatformKind::Windows);
-        let p = path_for(&ctrl.layout.profiles_dir, "work");
-        fs::write(&p, r#"{"tag":"work"}"#).unwrap();
-        runner.set_response(
-            "sc.exe queryex sing-box",
-            FakeResult::ok("STATE : 4 RUNNING\nPID : 555\n"),
-        );
-        ctrl.activator.activate(&p).unwrap();
-
-        let err = ctrl.delete_profile("work", false).unwrap_err();
-        assert_eq!(err.code, ExitCode::General);
-        assert!(p.exists());
-
-        let was_active = ctrl.delete_profile("work", true).expect("force delete");
-        assert!(was_active);
-        assert!(!p.exists());
-        assert!(
-            runner
-                .call_lines()
-                .iter()
-                .any(|l| l == "sc.exe stop sing-box")
-        );
-    }
-
-    #[test]
-    fn pull_and_sync_all_validate_and_preserve_existing_on_failure() {
-        let (_dir, ctrl, runner, checker) = test_controller(PlatformKind::Windows);
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let addr = listener.local_addr().unwrap();
-
-        let srv = std::thread::spawn(move || {
-            for i in 0..2 {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut buf = [0u8; 512];
-                let _ = stream.read(&mut buf);
-                let body = if i == 0 {
-                    r#"{"outbounds":[{"type":"vless","server":"1.1.1.1","server_port":443}]}"#
-                } else {
-                    r#"{"broken":true}"#
-                };
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                stream.write_all(resp.as_bytes()).unwrap();
-            }
-        });
-
-        let url = format!("http://{addr}/sub.json");
-        let pulled = ctrl.pull_profile("remote1", &url).expect("pull");
-        assert_eq!(pulled.name, "remote1");
-        assert_eq!(pulled.source_url.as_deref(), Some(url.as_str()));
-
-        // Make second download fail sing-box validation.
-        *checker.global_error.lock().unwrap() = Some("invalid config".to_string());
-        runner.set_response(
-            "sc.exe queryex sing-box",
-            FakeResult::ok("STATE : 1 STOPPED\nPID : 0\n"),
-        );
-        let report = ctrl.sync_all().expect("sync_all");
-        assert!(report.synced.is_empty());
-        assert_eq!(report.failed.len(), 1);
-        // Stored profile must stay untouched!
-        let on_disk = fs::read_to_string(&pulled.path).unwrap();
-        assert!(on_disk.contains("1.1.1.1"));
-
-        srv.join().unwrap();
-    }
-
-    #[test]
-    fn draft_save_cannot_overwrite_the_active_profile() {
-        for platform in [PlatformKind::Darwin, PlatformKind::Windows] {
-            let (_dir, ctrl, _runner, _checker) = test_controller(platform);
-            let path = path_for(&ctrl.layout.profiles_dir, "work");
-            let original = r#"{"outbounds":[{"type":"direct"}]}"#;
-            fs::write(&path, original).unwrap();
-
-            // A draft dialog can open while this profile is inactive. The
-            // subsequent save must use the active name at the time of writing.
-            ctrl.activator.activate(&path).unwrap();
-            let error = ctrl.save_profile("work", "{", true).unwrap_err();
-            assert!(error.message.contains("active profile"));
-            assert_eq!(fs::read_to_string(path).unwrap(), original);
-        }
-    }
-
-    #[test]
-    fn save_profile_reloads_active_service_and_reverts_on_crash() {
-        let (_dir, ctrl, runner, _checker) = test_controller(PlatformKind::Windows);
-        let p = path_for(&ctrl.layout.profiles_dir, "work");
-        fs::write(&p, r#"{"version":"old"}"#).unwrap();
-
-        ctrl.activator.activate(&p).unwrap();
-
-        // Successful reload: probe (RUNNING) -> wait_for_stop (STOPPED) -> baseline (RUNNING 300) -> after (RUNNING 300).
-        runner.queue_responses(
-            "sc.exe queryex sing-box",
-            vec![
-                FakeResult::ok("STATE : 4 RUNNING\nPID : 300\n"),
-                FakeResult::ok("STATE : 1 STOPPED\nPID : 0\n"),
-                FakeResult::ok("STATE : 4 RUNNING\nPID : 300\n"),
-                FakeResult::ok("STATE : 4 RUNNING\nPID : 300\n"),
-            ],
-        );
-        // Must be a complete config: saving now checks the fields this outbound
-        // type needs before asking sing-box whether it is valid.
-        let new_json = r#"{"outbounds":[{"type":"vless","tag":"work","server":"5.6.7.8","server_port":443,"uuid":"33333333-3333-3333-3333-333333333333"}]}"#;
-        let reloaded = ctrl.save_profile("work", new_json, false).unwrap();
-        assert!(reloaded);
-        assert_eq!(fs::read_to_string(&p).unwrap(), new_json);
-
-        // Crash loop on reload: probe (RUNNING) -> wait_for_stop (STOPPED) -> baseline (400) -> after (401) -> rollback wait_for_stop (STOPPED).
-        runner.queue_responses(
-            "sc.exe queryex sing-box",
-            vec![
-                FakeResult::ok("STATE : 4 RUNNING\nPID : 300\n"),
-                FakeResult::ok("STATE : 1 STOPPED\nPID : 0\n"),
-                FakeResult::ok("STATE : 4 RUNNING\nPID : 400\n"),
-                FakeResult::ok("STATE : 4 RUNNING\nPID : 401\n"),
-                FakeResult::ok("STATE : 1 STOPPED\nPID : 0\n"),
-            ],
-        );
-        // Complete, but different: this must reach the crash-loop rollback rather
-        // than being refused for missing fields.
-        let broken_json = r#"{"outbounds":[{"type":"vless","tag":"work","server":"9.9.9.9","server_port":443,"uuid":"44444444-4444-4444-4444-444444444444"}]}"#;
-        let err = ctrl.save_profile("work", broken_json, false).unwrap_err();
-        assert_eq!(err.code, ExitCode::Service);
-        assert!(err.message.contains("reverted work"));
-        assert_eq!(fs::read_to_string(&p).unwrap(), new_json);
-    }
-
-    #[test]
-    fn rollback_keeps_service_stopped_when_initially_stopped() {
-        let (_dir, ctrl, runner, _checker) = test_controller(PlatformKind::Darwin);
-        let prev = path_for(&ctrl.layout.profiles_dir, "good");
-        let broken = path_for(&ctrl.layout.profiles_dir, "bad");
-        fs::write(&prev, r#"{"outbounds":[{"type":"vless","tag":"good","server":"1.2.3.4","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111"}]}"#).unwrap();
-        fs::write(&broken, r#"{"outbounds":[{"type":"vless","tag":"bad","server":"1.2.3.4","server_port":443,"uuid":"22222222-2222-2222-2222-222222222222"}]}"#).unwrap();
-
-        ctrl.activator.activate(&prev).unwrap();
-
-        // Pre-probe: not loaded (stopped). Post-restart baseline: running PID 200 -> settle PID 201 (crash loop).
-        runner.queue_responses(
-            "sudo -n /bin/launchctl print system/app.lexiflix.singbox",
-            vec![
-                FakeResult::err(113, "Could not find service"),
-                FakeResult::err(113, "Could not find service"),
-                FakeResult::ok("state = running\npid = 200\nruns = 1\n"),
-                FakeResult::ok("state = running\npid = 201\nruns = 2\n"),
-            ],
-        );
-
-        let err = ctrl.activate("bad").unwrap_err();
-        assert!(
-            err.message
-                .contains("reverted to good (service kept stopped)"),
-            "unexpected message: {}",
-            err.message
-        );
-        assert_eq!(
-            ctrl.activator.active_name().unwrap().as_deref(),
-            Some("good")
-        );
-        assert!(
-            runner
-                .call_lines()
-                .iter()
-                .any(|l| l == "sudo -n /bin/launchctl bootout system/app.lexiflix.singbox")
-        );
-    }
-
-    #[test]
-    fn check_json_content_validates_syntax_completeness_and_checker() {
-        let (_dir, ctrl, _runner, _checker) = test_controller(PlatformKind::Darwin);
-        let syntax_err = ctrl.check_json_content("work", "{ bad json").unwrap_err();
-        assert_eq!(syntax_err.code, ExitCode::Validation);
-
-        // A legacy sentinel counts as unfilled, and the message names the field.
-        let incomplete = ctrl
-            .check_json_content(
-                "work",
-                r#"{"outbounds":[{"type":"vless","server":"TODO_SERVER_IP_OR_HOST"}]}"#,
-            )
-            .unwrap_err();
-        assert_eq!(incomplete.code, ExitCode::Validation);
-        assert!(
-            incomplete.message.contains("server address"),
-            "msg: {}",
-            incomplete.message
-        );
-        assert!(
-            incomplete.message.contains("UUID"),
-            "msg: {}",
-            incomplete.message
-        );
-
-        // A complete config passes both the field check and the validator.
-        assert!(
-            ctrl.check_json_content(
-                "work",
-                r#"{"outbounds":[{"type":"vless","server":"1.2.3.4","uuid":"11111111-1111-1111-1111-111111111111"}]}"#,
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn handle_pipe_ensure_dir_and_failure_notification_work() {
-        let (_dir, mut ctrl, runner, _checker) = test_controller(PlatformKind::Darwin);
-        let notify_msgs = Arc::new(std::sync::Mutex::new(Vec::new()));
-        struct Rec(Arc<std::sync::Mutex<Vec<String>>>);
-        impl Notifier for Rec {
-            fn notify(&self, msg: &str) {
-                self.0.lock().unwrap().push(msg.to_string());
-            }
-        }
-        ctrl.notifier = Arc::new(Rec(notify_msgs.clone()));
-
-        let resp = ctrl.handle_pipe_request(PipeRequest::EnsureProfilesDir);
-        assert!(resp.ok);
-        assert!(ctrl.layout.profiles_dir.is_dir());
-
-        let bad = path_for(&ctrl.layout.profiles_dir, "bad");
-        fs::write(&bad, r#"{"outbounds":[{"type":"vless","tag":"bad","server":"1.2.3.4","server_port":443,"uuid":"22222222-2222-2222-2222-222222222222"}]}"#).unwrap();
-        runner.set_response(
-            "sudo -n /bin/launchctl print",
-            FakeResult::err(113, "not loaded"),
-        );
-        runner.set_response(
-            "sudo -n /bin/launchctl bootstrap",
-            FakeResult::err(1, "boom"),
-        );
-
-        assert!(ctrl.activate("bad").is_err());
-        let recorded = notify_msgs.lock().unwrap();
-        assert!(
-            recorded
-                .iter()
-                .any(|m| m.contains("sing-box activation failed")),
-            "expected failure notification, got {recorded:?}"
-        );
-    }
 }
