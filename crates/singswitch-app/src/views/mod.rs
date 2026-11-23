@@ -344,7 +344,7 @@ pub fn notice_strip(
                     .ghost()
                     .xsmall()
                     .icon(IconName::Close)
-                    .tooltip("Dismiss")
+                    .accessibility_label("Dismiss notice")
                     .on_click(move |_, _, cx| {
                         store_dismiss.update(cx, |s, cx| s.dismiss_notice(cx));
                     }),

@@ -362,7 +362,7 @@ fn render_paths_card(
                         .h(px(24.0))
                         .w(px(24.0))
                         .icon(IconName::Copy)
-                        .tooltip("Copy path")
+                        .accessibility_label("Copy path")
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(val_copy.clone()));
                             store_copy.update(cx, |s, cx| {

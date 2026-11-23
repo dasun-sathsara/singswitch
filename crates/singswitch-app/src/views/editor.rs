@@ -18,7 +18,6 @@ use gpui_kit::{
 use singswitch_core::form_model::{DEFAULT_SERVER_PORT, DEFAULT_TUN_MTU, ProfileFormModel};
 use std::rc::Rc;
 
-use crate::actions::BackToConnections;
 use crate::fonts;
 use crate::state::{AppStore, BannerTone, EditorValidationState, NoticeOrigin};
 
@@ -723,8 +722,9 @@ impl ProfileEditorPanel {
                             .h(px(26.0))
                             .icon(IconName::ChevronLeft)
                             .label("Profiles")
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                cx.dispatch_action(&BackToConnections);
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.stash_draft(cx);
+                                this.store.update(cx, |s, cx| s.end_edit(cx));
                             })),
                     )
                     .child(
@@ -894,7 +894,6 @@ impl ProfileEditorPanel {
             .w(px(28.0))
             .icon(IconName::Ellipsis)
             .accessibility_label("Editor options")
-            .tooltip("Editor options")
             .dropdown_menu(move |menu, _, _| {
                 let r = revert.clone();
                 let v = validate.clone();
@@ -1151,8 +1150,9 @@ impl Render for ProfileEditorPanel {
                             Button::new("unreadable-back")
                                 .ghost()
                                 .label("Back to connections")
-                                .on_click(cx.listener(|_, _, _, cx| {
-                                    cx.dispatch_action(&BackToConnections);
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.stash_draft(cx);
+                                    this.store.update(cx, |s, cx| s.end_edit(cx));
                                 })),
                         )
                         .child(

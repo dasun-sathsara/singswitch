@@ -478,18 +478,13 @@ impl ProfilesView {
                                     .text_color(cx.theme().foreground)
                                     .child(ip),
                             )
-                            .when_some(ip_to_copy, |pill, (ip, location)| {
+                            .when_some(ip_to_copy, |pill, (ip, _)| {
                                 pill.child(
                                     Button::new("copy-ip")
                                         .ghost()
                                         .xsmall()
                                         .icon(IconName::Copy)
                                         .accessibility_label("Copy public IP")
-                                        .tooltip(if location.is_empty() {
-                                            "Copy public IP".into()
-                                        } else {
-                                            format!("Copy public IP · {location}")
-                                        })
                                         .on_click(move |_, _, cx| {
                                             cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
                                                 ip.clone(),
@@ -503,7 +498,6 @@ impl ProfilesView {
                                     .xsmall()
                                     .icon(IconName::RefreshCw)
                                     .accessibility_label("Refresh connection and public IP")
-                                    .tooltip("Refresh connection and public IP")
                                     .disabled(store.ip_loading)
                                     .on_click(move |_, _, cx| {
                                         refresh.update(cx, |s, cx| {
@@ -521,7 +515,6 @@ impl ProfilesView {
                                 .flex_none()
                                 .icon(IconName::Ellipsis)
                                 .accessibility_label("Connection options")
-                                .tooltip("Connection options")
                                 .dropdown_menu(move |menu, _, _| {
                                     let restart = restart.clone();
                                     menu.item(
@@ -983,7 +976,6 @@ impl ProfilesView {
         .w(px(26.0))
         .icon(IconName::Ellipsis)
         .accessibility_label("Profile options")
-        .tooltip("Profile options")
         .dropdown_menu(move |menu, _, _| {
             let sync = app.clone();
             let delete = app.clone();

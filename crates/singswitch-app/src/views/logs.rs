@@ -245,7 +245,7 @@ impl LogsView {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Close)
-                            .tooltip("Dismiss")
+                            .accessibility_label("Dismiss detail")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.selected_id = None;
                                 cx.notify();
@@ -433,8 +433,8 @@ impl Render for LogsView {
                             .ghost()
                             .h(px(28.0))
                             .label("Clear")
+                            .accessibility_label("Clear view")
                             .disabled(total_count == 0)
-                            .tooltip("Clears this view only; the log file is untouched")
                             .on_click({
                                 let store_clear = self.store.clone();
                                 cx.listener(move |this, _, _, cx| {
@@ -448,7 +448,7 @@ impl Render for LogsView {
                             .ghost()
                             .h(px(28.0))
                             .icon(IconName::RefreshCw)
-                            .tooltip("Reload from disk")
+                            .accessibility_label("Reload from disk")
                             .on_click({
                                 let store_reload = self.store.clone();
                                 cx.listener(move |this, _, _, cx| {
@@ -465,7 +465,7 @@ impl Render for LogsView {
                             .ghost()
                             .h(px(28.0))
                             .icon(IconName::Copy)
-                            .tooltip("Copy the filtered lines")
+                            .accessibility_label("Copy filtered lines")
                             .disabled(count == 0)
                             .on_click({
                                 let store_copy = self.store.clone();
