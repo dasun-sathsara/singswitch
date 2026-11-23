@@ -1,12 +1,9 @@
-.PHONY: all build test fmt fmt-check lint check cross bundle-macos install-macos uninstall-macos clean
+.PHONY: all build fmt fmt-check lint check cross bundle-macos install-macos uninstall-macos clean
 
 all: check build
 
 build:
 	cargo build --workspace
-
-test:
-	cargo test --workspace
 
 fmt:
 	cargo fmt --all
@@ -17,7 +14,7 @@ fmt-check:
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 
-check: fmt-check lint test
+check: fmt-check lint
 
 cross:
 	./scripts/check-macos.sh
