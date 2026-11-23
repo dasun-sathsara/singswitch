@@ -6,6 +6,8 @@ extern crate gpui_kit as gpui;
 #[cfg(any(target_os = "macos", windows))]
 mod actions;
 #[cfg(any(target_os = "macos", windows))]
+mod assets;
+#[cfg(any(target_os = "macos", windows))]
 mod diag;
 #[cfg(any(target_os = "macos", windows))]
 mod fonts;
@@ -64,7 +66,7 @@ mod desktop {
         ));
 
         let app = gpui_kit::application()
-            .with_assets(gpui_kit::assets::Assets)
+            .with_assets(crate::assets::Assets)
             .with_quit_mode(QuitMode::Explicit);
 
         // Closing the window leaves an Accessory app with no Dock icon, so

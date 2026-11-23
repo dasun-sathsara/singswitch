@@ -14,6 +14,9 @@ if [[ "$HOST_OS" != "Darwin" ]]; then
     fi
 fi
 
+echo "==> Checking that every icon the app draws is bundled..."
+"$ROOT_DIR/scripts/check-icons.py"
+
 echo "==> Running cargo check (aarch64-apple-darwin)..."
 cargo check --workspace --target aarch64-apple-darwin
 

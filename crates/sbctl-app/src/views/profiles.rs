@@ -1,11 +1,12 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
+    ActiveTheme as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
     App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
@@ -380,6 +381,7 @@ impl ProfilesView {
                                 .ghost()
                                 .small()
                                 .flex_none()
+                                .icon(IconName::PowerOff)
                                 .label("Disconnect")
                                 .disabled(busy)
                                 .on_click(move |_, _, cx| {
@@ -394,6 +396,7 @@ impl ProfilesView {
                                 .ghost()
                                 .small()
                                 .flex_none()
+                                .icon(IconName::ScrollText)
                                 .label("View logs")
                                 .on_click(move |_, _, cx| {
                                     show_logs.update(cx, |s, cx| {
@@ -403,6 +406,11 @@ impl ProfilesView {
                         )
                     })
                     .child(div().flex_1())
+                    .child(
+                        Icon::new(IconName::Globe)
+                            .xsmall()
+                            .text_color(cx.theme().muted_foreground),
+                    )
                     .child(
                         div()
                             .flex_none()
@@ -460,6 +468,7 @@ impl ProfilesView {
                                     let restart = restart.clone();
                                     menu.item(
                                         PopupMenuItem::new("Restart service")
+                                            .icon(IconName::RotateCw)
                                             .disabled(busy)
                                             .on_click(move |_, _, cx| {
                                                 restart.update(cx, |s, cx| {
@@ -498,6 +507,7 @@ impl ProfilesView {
                     Button::new("library-sync-all")
                         .ghost()
                         .small()
+                        .icon(IconName::CloudDownload)
                         .label("Sync remote profiles")
                         .disabled(busy)
                         .on_click(move |_, _, cx| {
@@ -509,23 +519,25 @@ impl ProfilesView {
                 Button::new("library-add")
                     .secondary()
                     .small()
-                    .icon(IconName::Plus)
+                    .icon(IconName::CirclePlus)
                     .label("Add profile")
                     .disabled(busy)
                     .dropdown_menu(move |menu, _, _| {
                         let create = create.clone();
                         let import = import.clone();
-                        menu.item(PopupMenuItem::new("New profile…").on_click(
-                            move |_, window, cx| {
-                                Self::open_new_profile_dialog(create.clone(), window, cx);
-                            },
-                        ))
+                        menu.item(
+                            PopupMenuItem::new("New profile…")
+                                .icon(IconName::FilePlus)
+                                .on_click(move |_, window, cx| {
+                                    Self::open_new_profile_dialog(create.clone(), window, cx);
+                                }),
+                        )
                         .item(
-                            PopupMenuItem::new("Import from URL…").on_click(
-                                move |_, window, cx| {
+                            PopupMenuItem::new("Import from URL…")
+                                .icon(IconName::Link)
+                                .on_click(move |_, window, cx| {
                                     Self::open_import_url_dialog(import.clone(), window, cx);
-                                },
-                            ),
+                                }),
                         )
                     }),
             )
@@ -802,13 +814,19 @@ impl ProfilesView {
             })
             .when(profile.config_parsed, |panel| {
                 panel.when_some(facts.outbound_type.as_ref(), |panel, protocol| {
-                    panel.child(detail_row("Protocol", protocol.clone(), cx))
+                    panel.child(detail_row_with_icon(
+                        "Protocol",
+                        protocol.clone(),
+                        IconName::Cable,
+                        cx,
+                    ))
                 })
             })
-            .child(detail_row("Tunnel", tunnel, cx))
-            .child(detail_row(
+            .child(detail_row_with_icon("Tunnel", tunnel, IconName::Route, cx))
+            .child(detail_row_with_icon(
                 "Config file",
                 profile.path.display().to_string(),
+                IconName::FileText,
                 cx,
             ))
             .when_some(profile.source_url.as_ref(), |panel, url| {
@@ -867,6 +885,7 @@ impl ProfilesView {
             menu.when(has_source, |menu| {
                 menu.item(
                     PopupMenuItem::new("Sync from source")
+                        .icon(IconName::CloudDownload)
                         .disabled(busy)
                         .on_click(move |_, _, cx| {
                             sync.update(cx, |s, cx| {
@@ -876,13 +895,16 @@ impl ProfilesView {
                 )
             })
             .item(
-                PopupMenuItem::new("Copy config path").on_click(move |_, _, cx| {
-                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(path.clone()));
-                }),
+                PopupMenuItem::new("Copy config path")
+                    .icon(IconName::Copy)
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(path.clone()));
+                    }),
             )
             .separator()
             .item(
                 PopupMenuItem::new("Delete profile…")
+                    .icon(IconName::Trash)
                     .disabled(busy)
                     .on_click(move |_, window, cx| {
                         open_delete_dialog(
@@ -921,6 +943,26 @@ fn connection_error(id: &'static str, reason: &str, cx: &App) -> impl IntoElemen
 }
 
 fn detail_row(label: &'static str, value: String, cx: &App) -> impl IntoElement {
+    detail_row_inner(label, value, None, cx)
+}
+
+/// Same row, with a glyph that names what the value is. The icon sits in a
+/// fixed-width slot so labels stay aligned with the iconless rows above.
+fn detail_row_with_icon(
+    label: &'static str,
+    value: String,
+    icon: IconName,
+    cx: &App,
+) -> impl IntoElement {
+    detail_row_inner(label, value, Some(icon), cx)
+}
+
+fn detail_row_inner(
+    label: &'static str,
+    value: String,
+    icon: Option<IconName>,
+    cx: &App,
+) -> impl IntoElement {
     h_flex()
         .w_full()
         .py(px(4.0))
@@ -929,12 +971,24 @@ fn detail_row(label: &'static str, value: String, cx: &App) -> impl IntoElement 
         .border_t_1()
         .border_color(cx.theme().border)
         .child(
-            div()
+            h_flex()
                 .w(px(100.0))
                 .flex_none()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(label),
+                .gap(px(6.0))
+                .items_center()
+                .when_some(icon, |row, icon| {
+                    row.child(
+                        Icon::new(icon)
+                            .xsmall()
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                })
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(label),
+                ),
         )
         .child(
             div()
