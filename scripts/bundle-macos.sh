@@ -14,16 +14,16 @@ case "$TARGET" in
 esac
 
 BIN_DIR="$ROOT_DIR/target/${TARGET}/${PROFILE}"
-APP_BUNDLE="$ROOT_DIR/dist/sbctl.app"
+APP_BUNDLE="$ROOT_DIR/dist/SingSwitch.app"
 
 rm -rf "$APP_BUNDLE"
 mkdir -p \
     "$APP_BUNDLE/Contents/MacOS" \
     "$APP_BUNDLE/Contents/Resources"
 
-cp "$BIN_DIR/sbctl-app" "$APP_BUNDLE/Contents/MacOS/sbctl-app"
-cp "$BIN_DIR/sbctl" "$APP_BUNDLE/Contents/MacOS/sbctl"
-chmod 755 "$APP_BUNDLE/Contents/MacOS/sbctl-app" "$APP_BUNDLE/Contents/MacOS/sbctl"
+cp "$BIN_DIR/singswitch-app" "$APP_BUNDLE/Contents/MacOS/singswitch-app"
+cp "$BIN_DIR/singswitch" "$APP_BUNDLE/Contents/MacOS/singswitch"
+chmod 755 "$APP_BUNDLE/Contents/MacOS/singswitch-app" "$APP_BUNDLE/Contents/MacOS/singswitch"
 
 cp "$ROOT_DIR/resources/macos/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 cp "$ROOT_DIR/assets/icons/app.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"

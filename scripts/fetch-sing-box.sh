@@ -37,7 +37,7 @@ fi
 ASSET="sing-box-${SINGBOX_VERSION}-${PLATFORM}"
 ARCHIVE="${ASSET}.${EXT}"
 URL="https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/${ARCHIVE}"
-CACHE_DIR="${SBCTL_SINGBOX_CACHE:-${HOME}/.cache/sbctl-sing-box}/${SINGBOX_VERSION}"
+CACHE_DIR="${SINGSWITCH_SINGBOX_CACHE:-${HOME}/.cache/singswitch-sing-box}/${SINGBOX_VERSION}"
 CACHED="${CACHE_DIR}/${ARCHIVE}"
 
 mkdir -p "$CACHE_DIR" "$OUT_DIR"

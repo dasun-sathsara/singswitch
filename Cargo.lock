@@ -5773,50 +5773,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sbctl-app"
-version = "0.1.0"
-dependencies = [
- "block2 0.6.2",
- "dirs 6.0.0",
- "gpui-kit",
- "gpui-tray",
- "notify",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "objc2-user-notifications",
- "sbctl-core",
- "serde",
- "serde_json",
- "smol",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "sbctl-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "clap_complete",
- "sbctl-core",
- "serde_json",
- "windows-service",
-]
-
-[[package]]
-name = "sbctl-core"
-version = "0.1.0"
-dependencies = [
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "ureq",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "schannel"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6146,6 +6102,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a9c6883ca9c3c7c90e888de77b7a5c849c779d25d74a1269b0218b14e8b136c"
 dependencies = [
  "log",
+]
+
+[[package]]
+name = "singswitch-app"
+version = "0.1.0"
+dependencies = [
+ "block2 0.6.2",
+ "dirs 6.0.0",
+ "gpui-kit",
+ "gpui-tray",
+ "notify",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "objc2-user-notifications",
+ "serde",
+ "serde_json",
+ "singswitch-core",
+ "smol",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "singswitch-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "clap_complete",
+ "serde_json",
+ "singswitch-core",
+ "windows-service",
+]
+
+[[package]]
+name = "singswitch-core"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "ureq",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

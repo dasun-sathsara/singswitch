@@ -3,10 +3,10 @@
   <assemblyIdentity
     version="0.1.0.0"
     processorArchitecture="*"
-    name="app.lexiflix.sbctl"
+    name="app.lexiflix.singswitch"
     type="win32"
   />
-  <description>sbctl</description>
+  <description>SingSwitch</description>
   <dependency>
     <dependentAssembly>
       <assemblyIdentity

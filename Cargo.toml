@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/sbctl-core",
-    "crates/sbctl-cli",
-    "crates/sbctl-app",
+    "crates/singswitch-core",
+    "crates/singswitch-cli",
+    "crates/singswitch-app",
 ]
 
 [workspace.package]

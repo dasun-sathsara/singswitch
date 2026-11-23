@@ -2,7 +2,7 @@
 #Requires -RunAsAdministrator
 param(
     [string]$BinDir = "$PSScriptRoot\..\target\x86_64-pc-windows-msvc\release",
-    [string]$SingBoxExe = "$env:ProgramData\sbctl\bin\sing-box.exe",
+    [string]$SingBoxExe = "$env:ProgramData\singswitch\bin\sing-box.exe",
     [string]$WinSwExe = "$env:ProgramFiles\sing-box\winsw.exe",
     # Install the app without registering the sing-box service. Documented in
     # the failure path above, so it has to exist.
@@ -11,26 +11,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$InstallDir = "$env:ProgramFiles\sbctl"
+$InstallDir = "$env:ProgramFiles\singswitch"
 $SingBoxData = "$env:ProgramData\sing-box"
 $ProfilesDir = "$SingBoxData\profiles"
 $LogsDir = "$SingBoxData\logs"
-$SbctlState = "$env:ProgramData\sbctl"
+$SingSwitchState = "$env:ProgramData\singswitch"
 
 Write-Host "==> Creating directories..."
-New-Item -ItemType Directory -Force -Path $InstallDir, $ProfilesDir, $LogsDir, $SbctlState | Out-Null
+New-Item -ItemType Directory -Force -Path $InstallDir, $ProfilesDir, $LogsDir, $SingSwitchState | Out-Null
 
-$sbctlSrc = Join-Path $BinDir "sbctl.exe"
-$appSrc = Join-Path $BinDir "sbctl-app.exe"
-if (-not (Test-Path $sbctlSrc)) { throw "Missing $sbctlSrc. Build with: cargo build --release --workspace --target x86_64-pc-windows-msvc" }
+$singswitchSrc = Join-Path $BinDir "singswitch.exe"
+$appSrc = Join-Path $BinDir "singswitch-app.exe"
+if (-not (Test-Path $singswitchSrc)) { throw "Missing $singswitchSrc. Build with: cargo build --release --workspace --target x86_64-pc-windows-msvc" }
 if (-not (Test-Path $appSrc))   { throw "Missing $appSrc. Build with: cargo build --release --workspace --target x86_64-pc-windows-msvc" }
 
 Write-Host "==> Copying binaries to $InstallDir..."
-Copy-Item $sbctlSrc "$InstallDir\sbctl.exe" -Force
-Copy-Item $appSrc   "$InstallDir\sbctl-app.exe" -Force
+Copy-Item $singswitchSrc "$InstallDir\singswitch.exe" -Force
+Copy-Item $appSrc   "$InstallDir\singswitch-app.exe" -Force
 
 Write-Host "==> Installing the managed sing-box binary..."
-$ManagedBinDir = "$SbctlState\bin"
+$ManagedBinDir = "$SingSwitchState\bin"
 New-Item -ItemType Directory -Force -Path $ManagedBinDir | Out-Null
 $BundledSingBox = Join-Path $BinDir "sing-box\sing-box.exe"
 if (Test-Path $BundledSingBox) {
@@ -44,7 +44,7 @@ if (Test-Path $BundledSingBox) {
 }
 
 # Harden ProgramData ACLs so unprivileged users can read logs/profiles while service updates remain protected.
-icacls $SbctlState  /inheritance:r /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F" /grant "Users:(OI)(CI)R" | Out-Null
+icacls $SingSwitchState  /inheritance:r /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F" /grant "Users:(OI)(CI)R" | Out-Null
 # The tray app runs unprivileged and still has to exec the managed sing-box for
 # `check` and `version`, so the binary directory needs execute rights for Users.
 icacls $ManagedBinDir /grant "Users:(OI)(CI)RX" | Out-Null
@@ -71,7 +71,7 @@ if ($SkipService) {
 <service>
   <id>sing-box</id>
   <name>sing-box</name>
-  <description>sing-box universal proxy service managed by sbctl</description>
+  <description>sing-box universal proxy service managed by singswitch</description>
   <executable>$EscSingBoxExe</executable>
   <arguments>$EscArguments</arguments>
   <logpath>$EscLogsDir</logpath>
@@ -94,14 +94,14 @@ if ($SkipService) {
     throw "WinSW ($WinSwExe) or sing-box ($SingBoxExe) not found. Install both, or run with -SkipService."
 }
 
-# Register privileged sbctl named-pipe helper service (allows unprivileged tray/GUI control without UAC prompts).
-$AgentService = "sbctl-agent"
+# Register privileged singswitch named-pipe helper service (allows unprivileged tray/GUI control without UAC prompts).
+$AgentService = "singswitch-agent"
 if (Get-Service -Name $AgentService -ErrorAction SilentlyContinue) {
     Stop-Service -Name $AgentService -Force -ErrorAction SilentlyContinue
     sc.exe delete $AgentService | Out-Null
     Start-Sleep -Seconds 1
 }
-sc.exe create $AgentService binPath= "`"$InstallDir\sbctl.exe`" agent" start= auto DisplayName= "sbctl Helper" | Out-Null
+sc.exe create $AgentService binPath= "`"$InstallDir\singswitch.exe`" agent" start= auto DisplayName= "singswitch Helper" | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "sc.exe could not create the $AgentService service (exit $LASTEXITCODE)."
 }
@@ -111,12 +111,12 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Create Start Menu shortcut.
-$ShortcutPath = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\sbctl.lnk"
+$ShortcutPath = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\singswitch.lnk"
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
-$Shortcut.TargetPath = "$InstallDir\sbctl-app.exe"
+$Shortcut.TargetPath = "$InstallDir\singswitch-app.exe"
 $Shortcut.WorkingDirectory = $InstallDir
 $Shortcut.Description = "Manage sing-box profiles and service"
 $Shortcut.Save()
 
-Write-Host "==> Installation complete. Launch sbctl from the Start Menu."
+Write-Host "==> Installation complete. Launch singswitch from the Start Menu."

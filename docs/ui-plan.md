@@ -1,9 +1,9 @@
-# sbctl desktop UI: design plan (v3)
+# singswitch desktop UI: design plan (v3)
 
 > **Historical.** This is the design record for the v3 shell, kept because the
 > reasoning still explains the layout. It is not current: the Doctor feature
 > described below was removed after the fact, and the `TODO_` placeholder scheme
-> was replaced by typed readiness (`crates/sbctl-core/src/readiness.rs`). Read
+> was replaced by typed readiness (`crates/singswitch-core/src/readiness.rs`). Read
 > `README.md` for the shipped behaviour.
 
 Status: revised after two adversarial reviews. v3 is a behaviour spec, not a layout sketch: every
@@ -19,18 +19,18 @@ Mode: **Operate**. macOS primary, Windows parity.
 | Two live save actions (`Save`, `Save & Reconnect`) | Both hit the service; the difference is invisible and the choice is meaningless. | One live action: `Save & Reconnect`. |
 | Rail rows switch on hover | Hover-only actions are unreachable by keyboard and touch, and reserving space for them shrinks names. | The rail inspects. Switching is the stage's primary action, `Return`, and the tray. |
 | Active profile pinned when scrolling | The list reorders while the user scrolls and can duplicate a row. | Stable order by name. The running profile is named in the status strip with a `Reveal` action. |
-| "Last active" | `Snapshot.active` is the persisted selection, not a record of a successful connection. `connected_since` starts when the app *observes* running. | `Selected`. Uptime reads `up since sbctl started watching` when the app did not watch the start. |
+| "Last active" | `Snapshot.active` is the persisted selection, not a record of a successful connection. `connected_since` starts when the app *observes* running. | `Selected`. Uptime reads `up since singswitch started watching` when the app did not watch the start. |
 | Rollback assumed to succeed | `recover_inner` has four outcomes: no previous profile, rollback failed, reverted but restart failed, reverted and kept stopped. | Four distinct messages, verbatim from the error's hints. |
 | Setup suppressed for users who dismissed the old guide | Dismissal must never hide a failure. `needs_onboarding` already fires on a blocking Doctor check. | Dismissal hides the welcome copy only. Empty library, unfinished TODOs, permission blocks, init failure, and rollback always show. |
 | `subscription URL` | Import fetches a complete sing-box JSON document over HTTP(S) (`pull_profile`). | `Import from URL`. |
 | Logs 20px in §6.2, 22px in §5.3 | Inconsistency. | 20px everywhere below the hero screen. |
 | Shortcuts silently renumbered | v1 had Dashboard 1, Profiles 2, Logs 3, Doctor 4, Settings 5. | Documented migration, §7. |
-| Native menus unmentioned | `shell.rs` installs sbctl, File, Connection, Edit, Window menus with Undo/Cut/Copy/Paste. | Kept; §7.2 states what changes. |
+| Native menus unmentioned | `shell.rs` installs singswitch, File, Connection, Edit, Window menus with Undo/Cut/Copy/Paste. | Kept; §7.2 states what changes. |
 | Windows notifications under "Menu bar (macOS only)" | `notifier.rs` posts on both platforms. | Cross-platform `Notifications` row. |
 
 ## 1. What it is
 
-`sbctl` points a privileged TUN proxy at one of N saved configs and keeps it alive. The window is a
+`singswitch` points a privileged TUN proxy at one of N saved configs and keeps it alive. The window is a
 profile switcher with a diagnostic bench attached.
 
 Frequency of use: once at setup; daily from the menu bar (confirm state, switch, stop); weekly from
@@ -54,7 +54,7 @@ Doctor).
 ┌───────────────────────────────────────────────────────────────────────────────┐
 │ ○ ○ ○        (native title bar, 34px)                                         │
 ├───────────────┬───────────────────────────────────────────────────────────────┤
-│ sbctl · Connections                    ● Connected: home-vless    ⟳   ⋯      │ 44 toolbar
+│ singswitch · Connections                    ● Connected: home-vless    ⟳   ⋯      │ 44 toolbar
 ├───────────────┼───────────────────────────────────────────────────────────────┤
 │ Profiles  4   │  home-vless                              [Edit] [Save & Reconnect]│
 │ ⌕ Filter      │  13.215.132.32:443 · VLESS + Reality · source saved            │
@@ -63,7 +63,7 @@ Doctor).
 │   sg-direct   │  Tunnel                utun123 · from the profile              │
 │   aws-sg-ads  │  Egress                unset in this profile                   │
 │   work-tokyo  │                                                                │
-│   3 TODO      │  Up since sbctl started watching · 2h 14m   PID 49398  1 restart│
+│   3 TODO      │  Up since singswitch started watching · 2h 14m   PID 49398  1 restart│
 │               │                                                                │
 │               │  Transport   VLESS + Reality        SNI      www.microsoft.com │
 │ ───────────── │  Flow        xtls-rprx-vision       uTLS     chrome            │
@@ -101,7 +101,7 @@ Rules:
 - `Connected: name` requires `running && active == name`. Running with no active profile reads
   `Connected: unknown profile`, which is what the daemon state actually says.
 - Uptime: `connected_since` is set when the app observes running, so the label is
-  `up since sbctl started watching` for any sample older than one poll. `Connected for 2h 14m` is
+  `up since singswitch started watching` for any sample older than one poll. `Connected for 2h 14m` is
   only used when the app watched the transition itself.
 - Restart count is a total, shown whenever non-zero, running or stopped. `Restarting repeatedly` is
   never asserted from a single sample; it requires the count to rise across two or more snapshots.
@@ -169,7 +169,7 @@ redesign makes the target explicit and never connects an unready profile:
 7. **Empty library**: setup §5.5.
 8. **Snapshot failure at startup**: when `Controller::snapshot()` fails, `AppStore` currently
    stores an empty snapshot and the window looks like a fresh install. The redesign keeps
-   `init_error`/snapshot error distinct and shows `sbctl could not read the service state` with the
+   `init_error`/snapshot error distinct and shows `singswitch could not read the service state` with the
    error and `Retry`, never the empty-library guide.
 
 `Delete` states that a running profile's service is stopped first, then confirms.
@@ -232,7 +232,7 @@ redesign makes the target explicit and never connects an unready profile:
 
 Always shown when a condition holds, regardless of `onboarding_dismissed`:
 
-1. **Init failure** — `sbctl cannot reach the service`, error text, `Run Doctor`.
+1. **Init failure** — `singswitch cannot reach the service`, error text, `Run Doctor`.
 2. **Empty library** — three steps (managed sing-box, permissions, a profile).
 3. **Profiles exist, none ready** — `Every profile still has TODO values.` + a row and `Fix` per
    incomplete profile.
@@ -259,10 +259,10 @@ Rows 52px, hairlines, groups 26px apart.
   connect` — describes the real behaviour: one lookup on launch when enabled, and after each
   switch, never on a timer.
 - **System**: `Platform`, `Profiles directory`, `Active configuration`, `Error log`, `Access log`,
-  `Service target` (`system/app.lexiflix.singbox` or `sing-box (\\.\pipe\sbctl-control)`),
+  `Service target` (`system/app.lexiflix.singswitch-daemon` or `sing-box (\\.\pipe\singswitch-control)`),
   `Managed sing-box`. Mono 12, copyable, full value on hover.
 - **Setup**: `Show setup again` (clears `onboarding_dismissed`).
-- **About**: version, licence, `Open log folder`, `Quit sbctl`.
+- **About**: version, licence, `Open log folder`, `Quit singswitch`.
 
 **Migration.** `ui-settings.json` keeps `theme`, `launch_at_login`, `show_profile_in_menubar`,
 `auto_refresh_ip`, `desktop_notifications`, window size, `onboarding_dismissed`. `sidebar_collapsed`
@@ -287,15 +287,15 @@ Refresh public IP                       ⌘R
 Sync remote profiles
 Run Doctor…                             (top item when broken or failed)
 ──────────────
-Open sbctl                              ⌘0
+Open singswitch                              ⌘0
 Logs
 Settings…
 ──────────────
-Quit sbctl
+Quit singswitch
 ```
 
-- Tooltip is `tray_tooltip()`'s text unchanged: `sbctl: Connected to home-vless`,
-  `sbctl: <broken reason>`, `sbctl: <phase>`. This is separate from the menu headline.
+- Tooltip is `tray_tooltip()`'s text unchanged: `singswitch: Connected to home-vless`,
+  `singswitch: <broken reason>`, `singswitch: <phase>`. This is separate from the menu headline.
 - Menu title states carry the same words as the window, plus the observed IP and location.
 - `broken` shows `Attention needed: <reason>` first, with `Run Doctor…` directly under it.
 - `Needs setup` rows stay visible and disabled.
@@ -403,7 +403,7 @@ cannot connect.
 
 ### 7.2 Native menus
 
-`shell.rs` keeps sbctl, File, Connection, Edit, Window, with Undo/Redo/Cut/Copy/Paste/Select All.
+`shell.rs` keeps singswitch, File, Connection, Edit, Window, with Undo/Redo/Cut/Copy/Paste/Select All.
 Changes: File gains `New Profile…`, `Import from URL…`; Connection gains the same state-aware
 `Connect`/`Disconnect` label as the toolbar; the removed Dashboard entry becomes `Connections`.
 `Edit` keeps the standard responder actions; `Window` keeps minimise/zoom/bring-all-to-front.
