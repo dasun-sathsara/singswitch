@@ -411,13 +411,13 @@ impl AppStore {
         let text = if self.is_probing() {
             // The icon is installed before the first probe answers; naming a
             // state here would be a guess, not an observation.
-            "singswitch".to_string()
+            "SingSwitch".to_string()
         } else if let Some(phase) = &self.busy_phase {
-            format!("singswitch · {phase}")
+            format!("SingSwitch · {phase}")
         } else if let Some(issue) = self.init_error.as_ref().or(self.snapshot.broken.as_ref()) {
-            format!("singswitch · {issue}")
+            format!("SingSwitch · {issue}")
         } else if self.snapshot.health.state == RunState::Error {
-            "singswitch · Service failed · Open Logs".to_string()
+            "SingSwitch · Service failed · Open Logs".to_string()
         } else if !self.snapshot.running {
             let needs_setup = self
                 .selected_profile
@@ -427,14 +427,14 @@ impl AppStore {
             // Same source the connection card uses, so the two cannot name
             // different profiles.
             match (&self.selected_profile, needs_setup) {
-                (Some(name), true) => format!("singswitch · {name} needs setup"),
-                (Some(name), false) => format!("singswitch · Disconnected · {name} selected"),
-                (None, _) => "singswitch · Disconnected".to_string(),
+                (Some(name), true) => format!("SingSwitch · {name} needs setup"),
+                (Some(name), false) => format!("SingSwitch · Disconnected · {name} selected"),
+                (None, _) => "SingSwitch · Disconnected".to_string(),
             }
         } else {
             match &self.snapshot.active {
-                Some(name) => format!("singswitch · Connected to {name}"),
-                None => "singswitch · Connected".to_string(),
+                Some(name) => format!("SingSwitch · Connected to {name}"),
+                None => "SingSwitch · Connected".to_string(),
             }
         };
         if text.chars().count() > CAP {

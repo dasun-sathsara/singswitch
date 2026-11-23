@@ -262,7 +262,7 @@ pub fn resolve_singbox_binary(override_bin: Option<&Path>) -> Option<PathBuf> {
 
 /// Locate a sing-box copy shipped inside the app bundle next to this executable.
 ///
-/// macOS: `singswitch.app/Contents/Resources/sing-box/sing-box`.
+/// macOS: `SingSwitch.app/Contents/Resources/sing-box/sing-box`.
 /// Windows: `sing-box\sing-box.exe` beside the app executable.
 pub fn bundled_singbox_binary() -> Option<PathBuf> {
     let exe = env::current_exe().ok()?;

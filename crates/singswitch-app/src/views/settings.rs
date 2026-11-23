@@ -160,7 +160,7 @@ fn render_behavior_card(
         .child(setting_switch_row(
             "set-launch-login",
             "Open at login",
-            "Start singswitch in the menu bar or tray when you sign in.",
+            "Start SingSwitch in the menu bar or tray when you sign in.",
             settings.launch_at_login,
             false,
             move |checked, _, cx| {

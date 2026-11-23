@@ -101,7 +101,7 @@ if (Get-Service -Name $AgentService -ErrorAction SilentlyContinue) {
     sc.exe delete $AgentService | Out-Null
     Start-Sleep -Seconds 1
 }
-sc.exe create $AgentService binPath= "`"$InstallDir\singswitch.exe`" agent" start= auto DisplayName= "singswitch Helper" | Out-Null
+sc.exe create $AgentService binPath= "`"$InstallDir\singswitch.exe`" agent" start= auto DisplayName= "SingSwitch Helper" | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "sc.exe could not create the $AgentService service (exit $LASTEXITCODE)."
 }
@@ -119,4 +119,4 @@ $Shortcut.WorkingDirectory = $InstallDir
 $Shortcut.Description = "Manage sing-box profiles and service"
 $Shortcut.Save()
 
-Write-Host "==> Installation complete. Launch singswitch from the Start Menu."
+Write-Host "==> Installation complete. Launch SingSwitch from the Start Menu."

@@ -331,8 +331,8 @@ fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
     }
 
     items.push(MenuItem::separator());
-    items.push(MenuItem::action("Open singswitch", OpenMainWindow));
-    items.push(MenuItem::action("Quit singswitch", QuitApp));
+    items.push(MenuItem::action("Open SingSwitch", OpenMainWindow));
+    items.push(MenuItem::action("Quit SingSwitch", QuitApp));
     items
 }
 
