@@ -150,18 +150,27 @@ impl Theme {
         }
 
         let content_lines: Vec<&str> = body.trim_end_matches('\n').lines().collect();
+        // The top edge is "╭─ <title> <rule>╮" and the body is "│  <line>  │",
+        // so the rule has to absorb whatever the title adds over the 6 columns
+        // of frame and padding. A title longer than the body keeps one rule
+        // cell rather than letting the box open wider than its own contents.
+        let title = "SingSwitch";
         let inner_width = content_lines
             .iter()
             .map(|l| visible_width(l))
             .max()
             .unwrap_or(10)
-            .max(12);
+            .max(visible_width(title));
 
         let mut boxed = String::new();
         boxed.push_str(&format!(
             "╭─ {} {}╮\n",
-            self.paint("1", "singswitch"),
-            "─".repeat(inner_width.saturating_sub(6))
+            self.paint("1", title),
+            "─".repeat(
+                (inner_width + 1)
+                    .saturating_sub(visible_width(title))
+                    .max(1)
+            )
         ));
         for line in content_lines {
             let pad = " ".repeat(inner_width.saturating_sub(visible_width(line)));
