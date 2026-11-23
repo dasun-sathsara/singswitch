@@ -24,6 +24,15 @@ Write-Host "==> Removing Start Menu shortcut, HKCU Run entry, and binaries..."
 Remove-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\singswitch.lnk" -Force -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "singswitch" -ErrorAction SilentlyContinue
 Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+# install.ps1 appended $InstallDir to the machine PATH. Leave it behind and
+# every shell keeps a directory that no longer exists.
+$machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+if ($machinePath) {
+    $cleaned = ($machinePath -split ';' | Where-Object { $_ -and $_.TrimEnd('\') -ne $InstallDir.TrimEnd('\') }) -join ';'
+    if ($cleaned -ne $machinePath) {
+        [Environment]::SetEnvironmentVariable("Path", $cleaned, "Machine")
+    }
+}
 # The managed sing-box copy is ours, unlike profiles and logs, so it always goes.
 Remove-Item -Path "$SingSwitchState\bin" -Recurse -Force -ErrorAction SilentlyContinue
 
