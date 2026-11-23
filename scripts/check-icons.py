@@ -10,6 +10,7 @@ the full Lucide catalog, and checks the path is reachable from either
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import sys
@@ -20,14 +21,30 @@ ASSETS_RS = APP / "assets.rs"
 
 
 def registry_icon_dir() -> pathlib.Path:
+    # Honour CARGO_HOME: rust official and CI images put the registry there,
+    # and reading only ~/.cargo reports every icon as missing.
+    cargo_home = pathlib.Path(os.environ.get("CARGO_HOME") or pathlib.Path.home() / ".cargo")
     candidates = sorted(
-        (pathlib.Path.home() / ".cargo" / "registry" / "src").glob(
-            "*/gpui-kit-assets-*/assets/icons"
-        )
+        (cargo_home / "registry" / "src").glob("*/gpui-kit-assets-*/assets/icons"),
+        key=version_key,
     )
     if not candidates:
-        sys.exit("icon check: no gpui-kit-assets crate in the cargo registry")
+        sys.exit(f"icon check: no gpui-kit-assets crate under {cargo_home}/registry/src")
     return candidates[-1]
+
+
+def version_key(path: pathlib.Path) -> tuple[int, ...]:
+    """Sort by the crate version, not the directory name.
+
+    Cargo keeps old versions unpacked after an upgrade, and a plain string sort
+    puts 0.9.0 after 0.10.0. Picking the wrong crate validates against the wrong
+    default-icons.txt, so an icon dropped upstream would still pass.
+    """
+    names = [p.name for p in path.parents if p.name.startswith("gpui-kit-assets-")]
+    if not names:
+        return ()
+    parts = names[0].removeprefix("gpui-kit-assets-").split(".")
+    return tuple(int(p) for p in parts if p.isdigit())
 
 
 def catalog_paths(icon_dir: pathlib.Path) -> dict[str, str]:
@@ -62,7 +79,9 @@ def declared_domain_icons() -> set[str]:
 def used_icons() -> set[str]:
     used = set()
     for source in APP.rglob("*.rs"):
-        used |= set(re.findall(r"IconName::(\w+)", source.read_text()))
+        # Only enum variants. `IconName::path` and `IconName::ALL` are real
+        # associated items and are not icons.
+        used |= set(re.findall(r"IconName::([A-Z]\w*)", source.read_text()))
     return used
 
 

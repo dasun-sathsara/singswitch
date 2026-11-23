@@ -1,4 +1,4 @@
-.PHONY: all build fmt fmt-check lint check cross bundle-macos install-macos uninstall-macos clean
+.PHONY: all build fmt fmt-check lint icons check cross bundle-macos install-macos uninstall-macos clean
 
 all: check build
 
@@ -14,13 +14,18 @@ fmt-check:
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 
-check: fmt-check lint
+# A missing icon renders as blank space instead of failing the build, so check
+# for one here too: `make check` and the bundle path skip scripts/check-macos.sh.
+icons:
+	./scripts/check-icons.py
+
+check: fmt-check lint icons
 
 cross:
 	./scripts/check-macos.sh
 	./scripts/check-windows.sh
 
-bundle-macos:
+bundle-macos: icons
 	./scripts/build-mac.sh
 
 install-macos:
