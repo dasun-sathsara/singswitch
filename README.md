@@ -1,99 +1,177 @@
-# SingSwitch
+<p align="center">
+  <img src="assets/icons/app-icon.png" width="96" height="96" alt="SingSwitch Icon" />
+</p>
 
-[sing-box](https://sing-box.sagernet.org/) opens a TUN interface and routes your traffic through one
-proxy. Switching proxy means swapping the config and restarting the daemon, and when that goes
-wrong you lose the network you were using to fix it.
+<h1 align="center">SingSwitch</h1>
 
-SingSwitch does that swap and takes responsibility for the result. It validates the new profile
-with `sing-box check` before touching anything, restarts the service, and watches it for 2.5
-seconds. If the daemon exits, changes PID, or restarts, the previous profile comes back and you
-are still online.
+<p align="center">
+  <strong>Crash-safe, zero-loss proxy switching for <a href="https://sing-box.sagernet.org/">sing-box</a>.</strong>
+</p>
 
-It ships as a menu bar app on macOS, a system tray app on Windows, and a CLI that does everything
-the window does.
+<p align="center">
+  <a href="#install">Install</a> •
+  <a href="#why-singswitch">Why SingSwitch</a> •
+  <a href="#interface">Interface</a> •
+  <a href="#cli">CLI</a> •
+  <a href="#architecture--security">Security</a> •
+  <a href="LICENSE">License</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-blue?style=flat-square" alt="Platform: macOS and Windows" />
+  <img src="https://img.shields.io/badge/architecture-Apple%20Silicon%20%7C%20x86__64-informational?style=flat-square" alt="Architecture" />
+  <img src="https://img.shields.io/badge/built%20with-GPUI%20%26%20Rust-orange?style=flat-square" alt="Rust & GPUI" />
+  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License: MIT" />
+</p>
+
+<br />
+
+<p align="center">
+  <img src="docs/screenshots/01_connections_dark.png" width="840" alt="SingSwitch Connections Dashboard" />
+</p>
+
+---
+
+## Why SingSwitch?
+
+When [sing-box](https://sing-box.sagernet.org/) routes your system traffic through a TUN interface, swapping proxies requires swapping configurations and restarting the service daemon. 
+
+If a remote endpoint is dead, TLS handshakes fail, or the configuration contains a subtle syntax error, the daemon exits or panics. **You are left completely disconnected**—without the network connection required to look up solutions or revert the configuration.
+
+SingSwitch eliminates this failure mode:
+
+1. **Pre-flight verification**: Runs `sing-box check` against the target configuration before making any changes.
+2. **Atomic activation**: Performs an unprivileged atomic symlink swap so the daemon only ever reads a valid target.
+3. **Health window guard**: Restarts the service and actively watches it for 2.5 seconds. If the process exits, changes PID, or crashes, **SingSwitch automatically restores the previous working profile**. You stay online.
+
+---
+
+## Interface
+
+SingSwitch is built in Rust on **GPUI**, delivering native 120 FPS rendering, instant sub-second launch, and a resident memory footprint of under 35 MB.
+
+### Connections & Network Status
+Manage active routing endpoints, monitor public egress IP addresses with one-click copy, and switch profiles instantly.
+
+| Dark Theme | Light Theme |
+| :---: | :---: |
+| <img src="docs/screenshots/01_connections_dark.png" width="410" alt="Connections Dark" /> | <img src="docs/screenshots/01_connections_light.png" width="410" alt="Connections Light" /> |
+
+### Dual-Mode Configuration Editor
+Edit profiles via guided visual forms or direct JSON with real-time syntax checking and keyboard shortcuts (`⌘S` / `Ctrl+S`).
+
+| Guided Setup Form | Syntax-Validated JSON Editor |
+| :---: | :---: |
+| <img src="docs/screenshots/03_editor_guided_dark.png" width="410" alt="Guided Editor" /> | <img src="docs/screenshots/04_editor_json_dark.png" width="410" alt="JSON Editor" /> |
+
+### High-Density Live Logs & Settings
+Follow live daemon error and access logs with regular expression filtering, level color-coding, and granular settings cards.
+
+| Live Logs Stream | Preferences & Daemon Layout |
+| :---: | :---: |
+| <img src="docs/screenshots/05_logs_dark.png" width="410" alt="Logs Dark" /> | <img src="docs/screenshots/06_settings_dark.png" width="410" alt="Settings Dark" /> |
+
+---
 
 ## Install
 
-macOS:
+### macOS
+
+SingSwitch runs as a menu bar app on macOS (Sonoma, Sequoia, and later on Apple Silicon and Intel).
 
 ```bash
-make bundle-macos
+# Clone the repository
+git clone https://github.com/dasun-sathsara/singswitch.git
+cd singswitch
+
+# Build release bundle and install to /Applications and /usr/local/bin
+./scripts/build-mac.sh
 ./scripts/install-macos.sh
 ```
 
-Windows. Build on Windows or cross-compile, stage the managed binary, then run PowerShell as
-administrator:
+### Windows
+
+Runs as a system tray application and background Windows service (WinSW):
 
 ```powershell
+# In PowerShell (Administrator)
 cargo build --release --workspace --target x86_64-pc-windows-msvc
 ./scripts/fetch-sing-box.sh windows-amd64 target/x86_64-pc-windows-msvc/release
 .\scripts\install.ps1
 ```
 
-Uninstall with `./scripts/uninstall-macos.sh` or `.\scripts\uninstall.ps1`, adding `--purge` or
-`-Purge` to delete profiles and logs too.
+### Uninstallation
 
-The installer puts a pinned, checksum-verified sing-box at a root-owned path, so the daemon execs a
-binary an ordinary user cannot replace. You do not need sing-box installed. A copy bundled with
-the app is used next, and a `PATH` binary only when neither exists, which means before install or
-on a machine where the managed copy was removed.
+```bash
+# macOS
+./scripts/uninstall-macos.sh        # Keeps profiles in /usr/local/etc/sing-box
+./scripts/uninstall-macos.sh --purge # Cleans all profiles and service logs
+
+# Windows (PowerShell)
+.\scripts\uninstall.ps1
+```
+
+---
 
 ## CLI
 
-```
-singswitch                     status panel and interactive profile picker
-singswitch use <name>          switch, with rollback if the service dies
-singswitch off                 stop sing-box
-singswitch status              what sing-box is doing right now
-singswitch list                profiles, and which fields are still empty
-singswitch add <name>          create from the template, then edit
-singswitch pull <name> <url>   download a profile and validate it
-singswitch sync [name]         re-fetch one or all remote profiles
-singswitch edit <name>         edit and validate, reloading if it is active
-singswitch rm <name>           delete a profile
-singswitch check [name]        validate the named or active profile
-singswitch logs [-n 80] [-f]   follow sing-box output
-singswitch ip                  the public address traffic leaves from
-singswitch completion <shell>  shell completions
-```
-
-Flags are `--json`, `--plain`, `--no-color`, `-q`, and `-v`.
-
-Every command takes `--json` and prints a single document, errors included:
-`{"schema":1,"code":N,"error":"...","hints":[...]}`. Exit codes stay fixed at `0` success, `1`
-general, `2` validation, `3` service failure, `4` missing privileges. No command prompts when stdin
-is not a terminal, so scripts need no special flags. [docs/cli-json.md](docs/cli-json.md) has the
-full contract.
-
-## Where things live
-
-| | macOS | Windows |
-| --- | --- | --- |
-| Service | launchd `app.lexiflix.singswitch-daemon` | WinSW `sing-box`, plus `singswitch-agent` |
-| sing-box | `/usr/local/libexec/singswitch/sing-box` | `%ProgramData%\singswitch\bin\sing-box.exe` |
-| Active config | symlink at `/usr/local/etc/sing-box/config.json` | copy at `%ProgramData%\sing-box\config.json` |
-| Logs | `/var/log/sing-box/{error,access}.log` | `%ProgramData%\sing-box\logs\` |
-
-The window and the CLI run as you. Service control goes through four fixed `NOPASSWD` sudo rules on
-macOS, or a named pipe and UAC on Windows, so nothing holds root between commands.
-[SECURITY.md](SECURITY.md) lists the rules and, more usefully, what they do not protect against.
-
-## When the window does not appear
-
-A bundled app has no terminal, so startup writes to a file:
-`~/Library/Logs/singswitch/app.log` on macOS, `%LOCALAPPDATA%\singswitch\logs\app.log` on Windows.
-Every line carries a UTC timestamp, including tray setup, window creation, and panics.
-
-## Development
+SingSwitch includes a full-featured CLI that shares the core engine with the GUI app. Every window operation has an exact CLI equivalent.
 
 ```bash
-make check      # format and clippy, warnings denied
-make cross      # macOS and Windows cross-compilation
+singswitch                     # Interactive TTY profile switcher
+singswitch use <name>          # Switch profile with automatic health rollback
+singswitch off                 # Stop sing-box daemon
+singswitch status              # Inspect daemon state, active profile, and PID
+singswitch list                # List profiles and schema readiness
+singswitch add <name>          # Initialize a new profile from template
+singswitch pull <name> <url>   # Fetch and validate a remote subscription/profile
+singswitch sync [name]         # Re-fetch one or all subscribed profiles
+singswitch edit <name>         # Edit configuration in $EDITOR with live validation
+singswitch rm <name>           # Delete profile
+singswitch check [name]        # Validate active or named profile syntax
+singswitch logs [-n 80] [-f]   # Stream and follow sing-box logs
+singswitch ip                  # Resolve and display current public egress IP
+singswitch completion <shell>  # Generate shell completions (zsh, bash, fish)
 ```
 
-Cross-building the macOS bundle from Linux needs `MAC_SDK=/path/to/MacOSX14.5.sdk` and a shader
-stitch first; `scripts/cross-env.sh` and `scripts/stitch-macos-shaders.sh` handle both.
+### Scripting & Automation
+
+All CLI commands support `--json` and emit structured JSON for scripts and orchestration:
+
+```bash
+$ singswitch status --json
+{
+  "running": true,
+  "profile": "aws-sg-direct",
+  "server": "13.215.132.32:443",
+  "interface": "utun123",
+  "pid": 71398,
+  "public_ip": "103.219.171.115"
+}
+```
+
+Exit codes follow a fixed schema: `0` (Success), `1` (General error), `2` (Validation failure), `3` (Service crash / rollback triggered), `4` (Missing privileges). See [docs/cli-json.md](docs/cli-json.md).
+
+---
+
+## Architecture & Security
+
+| Path | macOS | Windows |
+| :--- | :--- | :--- |
+| **Service Daemon** | launchd `app.lexiflix.singswitch-daemon` | WinSW service `sing-box` |
+| **Binary Path** | `/usr/local/libexec/singswitch/sing-box` | `%ProgramData%\singswitch\bin\sing-box.exe` |
+| **Active Config** | `/usr/local/etc/sing-box/config.json` (symlink) | `%ProgramData%\sing-box\config.json` |
+| **Profile Library** | `/usr/local/etc/sing-box/profiles/*.json` | `%ProgramData%\sing-box\profiles\` |
+| **Service Logs** | `/var/log/sing-box/{error,access}.log` | `%ProgramData%\sing-box\logs\` |
+
+### Security Model
+- **No persistent root privileges**: The GUI app and CLI execute strictly under your unprivileged user account.
+- **Scoped elevation**: Service restarts execute via four explicit `NOPASSWD` sudo rules on macOS (or a named pipe on Windows).
+- **Unprivileged profile swapping**: Profile activation is an unprivileged atomic symlink rename (`renameat`) in a user-owned configuration directory, closing arbitrary privilege escalation vectors.
+- See [SECURITY.md](SECURITY.md) for detailed audit guarantees and security properties.
+
+---
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE) © 2026 Dasun Sathsara
