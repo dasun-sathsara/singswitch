@@ -5799,9 +5799,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "sbctl-core",
- "serde",
  "serde_json",
- "tempfile",
  "windows-service",
 ]
 

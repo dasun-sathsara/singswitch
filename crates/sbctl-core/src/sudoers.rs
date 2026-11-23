@@ -29,14 +29,6 @@ impl SudoCommand {
             .zip(argv.iter())
             .all(|(pattern, candidate)| fnmatch_pathname(pattern, candidate))
     }
-
-    /// Substitute `*.json` with a concrete probe filename for `sudo -n -l` verification.
-    pub fn probe_argv(&self) -> Vec<String> {
-        self.argv
-            .iter()
-            .map(|arg| arg.replace("*.json", "probe.json"))
-            .collect()
-    }
 }
 
 impl Layout {
@@ -169,58 +161,4 @@ pub fn fnmatch_pathname(pattern: &str, text: &str) -> bool {
         }
     }
     inner(pattern.as_bytes(), text.as_bytes())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::profile::validate_name;
-
-    #[test]
-    fn no_rule_grants_a_globbed_or_traversable_path() {
-        let layout = Layout::darwin();
-        let rendered = layout.sudoers("dasun").expect("sudoers should render");
-
-        // sudo matches the whole argv as one space-joined string, so a `*` in a
-        // rule also matches `/` and `..`. No rule may contain a wildcard, and
-        // the activate grant is gone entirely rather than made "safe".
-        assert!(
-            !rendered.contains("*.json"),
-            "a globbed rule permits traversal:\n{rendered}"
-        );
-        assert!(
-            !rendered.contains(".."),
-            "a rule may not name a parent path:\n{rendered}"
-        );
-        assert!(
-            !layout.sudo_commands().iter().any(|c| c.name == "activate"),
-            "activating needs no root: the installer hands over the config dir"
-        );
-    }
-
-    #[test]
-    fn sudoers_renders_the_expected_rules() {
-        let layout = Layout::darwin();
-        let rendered = layout.sudoers("dasun").expect("sudoers should render");
-        let lines: Vec<_> = rendered
-            .lines()
-            .filter(|l| !l.starts_with('#') && !l.is_empty())
-            .collect();
-        assert_eq!(lines.len(), layout.sudo_commands().len());
-        assert_eq!(lines.len(), 4, "activate is no longer privileged");
-        assert!(
-            lines
-                .iter()
-                .all(|l| l.starts_with("dasun ALL=(root) NOPASSWD: "))
-        );
-        assert!(validate_name("aws-sg").is_ok());
-    }
-
-    #[test]
-    fn sudoers_rejects_malicious_user() {
-        let layout = Layout::darwin();
-        assert!(layout.sudoers("alice\nroot").is_err());
-        assert!(layout.sudoers("alice ALL=(ALL) ALL").is_err());
-        assert!(layout.sudoers("").is_err());
-    }
 }

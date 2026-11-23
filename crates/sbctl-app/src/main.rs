@@ -35,7 +35,7 @@ mod desktop {
     use crate::actions::{
         CloseWindow, ConnectActive, DisconnectService, ImportUrlDialog, NavTab, NewProfileDialog,
         Noop, OpenLogsView, OpenMainWindow, OpenSettingsView, QuitApp, RefreshIp,
-        SaveAndActivateProfile, SaveCurrentProfile, SelectTab, SwitchProfile, SyncAll, SyncProfile,
+        SaveAndActivateProfile, SaveCurrentProfile, SelectTab, SwitchProfile, SyncAll,
         ToggleService,
     };
     use crate::shell::{install_app_menus, set_dock_visible};
@@ -151,6 +151,7 @@ mod desktop {
             KeyBinding::new("cmd-backspace", crate::actions::DeleteSelectedProfile, None),
             KeyBinding::new("cmd-shift-k", ToggleService, None),
             KeyBinding::new("cmd-,", OpenSettingsView, None),
+            KeyBinding::new("escape", crate::actions::BackToConnections, None),
             KeyBinding::new("cmd-w", CloseWindow, None),
             KeyBinding::new("cmd-q", QuitApp, None),
         ]);
@@ -185,6 +186,7 @@ mod desktop {
             ),
             KeyBinding::new("ctrl-shift-k", ToggleService, None),
             KeyBinding::new("ctrl-,", OpenSettingsView, None),
+            KeyBinding::new("escape", crate::actions::BackToConnections, None),
             KeyBinding::new("ctrl-w", CloseWindow, None),
             KeyBinding::new("ctrl-q", QuitApp, None),
         ]);
@@ -192,11 +194,18 @@ mod desktop {
 
     /// Drop our handle to the main window once it is gone.
     ///
-    /// Keeping it retains the whole shell: the editor rope, per-profile drafts
-    /// and both log buffers, for as long as the app sits in the tray. Both close
+    /// Keeping it retains the whole shell: the editor rope and both log buffers,
+    /// for as long as the app sits in the tray. Unsaved buffers are stashed in
+    /// the store above, so releasing the shell does not drop them. Both close
     /// paths must call this, or clicking the window's close button leaks what
     /// Cmd-W releases.
     pub(crate) fn forget_main_window(cx: &mut App) {
+        // The shell is about to be dropped, so anything still only in the editor
+        // buffer has to be stashed first or it is lost with it.
+        let view = cx.global::<AppGlobalState>().main_view.clone();
+        if let Some(view) = view {
+            view.update(cx, |shell, cx| shell.stash_editor_draft(cx));
+        }
         let g = cx.global_mut::<AppGlobalState>();
         g.main_window = None;
         g.main_view = None;
@@ -356,13 +365,6 @@ mod desktop {
             });
         });
 
-        cx.on_action(|action: &SyncProfile, cx: &mut App| {
-            let store = cx.global::<AppGlobalState>().store.clone();
-            let name = action.name.clone();
-            let origin = store.read(cx).notice_origin_for_current_tab();
-            store.update(cx, |s, cx| s.sync_profile(name, origin, cx));
-        });
-
         cx.on_action(|_: &SyncAll, cx: &mut App| {
             let store = cx.global::<AppGlobalState>().store.clone();
             let origin = store.read(cx).notice_origin_for_current_tab();
@@ -390,6 +392,10 @@ mod desktop {
         });
 
         cx.on_action(|_: &crate::actions::BackToConnections, cx: &mut App| {
+            // Leaving the editor unmounts the panel, so stash the buffer first.
+            if let Some(view) = cx.global::<AppGlobalState>().main_view.clone() {
+                view.update(cx, |shell, cx| shell.stash_editor_draft(cx));
+            }
             let store = cx.global::<AppGlobalState>().store.clone();
             store.update(cx, |s, cx| s.end_edit(cx));
         });
@@ -438,7 +444,11 @@ mod desktop {
             // on_window_should_close, so without this check a machine whose
             // tray failed to install loses the window and the Dock icon.
             if !store.read(cx).tray_available {
-                crate::diag::log("close ignored: no tray to restore the window from");
+                // With no tray and no Dock icon there is nothing to reopen the
+                // window from, so closing means quitting. Refusing left the
+                // window open with a close button that did nothing.
+                crate::diag::log("close with no tray: quitting");
+                cx.dispatch_action(&QuitApp);
                 return;
             }
             if let Some(handle) = handle {

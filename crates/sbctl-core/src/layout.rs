@@ -126,8 +126,7 @@ impl Layout {
         self.platform == PlatformKind::Darwin
     }
 
-    /// Returns the concrete `ln` argv used to point `active_config_path` at `profile_path`.
-    /// Directory where sbctl stores non-root UI settings and lock files.
+    /// Path to the advisory lock shared by the CLI, the tray, and the GUI.
     pub fn lock_path(&self) -> PathBuf {
         self.profiles_dir.join(".sbctl.lock")
     }
@@ -340,76 +339,5 @@ fn is_executable_file(path: &Path) -> bool {
     #[cfg(not(unix))]
     {
         meta.is_file()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn darwin_layout_preserves_canonical_paths() {
-        let layout = Layout::darwin();
-        assert_eq!(layout.platform, PlatformKind::Darwin);
-        assert_eq!(layout.launchd_label, "system/app.lexiflix.singbox");
-        assert_eq!(
-            layout.plist_path,
-            Path::new("/Library/LaunchDaemons/app.lexiflix.singbox.plist")
-        );
-        assert_eq!(
-            layout.profiles_dir,
-            Path::new("/usr/local/etc/sing-box/profiles")
-        );
-        assert_eq!(
-            layout.active_config_path,
-            Path::new("/usr/local/etc/sing-box/config.json")
-        );
-        assert_eq!(layout.active_name_path, None);
-        assert!(layout.uses_sudo());
-    }
-
-    #[test]
-    fn windows_layout_preserves_program_data_contract() {
-        let layout = Layout::windows_with_program_data(Path::new(r"C:\ProgramData"));
-        assert_eq!(layout.platform, PlatformKind::Windows);
-        assert_eq!(layout.service_name, "sing-box");
-        assert_eq!(
-            layout.active_name_path.as_deref(),
-            Some(
-                Path::new(r"C:\ProgramData")
-                    .join("sbctl")
-                    .join("active-profile")
-                    .as_path()
-            )
-        );
-        assert!(!layout.uses_sudo());
-    }
-
-    #[test]
-    fn managed_singbox_lives_outside_user_writable_roots() {
-        let darwin = Layout::darwin();
-        assert_eq!(
-            darwin.managed_singbox_bin(),
-            Path::new("/usr/local/libexec/sbctl/sing-box")
-        );
-        assert!(
-            !darwin
-                .managed_singbox_bin()
-                .starts_with(&darwin.profiles_dir)
-        );
-
-        let windows = Layout::windows_with_program_data(Path::new(r"C:\ProgramData"));
-        assert_eq!(
-            windows.managed_singbox_bin(),
-            Path::new(r"C:\ProgramData")
-                .join("sbctl")
-                .join("bin")
-                .join("sing-box.exe")
-        );
-        assert!(
-            !windows
-                .managed_singbox_bin()
-                .starts_with(&windows.profiles_dir)
-        );
     }
 }

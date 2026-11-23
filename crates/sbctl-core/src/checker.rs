@@ -1,8 +1,6 @@
-use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::error::{Result, SbctlError};
@@ -141,66 +139,4 @@ fn read_pipe(pipe: Option<impl std::io::Read>) -> String {
     let mut buf = String::new();
     let _ = reader.read_to_string(&mut buf);
     buf
-}
-
-fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Test double for `Checker`.
-#[derive(Default)]
-pub struct FakeChecker {
-    pub invalid: Mutex<HashMap<PathBuf, String>>,
-    pub global_error: Mutex<Option<String>>,
-    pub missing_binary: bool,
-    pub version_value: String,
-    pub checked: Mutex<Vec<PathBuf>>,
-}
-
-impl FakeChecker {
-    pub fn with_version(version: &str) -> Self {
-        Self {
-            version_value: version.to_string(),
-            ..Default::default()
-        }
-    }
-
-    pub fn set_invalid(&self, path: &Path, reason: &str) {
-        lock_unpoisoned(&self.invalid).insert(path.to_path_buf(), reason.to_string());
-    }
-}
-
-impl Checker for FakeChecker {
-    fn check(&self, path: &Path) -> Result<()> {
-        lock_unpoisoned(&self.checked).push(path.to_path_buf());
-        if self.missing_binary {
-            return Err(SbctlError::sing_box_missing());
-        }
-        if let Some(err) = lock_unpoisoned(&self.global_error).as_ref() {
-            return Err(SbctlError::invalid_config(
-                path.to_string_lossy(),
-                err.clone(),
-            ));
-        }
-        if let Some(reason) = lock_unpoisoned(&self.invalid).get(path) {
-            return Err(SbctlError::invalid_config(
-                path.to_string_lossy(),
-                reason.clone(),
-            ));
-        }
-        Ok(())
-    }
-
-    fn version(&self) -> Result<String> {
-        if self.missing_binary {
-            return Err(SbctlError::sing_box_missing());
-        }
-        if self.version_value.is_empty() {
-            Ok("1.13.8-fake".to_string())
-        } else {
-            Ok(self.version_value.clone())
-        }
-    }
 }

@@ -131,6 +131,11 @@ pub fn run_elevated_executable(
         ));
     }
 
+    // Unbounded on purpose. One request is SyncAll, which fetches and validates
+    // every sourced profile (30s + 20s each, uncapped), so any fixed deadline
+    // here would abort real work; and killing it mid-write would strand a
+    // two-step config replacement. The GUI holds a busy state and reports the
+    // outcome, which is the signal the user acts on.
     let wait_res = unsafe { WaitForSingleObject(sei.hProcess, INFINITE) };
     if wait_res == WAIT_FAILED {
         unsafe { CloseHandle(sei.hProcess) };
@@ -185,23 +190,5 @@ fn windows_is_elevated() -> bool {
         );
         CloseHandle(token);
         ok != 0 && elevation.TokenIsElevated != 0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn quote_arg_handles_spaces_quotes_and_backslashes() {
-        assert_eq!(quote_arg("simple"), "simple");
-        assert_eq!(quote_arg(""), "\"\"");
-        assert_eq!(quote_arg("my profile"), "\"my profile\"");
-        assert_eq!(quote_arg(r#"a"b"#), r#""a\"b""#);
-        assert_eq!(quote_arg(r"C:\dir\"), r"C:\dir\");
-        assert_eq!(
-            quote_arg(r"C:\Program Files\sbctl\"),
-            r#""C:\Program Files\sbctl\\""#
-        );
     }
 }

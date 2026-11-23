@@ -37,23 +37,16 @@ pub struct ProfileEditorPanel {
     disk_read_failed: bool,
     validated_snapshot: Option<String>,
     active_tab: EditorTab,
-    /// Unsaved buffers, keyed by profile name.
-    ///
-    /// A rail click used to clear `editing` and lose whatever was typed. Keeping
-    /// the draft means leaving is never destructive, without a modal the user
-    /// has to answer.
-    drafts: std::collections::HashMap<String, String>,
-    /// Derived render state, recomputed only when the document changes.
-    ///
-    /// `render` used to materialize the whole editor Rope three times, run a
-    /// regex over it and parse it as JSON on every frame - twice a second while
-    /// a caret blinked. Configs are small, but the work is O(document) per frame.
     /// The exact text the last save submitted.
     ///
     /// The disk will become this text, not necessarily what the editor holds by
     /// the time the save lands: a keystroke during the round trip would
     /// otherwise look like an outside change and raise a false banner.
     last_submitted: Option<String>,
+    /// The buffer text and its parse result, recomputed only when it changes.
+    ///
+    /// `render` used to materialize the whole editor Rope three times and parse
+    /// it as JSON on every frame — twice a second while a caret blinked.
     derived_json: SharedString,
     derived_syntax: Option<String>,
 
@@ -93,7 +86,6 @@ impl ProfileEditorPanel {
             external_change_pending: false,
             disk_read_failed: false,
             validated_snapshot: None,
-            drafts: std::collections::HashMap::new(),
             last_submitted: None,
             derived_json: SharedString::default(),
             derived_syntax: None,
@@ -136,14 +128,30 @@ impl ProfileEditorPanel {
             // the buffer is still stashed when dirty rather than dropped.
             if let Some(prev) = self.loaded_profile.clone() {
                 if self.active_tab == EditorTab::Guided {
-                    let _ = self.apply_guided_to_json(window, cx);
+                    // Convert the form into the buffer so it is stashed with the
+                    // draft. A failure here means the file has no section for a
+                    // field; say so, or the edit disappears with no explanation.
+                    if let Err(msg) = self.apply_guided_to_json(window, cx) {
+                        self.store.update(cx, |s, cx| {
+                            s.set_notice(
+                                NoticeOrigin::Editor,
+                                BannerTone::Warning,
+                                format!("This config cannot hold the form values: {msg}"),
+                                cx,
+                            );
+                        });
+                    }
                 }
                 let current = self.json_editor.read(cx).value().to_string();
-                if self.is_dirty_against(&current, cx) {
-                    self.drafts.insert(prev, current);
-                } else if !self.disk_read_failed {
-                    self.drafts.remove(&prev);
-                }
+                let dirty = self.is_dirty_against(&current, cx);
+                let failed = self.disk_read_failed;
+                self.store.update(cx, |s, _| {
+                    if dirty {
+                        s.drafts.insert(prev, current);
+                    } else if !failed {
+                        s.drafts.remove(&prev);
+                    }
+                });
             }
 
             self.loaded_profile = target.clone();
@@ -157,7 +165,7 @@ impl ProfileEditorPanel {
                 let content = self.store.read(cx).read_profile_content(&name);
                 if let Some(content) = content {
                     self.load_json_into_views(&content, window, cx);
-                    if let Some(draft) = self.drafts.get(&name).cloned() {
+                    if let Some(draft) = self.store.read(cx).drafts.get(&name).cloned() {
                         self.set_editor_content(&draft, window, cx);
                     }
                 } else {
@@ -173,16 +181,30 @@ impl ProfileEditorPanel {
         if disk_rev != self.seen_disk_revision {
             // The profile set may have changed: forget drafts for profiles that
             // no longer exist, since nothing can select them again.
-            if !self.drafts.is_empty() {
-                let live: std::collections::HashSet<String> = self
-                    .store
-                    .read(cx)
-                    .snapshot
-                    .profiles
-                    .iter()
-                    .map(|p| p.name.clone())
-                    .collect();
-                self.drafts.retain(|name, _| live.contains(name));
+            let stale: Vec<String> = {
+                let s = self.store.read(cx);
+                if s.drafts.is_empty() {
+                    Vec::new()
+                } else {
+                    let live: std::collections::HashSet<&str> = s
+                        .snapshot
+                        .profiles
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect();
+                    s.drafts
+                        .keys()
+                        .filter(|name| !live.contains(name.as_str()))
+                        .cloned()
+                        .collect()
+                }
+            };
+            if !stale.is_empty() {
+                self.store.update(cx, |s, _| {
+                    for name in stale {
+                        s.drafts.remove(&name);
+                    }
+                });
             }
             self.seen_disk_revision = disk_rev;
             if let Some(name) = &self.loaded_profile {
@@ -232,8 +254,12 @@ impl ProfileEditorPanel {
             self.load_json_into_views(&content, window, cx);
             self.external_change_pending = false;
             self.validated_snapshot = None;
-            self.store
-                .update(cx, |s, cx| s.clear_editor_validation(&name, cx));
+            self.store.update(cx, |s, cx| {
+                // The user asked for the disk copy, so drop the stashed edits or
+                // reopening the profile brings back the text they just discarded.
+                s.drafts.remove(&name);
+                s.clear_editor_validation(&name, cx);
+            });
         }
     }
 
@@ -337,8 +363,11 @@ impl ProfileEditorPanel {
     }
 
     /// Drop the stashed draft once the profile it belongs to is saved.
-    fn clear_draft(&mut self, name: &str) {
-        self.drafts.remove(name);
+    fn clear_draft(&mut self, name: &str, cx: &mut Context<Self>) {
+        let name = name.to_string();
+        self.store.update(cx, |s, _| {
+            s.drafts.remove(&name);
+        });
     }
 
     fn is_dirty(&self, cx: &App) -> bool {
@@ -410,6 +439,52 @@ impl ProfileEditorPanel {
         Ok(content)
     }
 
+    /// Stash the buffer being edited, so leaving the editor or closing the
+    /// window cannot discard it. Stashing used to happen only when switching
+    /// to a different profile, which left the profile you were actually editing
+    /// unprotected.
+    pub fn stash_draft(&mut self, cx: &mut Context<Self>) {
+        let Some(name) = self.loaded_profile.clone() else {
+            return;
+        };
+        if self.disk_read_failed {
+            return;
+        }
+        // A form-only edit never touches the JSON buffer, so fold it in first or
+        // the stash holds unchanged text and the edit is lost on unmount.
+        let content = self.collect_stash_content(cx);
+        let dirty = self.is_dirty_against(&content, cx);
+        if dirty {
+            self.store.update(cx, |s, _| {
+                s.drafts.insert(name, content);
+            });
+        }
+    }
+
+    /// The buffer plus any guided-form values, without needing a `Window`.
+    ///
+    /// `apply_guided_to_json` writes through the editor's `InputState`s, which
+    /// take a window; the stash also runs from window-close paths, so this folds
+    /// the form into a copy of the text instead.
+    fn collect_stash_content(&mut self, cx: &App) -> String {
+        let current = self.json_editor.read(cx).value().to_string();
+        if self.active_tab != EditorTab::Guided {
+            return current;
+        }
+        let Ok(next) = self.build_model_from_inputs(cx) else {
+            return current;
+        };
+        let Ok(mut root) = serde_json::from_str::<serde_json::Value>(&current) else {
+            return current;
+        };
+        if !next.apply_to_value(&mut root).is_empty() {
+            return current;
+        }
+        serde_json::to_string_pretty(&root)
+            .map(|s| format!("{s}\n"))
+            .unwrap_or(current)
+    }
+
     pub fn trigger_save(
         &mut self,
         and_activate: bool,
@@ -453,7 +528,7 @@ impl ProfileEditorPanel {
             .unwrap_or(true);
         let allow_invalid = incomplete && !is_active;
 
-        self.clear_draft(&name);
+        self.clear_draft(&name, cx);
         // Record what we submitted so the resulting disk change is recognised
         // as ours rather than an outside edit.
         self.last_submitted = Some(content.clone());
@@ -731,6 +806,7 @@ impl ProfileEditorPanel {
                     Button::new("editor-save")
                         .primary()
                         .label("Save")
+                        .loading(is_busy)
                         .disabled(is_busy || !dirty)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.trigger_save(false, window, cx);
@@ -743,6 +819,7 @@ impl ProfileEditorPanel {
                         .when(is_active_running, Button::primary)
                         .when(!is_active_running, Button::secondary)
                         .label(activation_label)
+                        .loading(is_busy)
                         .disabled(is_busy || !can_activate || (is_active_running && !dirty))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.trigger_save(true, window, cx);

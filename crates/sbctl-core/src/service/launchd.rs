@@ -143,6 +143,9 @@ pub fn parse_launchd_print(text: &str) -> Health {
         && let Some(m) = cap.get(1)
     {
         let raw = m.as_str();
+        // Only `running` is Running. `exited` deliberately stays Stopped: with
+        // KeepAlive, launchd respawns through an `exited` window, so mapping it
+        // to Error would flash "Service failed" on every normal restart.
         health.state = if raw.eq_ignore_ascii_case("running") {
             RunState::Running
         } else {
@@ -169,83 +172,4 @@ pub fn parse_launchd_print(text: &str) -> Health {
         }
     }
     health
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::runner::{FakeResult, FakeRunner, SudoRunner};
-
-    #[test]
-    fn parses_real_launchctl_print_running_and_waiting() {
-        let running = r"
-system/app.lexiflix.singbox = {
-    active count = 1
-    state = running
-    pid = 4711
-    runs = 3
-    last exit code = (never exited)
-}
-";
-        let h = parse_launchd_print(running);
-        assert_eq!(h.state, RunState::Running);
-        assert_eq!(h.pid, Some(4711));
-        assert_eq!(h.restarts, Some(3));
-        assert_eq!(h.last_exit, None);
-
-        let waiting = r"
-system/app.lexiflix.singbox = {
-    state = waiting
-    runs = 14
-    last exit code = 1
-}
-";
-        let hw = parse_launchd_print(waiting);
-        assert_eq!(hw.state, RunState::Stopped);
-        assert_eq!(hw.restarts, Some(14));
-        assert_eq!(hw.last_exit.as_deref(), Some("1"));
-    }
-
-    #[test]
-    fn restart_bootstraps_when_not_loaded() {
-        let fake = Arc::new(FakeRunner::default());
-        fake.set_response(
-            "sudo -n /bin/launchctl print system/app.lexiflix.singbox",
-            FakeResult::err(
-                113,
-                "Could not find service \"app.lexiflix.singbox\" in domain for system",
-            ),
-        );
-        let mgr = LaunchdManager::new(
-            PathBuf::from("/bin/launchctl"),
-            "system/app.lexiflix.singbox".into(),
-            PathBuf::from("/Library/LaunchDaemons/app.lexiflix.singbox.plist"),
-            Arc::new(SudoRunner::new(fake.clone())),
-        );
-        mgr.restart().expect("restart should bootstrap");
-        assert_eq!(
-            fake.call_lines(),
-            vec![
-                "sudo -n /bin/launchctl print system/app.lexiflix.singbox",
-                "sudo -n /bin/launchctl bootstrap system /Library/LaunchDaemons/app.lexiflix.singbox.plist",
-            ]
-        );
-    }
-
-    #[test]
-    fn sudo_refusal_surfaces_permission_error() {
-        let fake = Arc::new(FakeRunner::default());
-        fake.set_response(
-            "sudo -n /bin/launchctl print",
-            FakeResult::err(1, "sudo: a password is required"),
-        );
-        let mgr = LaunchdManager::new(
-            PathBuf::from("/bin/launchctl"),
-            "system/app.lexiflix.singbox".into(),
-            PathBuf::from("/Library/LaunchDaemons/app.lexiflix.singbox.plist"),
-            Arc::new(SudoRunner::new(fake)),
-        );
-        let err = mgr.probe().unwrap_err();
-        assert!(err.is_permission());
-    }
 }

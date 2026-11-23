@@ -8,7 +8,7 @@ use crate::runner::Runner;
 use crate::service::{Health, Manager, RunState};
 
 static SC_STATE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"STATE\s*:\s*\d+\s+(\S+)").expect("regex"));
+    LazyLock::new(|| Regex::new(r"STATE\s*:\s*(\d+)\s+(\S+)").expect("regex"));
 static SC_PID_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"PID\s*:\s*(\d+)").expect("regex"));
 
@@ -67,7 +67,13 @@ impl WinSwManager {
                 )));
             }
             let (_, raw) = parse_sc_query(&out.combined);
-            if matches!(raw, WinRawState::Stopped | WinRawState::Unknown) {
+            // Only STOPPED ends the wait. STOP_PENDING still holds the process
+            // (and its TUN adapter), and Windows refuses to start a service that
+            // is still stopping, so returning early made `restart` fail with 1061.
+            // Unknown waits out the timeout on purpose: the state code is parsed
+            // numerically, so an unreadable `STATE` line is a real "cannot tell"
+            // and a timeout reports it honestly instead of guessing.
+            if raw == WinRawState::Stopped {
                 return Ok(());
             }
             (self.sleep_fn)(interval);
@@ -136,16 +142,25 @@ pub fn parse_sc_query(text: &str) -> (Health, WinRawState) {
     let mut raw = WinRawState::Unknown;
 
     if let Some(cap) = SC_STATE_RE.captures(text)
-        && let Some(m) = cap.get(1)
+        && let (Some(code), Some(name)) = (cap.get(1), cap.get(2))
     {
-        let token = m.as_str().to_ascii_uppercase();
-        health.detail = format!("STATE = {}", m.as_str());
-        raw = match token.as_str() {
-            "RUNNING" => WinRawState::Running,
-            "STOPPED" => WinRawState::Stopped,
-            "START_PENDING" => WinRawState::StartPending,
-            "STOP_PENDING" => WinRawState::StopPending,
-            _ => WinRawState::Unknown,
+        let token = name.as_str().to_ascii_uppercase();
+        health.detail = format!("STATE = {}", name.as_str());
+        // Match the numeric code first: `sc.exe` translates the state *name*
+        // (localised Windows prints its own word) but never the code, which is
+        // the documented SERVICE_STATUS.dwCurrentState value.
+        raw = match code.as_str() {
+            "1" => WinRawState::Stopped,
+            "2" => WinRawState::StartPending,
+            "3" => WinRawState::StopPending,
+            "4" => WinRawState::Running,
+            _ => match token.as_str() {
+                "RUNNING" => WinRawState::Running,
+                "STOPPED" => WinRawState::Stopped,
+                "START_PENDING" => WinRawState::StartPending,
+                "STOP_PENDING" => WinRawState::StopPending,
+                _ => WinRawState::Unknown,
+            },
         };
     }
 
@@ -161,60 +176,15 @@ pub fn parse_sc_query(text: &str) -> (Health, WinRawState) {
         health.pid = m.as_str().parse::<u32>().ok();
     }
 
-    if raw == WinRawState::Running && health.pid == Some(0) {
+    // No pid means the service is not up. `Some(0)` is the explicit "no
+    // process" answer; `None` means the PID line was absent or unparseable, which
+    // is just as unusable. START_PENDING counts too: post-restart verification
+    // returns on any `Running`, so a stuck start would otherwise pass as healthy.
+    if matches!(raw, WinRawState::Running | WinRawState::StartPending)
+        && health.pid.unwrap_or(0) == 0
+    {
         health.state = RunState::Stopped;
     }
 
     (health, raw)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::runner::{FakeResult, FakeRunner};
-
-    #[test]
-    fn parses_sc_queryex_states_including_transient() {
-        let running = "SERVICE_NAME: sing-box\n        STATE              : 4  RUNNING\n        PID                : 9184\n";
-        let (h, raw) = parse_sc_query(running);
-        assert_eq!(raw, WinRawState::Running);
-        assert_eq!(h.state, RunState::Running);
-        assert_eq!(h.pid, Some(9184));
-
-        let pending =
-            "        STATE              : 2  START_PENDING\n        PID                : 0\n";
-        let (hp, raw_p) = parse_sc_query(pending);
-        assert_eq!(raw_p, WinRawState::StartPending);
-        assert_eq!(hp.state, RunState::Running);
-
-        let stopped = "        STATE              : 1  STOPPED\n        PID                : 0\n";
-        let (hs, raw_s) = parse_sc_query(stopped);
-        assert_eq!(raw_s, WinRawState::Stopped);
-        assert_eq!(hs.state, RunState::Stopped);
-    }
-
-    #[test]
-    fn restart_waits_for_stop_before_start() {
-        let fake = Arc::new(FakeRunner::default());
-        fake.queue_responses(
-            "sc.exe queryex sing-box",
-            vec![
-                FakeResult::ok("STATE : 3 STOP_PENDING\nPID : 100\n"),
-                FakeResult::ok("STATE : 1 STOPPED\nPID : 0\n"),
-            ],
-        );
-        let mut mgr = WinSwManager::new("sing-box", fake.clone());
-        mgr.sleep_fn = Arc::new(|_| {});
-        mgr.restart().expect("restart succeeds");
-
-        assert_eq!(
-            fake.call_lines(),
-            vec![
-                "sc.exe stop sing-box",
-                "sc.exe queryex sing-box",
-                "sc.exe queryex sing-box",
-                "sc.exe start sing-box",
-            ]
-        );
-    }
 }

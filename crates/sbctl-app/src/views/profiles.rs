@@ -58,6 +58,11 @@ impl ProfilesView {
         }
     }
 
+    /// Ask the editor to stash its buffer before the panel goes away.
+    pub fn stash_draft(&mut self, cx: &mut Context<Self>) {
+        self.editor.update(cx, |ed, cx| ed.stash_draft(cx));
+    }
+
     pub fn trigger_save(
         &mut self,
         and_activate: bool,
@@ -222,7 +227,7 @@ impl ProfilesView {
 
     fn render_connections(&self, cx: &Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
-        let busy = store.busy_phase.is_some();
+        let busy = store.is_busy();
         let content = v_flex()
             .size_full()
             .px(px(14.0))
@@ -234,7 +239,7 @@ impl ProfilesView {
                 |page, notice| page.child(notice),
             );
 
-        if store.snapshot.profiles.is_empty() {
+        if store.snapshot.profiles.is_empty() && !store.is_probing() {
             let create = self.store.clone();
             let import = self.store.clone();
             return content.child(
@@ -261,7 +266,7 @@ impl ProfilesView {
                                 Button::new("first-profile-new")
                                     .primary()
                                     .label("New profile")
-                                    .disabled(busy || store.init_error.is_some())
+                                    .disabled(busy)
                                     .on_click(move |_, window, cx| {
                                         Self::open_new_profile_dialog(create.clone(), window, cx);
                                     }),
@@ -270,7 +275,7 @@ impl ProfilesView {
                                 Button::new("first-profile-import")
                                     .secondary()
                                     .label("Import from URL")
-                                    .disabled(busy || store.init_error.is_some())
+                                    .disabled(busy)
                                     .on_click(move |_, window, cx| {
                                         Self::open_import_url_dialog(import.clone(), window, cx);
                                     }),
@@ -287,14 +292,26 @@ impl ProfilesView {
         let store = self.store.read(cx);
         let snap = &store.snapshot;
         let visual = store.tray_visual_state();
-        let (label, tone) = match visual {
-            TrayVisualState::Transitioning => ("Updating", cx.theme().warning),
-            TrayVisualState::Broken => ("Connection issue", cx.theme().danger),
-            TrayVisualState::Connected => ("Connected", cx.theme().success),
-            TrayVisualState::Disconnected => ("Disconnected", cx.theme().muted_foreground),
+        let label = store.status_label();
+        let tone = if store.is_probing() {
+            cx.theme().muted_foreground
+        } else {
+            match visual {
+                TrayVisualState::Transitioning => cx.theme().warning,
+                TrayVisualState::Broken => cx.theme().danger,
+                TrayVisualState::Connected => cx.theme().success,
+                TrayVisualState::Disconnected => cx.theme().muted_foreground,
+            }
         };
         let active = snap.active.as_ref().filter(|_| snap.running).cloned();
-        let activity = store.busy_phase.as_ref().cloned().or(active);
+        // Name the selection when nothing is running: the tray tooltip already
+        // does, and "Disconnected" alone leaves the user guessing what Connect
+        // would use.
+        let activity = store.busy_phase.as_ref().cloned().or(active).or_else(|| {
+            (!snap.running)
+                .then(|| store.selected_profile.clone())
+                .flatten()
+        });
         let issue = (visual == TrayVisualState::Broken)
             .then(|| {
                 store
@@ -326,7 +343,7 @@ impl ProfilesView {
             .as_ref()
             .filter(|_| !store.ip_loading && store.ip_error.is_none())
             .map(|info| (info.ip.clone(), info.formatted_location()));
-        let busy = store.busy_phase.is_some() || store.init_error.is_some();
+        let busy = store.is_busy();
         let disconnect = self.store.clone();
         let show_logs = self.store.clone();
         let refresh = self.store.clone();
@@ -467,7 +484,7 @@ impl ProfilesView {
         let create = self.store.clone();
         let import = self.store.clone();
         let sync = self.store.clone();
-        let busy = store.busy_phase.is_some() || store.init_error.is_some();
+        let busy = store.is_busy();
         let has_remote = store
             .snapshot
             .profiles
@@ -522,7 +539,8 @@ impl ProfilesView {
             .iter()
             .filter(|p| {
                 contains_ignore_ascii_case(&p.name, query)
-                    || p.server
+                    || p.facts
+                        .endpoint
                         .as_deref()
                         .is_some_and(|server| contains_ignore_ascii_case(server, query))
             })
@@ -568,12 +586,20 @@ impl ProfilesView {
                     .min_h(px(0.0))
                     .overflow_y_scroll()
                     .when(none, |list| {
+                        // "No matching profiles" is a search message. A first-run
+                        // user with no profiles yet is waiting on the probe, not
+                        // failing to match a query.
+                        let empty = store.snapshot.profiles.is_empty();
                         list.child(
                             div()
                                 .p(px(8.0))
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("No matching profiles"),
+                                .child(if empty {
+                                    "Looking for profiles…"
+                                } else {
+                                    "No matching profiles"
+                                }),
                         )
                     })
                     .children(profiles.map(|profile| self.render_profile(profile, store, cx))),
@@ -589,7 +615,7 @@ impl ProfilesView {
         let running = store.snapshot.running;
         let live = running && store.snapshot.active.as_deref() == Some(profile.name.as_str());
         let selected = store.selected_profile.as_deref() == Some(profile.name.as_str());
-        let busy = store.busy_phase.is_some() || store.init_error.is_some();
+        let busy = store.is_busy();
         let ready = profile.ready();
         let expanded = self.expanded_profile.as_deref() == Some(profile.name.as_str());
         let app = self.store.clone();
@@ -598,12 +624,7 @@ impl ProfilesView {
         let detail_name = profile.name.clone();
         let edit = self.store.clone();
         let select = self.store.clone();
-        let endpoint = profile
-            .facts
-            .endpoint
-            .as_ref()
-            .or(profile.server.as_ref())
-            .cloned();
+        let endpoint = profile.facts.endpoint.clone();
         let (status, color) = if live {
             ("Connected", cx.theme().success)
         } else if !ready {
@@ -615,7 +636,11 @@ impl ProfilesView {
         v_flex()
             .w_full()
             .flex_none()
-            .bg(if selected {
+            // The live row is what the user is looking for; selection is the
+            // weaker signal of the two.
+            .bg(if live {
+                crate::theme::connection_surface(cx, cx.theme().success)
+            } else if selected {
                 cx.theme().muted
             } else {
                 crate::theme::surface(cx)
@@ -694,6 +719,7 @@ impl ProfilesView {
                                     .when(selected, Button::primary)
                                     .when(!selected, Button::ghost)
                                     .label(if running { "Switch" } else { "Connect" })
+                                    .loading(busy)
                                     .disabled(busy)
                                     .on_click(
                                         move |_, _, cx| {
@@ -741,10 +767,18 @@ impl ProfilesView {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let facts = &profile.facts;
-        let tunnel = match facts.tun_state() {
-            sbctl_core::profile::TunState::Named => facts.tun_interface.clone().unwrap_or_default(),
-            sbctl_core::profile::TunState::Unnamed => "OS default".into(),
-            sbctl_core::profile::TunState::Absent => "No TUN inbound".into(),
+        // An unreadable file has no facts to report; `tun_state()` would say
+        // "Absent" and print "No TUN inbound" right above "not JSON".
+        let tunnel = if !profile.config_parsed {
+            "—".to_string()
+        } else {
+            match facts.tun_state() {
+                sbctl_core::profile::TunState::Named => {
+                    facts.tun_interface.clone().unwrap_or_default()
+                }
+                sbctl_core::profile::TunState::Unnamed => "OS default".into(),
+                sbctl_core::profile::TunState::Absent => "No TUN inbound".into(),
+            }
         };
 
         v_flex()
@@ -766,8 +800,10 @@ impl ProfilesView {
                     .collect::<Vec<_>>();
                 panel.child(detail_row("Required fields", fields.join(", "), cx))
             })
-            .when_some(facts.outbound_type.as_ref(), |panel, protocol| {
-                panel.child(detail_row("Protocol", protocol.clone(), cx))
+            .when(profile.config_parsed, |panel| {
+                panel.when_some(facts.outbound_type.as_ref(), |panel, protocol| {
+                    panel.child(detail_row("Protocol", protocol.clone(), cx))
+                })
             })
             .child(detail_row("Tunnel", tunnel, cx))
             .child(detail_row(

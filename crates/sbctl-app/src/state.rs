@@ -23,10 +23,16 @@ use crate::theme::{
 const MAX_LOG_ENTRIES: usize = 5_000;
 const INITIAL_LOG_TAIL: usize = 300;
 const ACTIVE_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(5);
-const BACKGROUND_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(30);
-const POLL_LOG_INTERVAL: Duration = Duration::from_millis(800);
+// The file watcher already reacts to config writes, so the poll behind a hidden
+// window only guards against a daemon that died unnoticed.
+const BACKGROUND_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(180);
 const SNAPSHOT_TICK_INTERVAL: Duration = Duration::from_secs(1);
 const WATCHER_DEBOUNCE: Duration = Duration::from_millis(150);
+/// How long an administrator password dialog may stay open.
+///
+/// The 30s command timeout exists for `launchctl`-style calls; this one waits on
+/// a human, and killing it mid-prompt leaves the user typing into nothing.
+const ADMIN_PROMPT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Where a piece of feedback belongs on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,7 +130,6 @@ pub struct AppStore {
     /// Closing the window with neither a tray nor a Dock icon leaves nothing to
     /// click, so the close path consults this before hiding.
     pub tray_available: bool,
-    /// Cached counts of the error stream, maintained where it changes.
     /// Error/Warn counts for the error stream, kept incrementally.
     error_log_counts: sbctl_core::logs::LogCounts,
     /// Stand-in layout for the init-failed state.
@@ -135,7 +140,14 @@ pub struct AppStore {
     pub log_revision: u64,
     pub disk_revision: u64,
     pub connected_since: Option<Instant>,
-    pub last_checked: Option<Instant>,
+    /// Message from the last failed probe, cleared by the next success.
+    snapshot_error: Option<String>,
+    /// Whether any probe has answered, successfully or not.
+    probed_once: bool,
+    /// A selection chosen between a snapshot and its poll, which that poll must
+    /// not overwrite. Holds the name and how many stale snapshots it may skip;
+    /// bounded so a profile that never appears cannot freeze the selection.
+    pinned_selection: Option<(String, u8)>,
     pub ip_info: Option<IpInfo>,
     pub ip_loading: bool,
     pub ip_error: Option<String>,
@@ -147,15 +159,19 @@ pub struct AppStore {
     /// dropped so "Configuration valid" can never describe text it never saw.
     validation_generation: u64,
     pub busy_phase: Option<String>,
-    /// Feedback shown next to the control that produced it. Replaces the old
-    /// full-width banner, which scrolled out of view and mixed unrelated
-    /// messages together.
+    /// Feedback scoped to the control or screen that produced it. The Toolbar
+    /// origin is the one strip that spans the window.
     pub notice: Option<Notice>,
     pub editor_validation: Option<(String, EditorValidationState)>,
     pub selected_tab: NavTab,
     pub selected_profile: Option<String>,
     /// True while the Connections stage is showing the editor for the selected profile.
     pub editing: bool,
+    /// Unsaved editor buffers, keyed by profile name.
+    ///
+    /// Kept here rather than in the editor panel because the panel dies with the
+    /// window: closing mid-edit used to discard the text with no way back.
+    pub drafts: std::collections::HashMap<String, String>,
     pub log_stream: LogStreamKind,
     pub log_follow: bool,
     pub log_severity: LogSeverityFilter,
@@ -197,7 +213,6 @@ pub struct AppStore {
     log_poll_task: Option<Task<()>>,
     ip_task: Option<Task<()>>,
     validation_task: Option<Task<()>>,
-    mutation_task: Option<Task<()>>,
 }
 
 fn empty_snapshot() -> Snapshot {
@@ -234,14 +249,15 @@ impl AppStore {
         }) {
             Ok(c) => {
                 c.set_notifications_enabled(settings.desktop_notifications);
-                let c = Arc::new(c);
-                let snap = c.snapshot().unwrap_or_else(|_| empty_snapshot());
-                (Some(c), None, snap)
+                // No synchronous snapshot here: it shelled out to
+                // `launchctl print` (30s deadline) and re-parsed every profile
+                // file before the first frame. The first paint shows an unknown
+                // state for as long as the async probe takes.
+                (Some(Arc::new(c)), None, empty_snapshot())
             }
             Err(err) => (None, Some(err.message.clone()), empty_snapshot()),
         };
 
-        let initially_running = snapshot.running;
         let selected_profile = snapshot
             .active
             .clone()
@@ -262,8 +278,13 @@ impl AppStore {
             },
             log_revision: 0,
             disk_revision: 0,
-            connected_since: initially_running.then(Instant::now),
-            last_checked: Some(Instant::now()),
+            // The constructor's snapshot is always the empty placeholder, so
+            // there is no launch-time baseline to record. The first probe sets
+            // both of these in `apply_snapshot`.
+            connected_since: None,
+            snapshot_error: None,
+            probed_once: false,
+            pinned_selection: None,
             ip_info: None,
             ip_loading: false,
             ip_error: None,
@@ -280,6 +301,7 @@ impl AppStore {
             selected_tab: NavTab::Profiles,
             editing: false,
             selected_profile,
+            drafts: std::collections::HashMap::new(),
             log_stream: LogStreamKind::Error,
             log_follow: true,
             log_severity: LogSeverityFilter::All,
@@ -294,7 +316,7 @@ impl AppStore {
             log_generation: 0,
             error_log_id: None,
             access_log_id: None,
-            was_running_expected: initially_running,
+            was_running_expected: false,
             stop_requested: false,
             log_poll_in_flight: false,
             snapshot_poll_in_flight: false,
@@ -307,18 +329,64 @@ impl AppStore {
             log_poll_task: None,
             ip_task: None,
             validation_task: None,
-            mutation_task: None,
         };
 
         store.reload_logs();
         store.restart_file_watcher(cx);
         store.start_background_pollers(cx);
-        // Respect the setting at launch too, not only after a switch; the
-        // toggle's own description promises this.
-        if store.settings.auto_refresh_ip {
-            store.refresh_ip(cx);
-        }
+        // The poller's first tick waits a full interval, so ask now. This runs
+        // on the background executor and cannot delay the first frame.
+        store.refresh_snapshot(false, cx);
         store
+    }
+
+    /// Whether the state on screen is still the placeholder.
+    ///
+    /// The store starts empty and fills from the background probe, so without
+    /// this the first frame of every launch claimed "Disconnected" and showed a
+    /// first-run card to people who already had profiles.
+    pub fn is_probing(&self) -> bool {
+        // First answer only. Keying this on `snapshot_poll_in_flight` flipped the
+        // first-run card and tray tooltip on every 5s poll for a user who simply
+        // has no profiles yet. With no controller at all there is nothing to
+        // wait for, so the init error speaks for itself.
+        self.ctrl.is_some() && !self.probed_once
+    }
+
+    /// Drop the banner a failed probe left behind, once the probe succeeds.
+    fn clear_probe_error_notice(&mut self) {
+        if self
+            .notice
+            .as_ref()
+            .is_some_and(|n| n.message.starts_with("Could not read the service state:"))
+        {
+            self.notice = None;
+        }
+    }
+
+    /// The one-line state name every surface shows.
+    ///
+    /// The toolbar, the connection card and the tray menu each had their own
+    /// copy of this mapping and had already drifted ("Service issue" vs
+    /// "Connection issue"), and only one of them accounted for the pre-probe
+    /// frame. The short form drops the profile name; the tray builds its own
+    /// longer sentence from the same state.
+    pub fn status_label(&self) -> &'static str {
+        if self.is_probing() {
+            return "Checking…";
+        }
+        // `tray_visual_state` already folds busy into Transitioning.
+        match self.tray_visual_state() {
+            TrayVisualState::Transitioning => "Working…",
+            TrayVisualState::Broken => "Connection issue",
+            TrayVisualState::Connected => "Connected",
+            TrayVisualState::Disconnected => "Disconnected",
+        }
+    }
+
+    /// Whether an action should be refused because something else is running.
+    pub fn is_busy(&self) -> bool {
+        self.busy_phase.is_some() || self.init_error.is_some()
     }
 
     pub fn tray_visual_state(&self) -> TrayVisualState {
@@ -340,7 +408,11 @@ impl AppStore {
     /// long name cannot produce an unreadable tooltip.
     pub fn tray_tooltip(&self) -> String {
         const CAP: usize = 120;
-        let text = if let Some(phase) = &self.busy_phase {
+        let text = if self.is_probing() {
+            // The icon is installed before the first probe answers; naming a
+            // state here would be a guess, not an observation.
+            "sbctl".to_string()
+        } else if let Some(phase) = &self.busy_phase {
             format!("sbctl · {phase}")
         } else if let Some(issue) = self.init_error.as_ref().or(self.snapshot.broken.as_ref()) {
             format!("sbctl · {issue}")
@@ -352,7 +424,9 @@ impl AppStore {
                 .as_ref()
                 .and_then(|n| self.snapshot.profiles.iter().find(|p| &p.name == n))
                 .is_some_and(|p| !p.ready());
-            match (&self.snapshot.active, needs_setup) {
+            // Same source the connection card uses, so the two cannot name
+            // different profiles.
+            match (&self.selected_profile, needs_setup) {
                 (Some(name), true) => format!("sbctl · {name} needs setup"),
                 (Some(name), false) => format!("sbctl · Disconnected · {name} selected"),
                 (None, _) => "sbctl · Disconnected".to_string(),
@@ -403,8 +477,13 @@ impl AppStore {
         self.window_open = open;
         if open && !was_open {
             self.refresh_snapshot(false, cx);
-            if self.selected_tab == NavTab::Logs && self.log_follow {
+            if self.should_poll_logs() {
                 self.poll_logs_async(cx);
+            }
+            // Only once somebody is looking: launching into the tray no longer
+            // spends an outbound request on a pane that is never drawn.
+            if self.settings.auto_refresh_ip && self.ip_info.is_none() && !self.ip_loading {
+                self.refresh_ip(cx);
             }
         }
     }
@@ -446,7 +525,7 @@ impl AppStore {
     pub fn set_tab(&mut self, tab: NavTab, cx: &mut Context<Self>) {
         if self.selected_tab != tab {
             self.selected_tab = tab;
-            if tab == NavTab::Logs && self.log_follow {
+            if self.should_poll_logs() {
                 self.poll_logs_async(cx);
             }
             cx.notify();
@@ -456,7 +535,7 @@ impl AppStore {
     pub fn set_log_stream(&mut self, stream: LogStreamKind, cx: &mut Context<Self>) {
         if self.log_stream != stream {
             self.log_stream = stream;
-            if self.log_follow {
+            if self.should_poll_logs() {
                 self.poll_logs_async(cx);
             }
             cx.notify();
@@ -465,9 +544,16 @@ impl AppStore {
 
     pub fn set_log_follow(&mut self, follow: bool, cx: &mut Context<Self>) {
         self.log_follow = follow;
-        if follow && self.selected_tab == NavTab::Logs {
+        if self.should_poll_logs() {
             self.poll_logs_async(cx);
         }
+        cx.notify();
+    }
+
+    /// Drop the search and level filters, leaving the buffered lines alone.
+    pub fn reset_log_filters(&mut self, cx: &mut Context<Self>) {
+        self.log_search_query.clear();
+        self.log_severity = LogSeverityFilter::All;
         cx.notify();
     }
 
@@ -476,6 +562,7 @@ impl AppStore {
             LogStreamKind::Error => self.error_logs.clear(),
             LogStreamKind::Access => self.access_logs.clear(),
         }
+        self.sync_log_counts();
         self.log_revision = self.log_revision.wrapping_add(1);
         cx.notify();
     }
@@ -485,6 +572,9 @@ impl AppStore {
         // profile you are looking at is not the same as leaving the editor, and
         // unmounting it mid-edit made a rail click destructive.
         self.selected_profile = name;
+        // A validation reply for the profile we just left must not repaint the
+        // one we are looking at.
+        self.validation_generation = self.validation_generation.wrapping_add(1);
         self.editor_validation = None;
         cx.notify();
     }
@@ -501,12 +591,14 @@ impl AppStore {
 
     /// Leave the editor and return to the Connections stage.
     pub fn end_edit(&mut self, cx: &mut Context<Self>) {
+        self.validation_generation = self.validation_generation.wrapping_add(1);
         self.editing = false;
         self.editor_validation = None;
         cx.notify();
     }
 
     pub fn clear_editor_validation(&mut self, profile: &str, cx: &mut Context<Self>) {
+        self.validation_generation = self.validation_generation.wrapping_add(1);
         if self
             .editor_validation
             .as_ref()
@@ -642,9 +734,24 @@ impl AppStore {
 
         let profiles_changed = snap.profiles != self.snapshot.profiles;
         self.snapshot = snap;
-        self.last_checked = Some(Instant::now());
         if profiles_changed || bump_disk {
             self.disk_revision = self.disk_revision.wrapping_add(1);
+        }
+
+        // A snapshot that started before a create still lacks the new profile.
+        // Let it skip the selection repair, once: the next poll will have it, and
+        // the bound means a profile that never appears cannot pin anything.
+        if let Some((name, skips)) = self.pinned_selection.clone() {
+            if self.snapshot.profiles.iter().any(|p| p.name == name) {
+                self.pinned_selection = None;
+                self.selected_profile = Some(name);
+                return;
+            }
+            if skips > 0 {
+                self.pinned_selection = Some((name, skips - 1));
+                return;
+            }
+            self.pinned_selection = None;
         }
 
         let prev_sel = self.selected_profile.clone();
@@ -688,8 +795,19 @@ impl AppStore {
                 .await;
             let _ = this.update(cx, |store, cx| {
                 store.snapshot_poll_in_flight = false;
-                store.last_checked = Some(Instant::now());
+                // The first answer always repaints: the placeholder the window is
+                // showing can be *equal* to the real state (stopped, no profiles),
+                // so `changed` alone would leave "Checking…" up forever.
+                let first_answer = !store.probed_once;
+                store.probed_once = true;
+                if first_answer {
+                    cx.notify();
+                }
                 if let Ok(s) = snap {
+                    if store.snapshot_error.take().is_some() {
+                        // The fault is gone; its banner should not outlive it.
+                        store.clear_probe_error_notice();
+                    }
                     let unexpected_drop = store.was_running_expected
                         && !s.running
                         && store.busy_phase.is_none()
@@ -722,6 +840,23 @@ impl AppStore {
                     if changed || force_disk_bump || unexpected_drop || confirmed_stop {
                         cx.notify();
                     }
+                } else if let Err(err) = snap {
+                    // A failing probe used to leave the first frame's
+                    // "Checking…" up forever, since nothing repainted. Show why
+                    // and stop pretending a probe is still running.
+                    let message = format!("Could not read the service state: {}", err.message);
+                    let repeated = store.snapshot_error.as_deref() == Some(&message);
+                    store.snapshot_error = Some(message.clone());
+                    // Only on change: a probe that keeps failing every 5s must not
+                    // keep replacing whatever else the user is reading.
+                    if !repeated {
+                        store.notice = Some(Notice {
+                            origin: store.notice_origin_for_current_tab(),
+                            tone: BannerTone::Error,
+                            message,
+                        });
+                    }
+                    cx.notify();
                 }
                 // Drain a queued refresh whatever the outcome, or a failed poll
                 // would strand a pending forced bump forever.
@@ -812,6 +947,7 @@ impl AppStore {
             return;
         };
 
+        self.stop_requested = false;
         self.busy_phase = Some(format!("Activating {name}..."));
         // Clear only this surface's previous message. One slot backs every
         // origin, so clearing unconditionally discarded e.g. an unread settings
@@ -822,7 +958,7 @@ impl AppStore {
         let (phase_tx, phase_rx) = smol::channel::unbounded();
         let target = name.clone();
 
-        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let worker = cx.background_executor().spawn({
                 let ctrl = ctrl.clone();
                 async move {
@@ -873,14 +1009,12 @@ impl AppStore {
                 }
                 cx.notify();
                 if should_refresh_ip {
-                    // Invalidate first so a late reply from the old egress
-                    // cannot be shown as the new one.
                     store.invalidate_ip();
                     store.refresh_ip(cx);
                 }
             });
-        });
-        self.mutation_task = Some(task);
+        })
+        .detach();
     }
 
     pub fn save_and_activate(&mut self, name: String, content: String, cx: &mut Context<Self>) {
@@ -891,6 +1025,7 @@ impl AppStore {
             return;
         };
 
+        self.stop_requested = false;
         self.busy_phase = Some(format!("Saving and activating {name}..."));
         self.clear_notice_for(NoticeOrigin::Editor);
         cx.notify();
@@ -898,7 +1033,7 @@ impl AppStore {
         let (phase_tx, phase_rx) = smol::channel::unbounded();
         let target = name.clone();
 
-        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let worker = cx.background_executor().spawn({
                 let ctrl = ctrl.clone();
                 async move {
@@ -963,14 +1098,12 @@ impl AppStore {
                 }
                 cx.notify();
                 if should_refresh_ip {
-                    // Invalidate first so a late reply from the old egress
-                    // cannot be shown as the new one.
                     store.invalidate_ip();
                     store.refresh_ip(cx);
                 }
             });
-        });
-        self.mutation_task = Some(task);
+        })
+        .detach();
     }
 
     /// Stop sing-box, reporting the outcome where the control lives.
@@ -988,7 +1121,7 @@ impl AppStore {
         self.clear_notice_for(origin);
         cx.notify();
 
-        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let (res, snap) = cx
                 .background_executor()
                 .spawn(async move {
@@ -1006,6 +1139,11 @@ impl AppStore {
                 }
                 match res {
                     Ok(()) => {
+                        // Clear the intent here too: a keepalive can bring the
+                        // service straight back up, and nothing else would ever
+                        // clear it, which silences later crash alerts.
+                        store.stop_requested = false;
+                        store.was_running_expected = false;
                         store.connected_since = None;
                         store.notice = Some(Notice {
                             origin,
@@ -1015,6 +1153,11 @@ impl AppStore {
                         should_refresh_ip = store.settings.auto_refresh_ip;
                     }
                     Err(err) => {
+                        // The stop did not happen. Leaving the intent set would
+                        // suppress the next "stopped unexpectedly" alert for the
+                        // rest of the session.
+                        store.stop_requested = false;
+                        store.was_running_expected = store.snapshot.running;
                         store.notice = Some(Notice {
                             origin,
                             tone: BannerTone::Error,
@@ -1024,14 +1167,12 @@ impl AppStore {
                 }
                 cx.notify();
                 if should_refresh_ip {
-                    // Invalidate first so a late reply from the old egress
-                    // cannot be shown as the new one.
                     store.invalidate_ip();
                     store.refresh_ip(cx);
                 }
             });
-        });
-        self.mutation_task = Some(task);
+        })
+        .detach();
     }
 
     pub fn create_profile(&mut self, name: &str, cx: &mut Context<Self>) -> CoreResult<()> {
@@ -1043,11 +1184,17 @@ impl AppStore {
             ));
         };
         ctrl.gui_create_profile(name)?;
-        if let Ok(snap) = ctrl.snapshot() {
-            self.apply_snapshot(snap, true);
-        }
+        // A poll that started before this call lands with a profile list that
+        // does not contain the new name yet, and would reselect over it. Hold the
+        // selection until a snapshot that knows about the name arrives.
+        self.pinned_selection = Some((name.to_string(), 1));
         self.selected_profile = Some(name.to_string());
+        // The probe and profile scan belong on the background executor: a direct
+        // `ctrl.snapshot()` here ran `launchctl print` (30s deadline) and
+        // re-parsed every profile from the Create button's handler.
+        self.refresh_snapshot(true, cx);
         self.selected_tab = NavTab::Profiles;
+        self.validation_generation = self.validation_generation.wrapping_add(1);
         self.editor_validation = None;
         // A new profile is shown on the stage, so leave the editor if it was
         // open: otherwise the stage is unmounted and its "Created" notice is
@@ -1080,10 +1227,7 @@ impl AppStore {
         self.busy_phase = Some(format!("Downloading {name}..."));
         cx.notify();
 
-        // Success and failure of one action must land on the same surface.
-        let origin_success = origin;
-        let origin_failure = origin;
-        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let (name, res, snap) = cx
                 .background_executor()
                 .spawn(async move {
@@ -1103,17 +1247,18 @@ impl AppStore {
                         store.selected_profile = Some(name.clone());
                         store.selected_tab = NavTab::Profiles;
                         store.editing = false;
+                        store.validation_generation = store.validation_generation.wrapping_add(1);
                         store.editor_validation = None;
                         store.restart_file_watcher(cx);
                         store.notice = Some(Notice {
-                            origin: origin_success,
+                            origin,
                             tone: BannerTone::Success,
                             message: format!("Imported {name}"),
                         });
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: origin_failure,
+                            origin,
                             tone: BannerTone::Error,
                             message: error_text(&err),
                         });
@@ -1121,8 +1266,8 @@ impl AppStore {
                 }
                 cx.notify();
             });
-        });
-        self.mutation_task = Some(task);
+        })
+        .detach();
     }
 
     pub fn sync_profile(&mut self, name: String, origin: NoticeOrigin, cx: &mut Context<Self>) {
@@ -1134,11 +1279,9 @@ impl AppStore {
         };
 
         self.busy_phase = Some(format!("Syncing {name}..."));
-        let origin_success = origin;
-        let origin_failure = origin;
         cx.notify();
 
-        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let (name, res, snap) = cx
                 .background_executor()
                 .spawn(async move {
@@ -1161,14 +1304,14 @@ impl AppStore {
                             format!("Synced {name}")
                         };
                         store.notice = Some(Notice {
-                            origin: origin_success,
+                            origin,
                             tone: BannerTone::Success,
                             message: note,
                         });
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: origin_failure,
+                            origin,
                             tone: BannerTone::Error,
                             message: error_text(&err),
                         });
@@ -1176,8 +1319,8 @@ impl AppStore {
                 }
                 cx.notify();
             });
-        });
-        self.mutation_task = Some(task);
+        })
+        .detach();
     }
 
     pub fn sync_all(&mut self, origin: NoticeOrigin, cx: &mut Context<Self>) {
@@ -1187,13 +1330,11 @@ impl AppStore {
         let Some(ctrl) = self.require_ctrl(cx) else {
             return;
         };
-        let origin_success = origin;
-        let origin_failure = origin;
 
         self.busy_phase = Some("Syncing remote profiles...".to_string());
         cx.notify();
 
-        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let (res, snap) = cx
                 .background_executor()
                 .spawn(async move {
@@ -1219,20 +1360,20 @@ impl AppStore {
                                 .join("; ");
                             let synced = count_noun(report.synced.len(), "profile", "profiles");
                             store.notice = Some(Notice {
-                                origin: origin_success,
+                                origin,
                                 tone: BannerTone::Warning,
                                 message: format!("Synced {synced}; failed: {details}"),
                             });
                         } else if report.synced.is_empty() {
                             store.notice = Some(Notice {
-                                origin: origin_success,
+                                origin,
                                 tone: BannerTone::Info,
                                 message: "No remote profiles to sync".to_string(),
                             });
                         } else {
                             let synced = count_noun(report.synced.len(), "profile", "profiles");
                             store.notice = Some(Notice {
-                                origin: origin_success,
+                                origin,
                                 tone: BannerTone::Success,
                                 message: format!("Synced {synced}"),
                             });
@@ -1240,7 +1381,7 @@ impl AppStore {
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
-                            origin: origin_failure,
+                            origin,
                             tone: BannerTone::Error,
                             message: error_text(&err),
                         });
@@ -1248,8 +1389,8 @@ impl AppStore {
                 }
                 cx.notify();
             });
-        });
-        self.mutation_task = Some(task);
+        })
+        .detach();
     }
 
     pub fn save_profile_content(
@@ -1270,7 +1411,7 @@ impl AppStore {
         self.busy_phase = Some(format!("Saving {name}..."));
         cx.notify();
 
-        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let (name, res, snap) = cx
                 .background_executor()
                 .spawn(async move {
@@ -1318,8 +1459,8 @@ impl AppStore {
                 }
                 cx.notify();
             });
-        });
-        self.mutation_task = Some(task);
+        })
+        .detach();
     }
 
     pub fn validate_live_content(&mut self, name: String, content: String, cx: &mut Context<Self>) {
@@ -1389,7 +1530,7 @@ impl AppStore {
         self.busy_phase = Some(format!("Deleting {name}..."));
         cx.notify();
 
-        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let (name, res, snap) = cx
                 .background_executor()
                 .spawn(async move {
@@ -1427,8 +1568,8 @@ impl AppStore {
                 }
                 cx.notify();
             });
-        });
-        self.mutation_task = Some(task);
+        })
+        .detach();
     }
 
     /// Drop the cached egress because the tunnel is about to change under it.
@@ -1436,9 +1577,11 @@ impl AppStore {
     /// Called on a successful connect or switch. Without this a reply from the
     /// previous egress can land afterwards and be presented as the current one.
     pub fn invalidate_ip(&mut self) {
+        // Generation bump only. Setting the pending flag here made every
+        // connect/switch run two lookups: the caller refreshes immediately, and
+        // the leftover flag started a second fetch when the first finished.
         self.ip_generation = self.ip_generation.wrapping_add(1);
         self.ip_info = None;
-        self.ip_refresh_pending = true;
     }
 
     pub fn refresh_ip(&mut self, cx: &mut Context<Self>) {
@@ -1517,7 +1660,7 @@ impl AppStore {
         self.busy_phase = Some(phase.to_string());
         cx.notify();
 
-        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let (res, snap) = cx
                 .background_executor()
                 .spawn(async move {
@@ -1525,9 +1668,21 @@ impl AppStore {
                         "do shell script \"{}\" with administrator privileges",
                         root_script.replace('\\', "\\\\").replace('"', "\\\"")
                     );
-                    let out = std::process::Command::new("osascript")
-                        .args(["-e", &apple_script])
-                        .output();
+                    // A separate runner instance, because this one waits on a
+                    // human typing a password: the 30s command timeout is far too
+                    // short, and killing it mid-prompt is worse than waiting out
+                    // ADMIN_PROMPT_TIMEOUT.
+                    // The cost is that `busy_phase` stays set while the dialog is
+                    // open, so snapshot polling pauses with it; the slowest path
+                    // is bounded by ADMIN_PROMPT_TIMEOUT, not forever.
+                    let out = sbctl_core::runner::Runner::run(
+                        &sbctl_core::runner::ExecRunner {
+                            timeout: ADMIN_PROMPT_TIMEOUT,
+                            trace: None,
+                        },
+                        "osascript",
+                        &["-e", &apple_script],
+                    );
                     let snap = ctrl.snapshot().ok();
                     (out, snap)
                 })
@@ -1539,7 +1694,7 @@ impl AppStore {
                     store.apply_snapshot(s, false);
                 }
                 match res {
-                    Ok(out) if out.status.success() => {
+                    Ok(out) if out.success => {
                         if reload_logs_after {
                             store.reload_logs();
                         }
@@ -1550,7 +1705,7 @@ impl AppStore {
                         });
                     }
                     Ok(out) => {
-                        let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        let msg = out.combined.trim().to_string();
                         let banner = if msg.is_empty() {
                             "Administrator authorization failed".to_string()
                         } else {
@@ -1566,14 +1721,14 @@ impl AppStore {
                         store.notice = Some(Notice {
                             origin,
                             tone: BannerTone::Error,
-                            message: err.to_string(),
+                            message: err.message.clone(),
                         });
                     }
                 }
                 cx.notify();
             });
-        });
-        self.mutation_task = Some(task);
+        })
+        .detach();
     }
     pub fn reload_logs(&mut self) {
         // The borrowed layout cannot be held across the buffer mutation below,
@@ -1590,7 +1745,6 @@ impl AppStore {
         self.error_log_id = sbctl_core::logs::log_file_id(&error_log_path);
         self.access_log_id = sbctl_core::logs::log_file_id(&access_log_path);
 
-        self.sync_log_counts();
         load_tail_stream(
             &error_log_path,
             &mut self.error_logs,
@@ -1603,6 +1757,8 @@ impl AppStore {
             &mut self.access_log_offset,
             &mut self.access_log_err,
         );
+        // After the tails are loaded, or the badge counts the emptied buffer.
+        self.sync_log_counts();
         self.log_revision = self.log_revision.wrapping_add(1);
     }
 
@@ -1801,44 +1957,15 @@ impl AppStore {
     }
 
     fn start_background_pollers(&mut self, cx: &mut Context<Self>) {
-        let log_task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            loop {
-                cx.background_executor().timer(POLL_LOG_INTERVAL).await;
-                let keep_going = this
-                    .update(cx, |store, cx| {
-                        if store.window_open
-                            && store.selected_tab == NavTab::Logs
-                            && store.log_follow
-                        {
-                            store.poll_logs_async(cx);
-                        }
-                    })
-                    .is_ok();
-                if !keep_going {
-                    break;
-                }
-            }
-        });
-        self._daemon_tasks.push(log_task);
-
-        if self.ctrl.is_some() {
-            let snap_task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                let mut last_poll = Instant::now();
+        if self.ctrl.is_none() {
+            // No service to poll, but the Logs tab still follows the files.
+            let log_task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 loop {
                     cx.background_executor().timer(SNAPSHOT_TICK_INTERVAL).await;
                     let keep_going = this
                         .update(cx, |store, cx| {
-                            let interval = if store.window_open {
-                                ACTIVE_SNAPSHOT_INTERVAL
-                            } else {
-                                BACKGROUND_SNAPSHOT_INTERVAL
-                            };
-                            if store.busy_phase.is_none() && last_poll.elapsed() >= interval {
-                                last_poll = Instant::now();
-                                store.refresh_snapshot(false, cx);
-                                if store.should_poll_logs() {
-                                    store.poll_logs_async(cx);
-                                }
+                            if store.should_poll_logs() {
+                                store.poll_logs_async(cx);
                             }
                         })
                         .is_ok();
@@ -1847,8 +1974,37 @@ impl AppStore {
                     }
                 }
             });
-            self._daemon_tasks.push(snap_task);
+            self._daemon_tasks.push(log_task);
+            return;
         }
+        // One ticker drives both. A second 800ms loop for the log tail re-tested
+        // the same flag 75 times a minute while the app sat in the tray.
+        let snap_task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut last_poll = Instant::now();
+            loop {
+                cx.background_executor().timer(SNAPSHOT_TICK_INTERVAL).await;
+                let keep_going = this
+                    .update(cx, |store, cx| {
+                        if store.should_poll_logs() {
+                            store.poll_logs_async(cx);
+                        }
+                        let interval = if store.window_open {
+                            ACTIVE_SNAPSHOT_INTERVAL
+                        } else {
+                            BACKGROUND_SNAPSHOT_INTERVAL
+                        };
+                        if store.busy_phase.is_none() && last_poll.elapsed() >= interval {
+                            last_poll = Instant::now();
+                            store.refresh_snapshot(false, cx);
+                        }
+                    })
+                    .is_ok();
+                if !keep_going {
+                    break;
+                }
+            }
+        });
+        self._daemon_tasks.push(snap_task);
     }
 }
 
@@ -1969,8 +2125,7 @@ fn into_log_record(line: String) -> LogRecord {
 }
 
 fn push_bounded_logs(buf: &mut Vec<LogRecord>, lines: Vec<String>) {
-    // Delegated to core so the eviction logic is covered by tests that run on
-    // every platform, not only where the GUI crate compiles.
+    // Delegated to core so the eviction logic lives in one place.
     sbctl_core::logs::append_bounded(buf, lines, MAX_LOG_ENTRIES, into_log_record);
 }
 

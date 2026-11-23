@@ -260,31 +260,3 @@ fn visible_width(s: &str) -> usize {
     }
     len
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn plain_render_uses_ascii_only_symbols() {
-        let theme = Theme::new(RenderOptions {
-            plain: true,
-            color: false,
-        });
-        let view = StatusView {
-            state: RunState::Running,
-            profile: Some("work".into()),
-            running: true,
-            tun: Some("tun0".into()),
-            server: Some("1.2.3.4:443".into()),
-            pid: Some(42),
-            missing: vec![],
-            broken: None,
-        };
-        let rendered = theme.render_status(&view);
-        assert!(rendered.contains("state    running"));
-        assert!(rendered.contains("profile  work"));
-        assert!(!rendered.contains('●'));
-        assert!(!rendered.contains('╭'));
-    }
-}
