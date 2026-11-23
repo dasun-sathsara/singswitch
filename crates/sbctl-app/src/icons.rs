@@ -44,12 +44,26 @@ fn coverage(distance: f32, pixel: f32) -> f32 {
     (0.5 - distance / pixel).clamp(0.0, 1.0)
 }
 
-/// The outline and filled globes share the same geometry. All states and
+fn route_distance(x: f32, y: f32) -> f32 {
+    // An open arrow points out of the globe, with its head clear of the rim.
+    let shaft_offset = ((x - y) * 0.5).clamp(0.015, 0.364);
+    let shaft = (x - shaft_offset).hypot(y + shaft_offset);
+    let top = (x - x.clamp(0.175, 0.364)).hypot(y + 0.364);
+    let right = (x - 0.364).hypot(y - y.clamp(-0.364, -0.175));
+    shaft.min(top).min(right) - 0.039
+}
+
+/// The off globe and the connected route share the same canvas. All states and
 /// animation frames use the same canvas to keep the tray item the same size.
 fn globe_rgba(size: u32, state: TrayVisualState, angle: f32, template: bool) -> Vec<u8> {
     let pixel = 1.0 / size as f32;
     let badge = Badge::for_state(state, angle);
     let connected = state == TrayVisualState::Connected;
+    let (cx, cy, radius) = if connected {
+        (0.45, 0.55, 0.303)
+    } else {
+        (0.5, 0.5, 0.337)
+    };
     let globe_color = if connected { [94, 234, 158] } else { [244; 3] };
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);
 
@@ -57,20 +71,20 @@ fn globe_rgba(size: u32, state: TrayVisualState, angle: f32, template: bool) -> 
         for x in 0..size {
             let x = (x as f32 + 0.5) * pixel;
             let y = (y as f32 + 0.5) * pixel;
-            let dx = x - 0.5;
-            let dy = y - 0.5;
+            let dx = x - cx;
+            let dy = y - cy;
             let distance = dx.hypot(dy);
-            let rim = (distance - 0.337).abs() - 0.036;
-            let longitude = ((dx / 0.154).hypot(dy / 0.337) - 1.0).abs() * 0.154 - 0.027;
-            let equator = (dy.abs() - 0.029).max(distance - 0.337);
-            let grid = longitude.min(equator);
-            let mut globe = if connected {
-                // Carve the grid into the disk, leaving a continuous rim.
-                let cutout = (grid + 0.002).max(distance - 0.313);
-                coverage(distance - 0.373, pixel) * (1.0 - coverage(cutout, pixel))
-            } else {
-                coverage(rim.min(grid), pixel)
-            };
+            let rim = (distance - radius).abs() - 0.036;
+            let longitude = ((dx / 0.154).hypot(dy / radius) - 1.0).abs() * 0.154 - 0.027;
+            let equator = (dy.abs() - 0.029).max(distance - radius);
+            let mut globe = coverage(rim.min(longitude).min(equator), pixel);
+            if connected {
+                let route = route_distance(x - 0.5, y - 0.5);
+                // Separate the arrowhead from the right edge of the globe.
+                globe *= 1.0 - coverage(route - 0.035, pixel);
+                let arrow = coverage(route, pixel);
+                globe = arrow + globe * (1.0 - arrow);
+            }
 
             let mark = if let Some(badge) = badge {
                 let bx = x - badge.x;
@@ -94,7 +108,8 @@ fn globe_rgba(size: u32, state: TrayVisualState, angle: f32, template: bool) -> 
                 rgba.extend([0, 0, 0, (glyph_alpha * 255.0).round() as u8]);
             } else {
                 // A dark backing keeps the white globe readable on light and dark taskbars.
-                let backing = coverage(distance - 0.46, pixel) * (1.0 - glyph_alpha);
+                let backing =
+                    coverage((x - 0.5).hypot(y - 0.5) - 0.46, pixel) * (1.0 - glyph_alpha);
                 let alpha = glyph_alpha + backing;
                 let badge_color = badge.map_or(globe_color, |badge| badge.color);
                 for ((badge_channel, globe_channel), dark) in badge_color
