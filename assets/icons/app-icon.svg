@@ -1,156 +1,70 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
-    <!-- macOS Tile Background: Midnight Obsidian -->
-    <linearGradient id="tile-surface" x1="0.5" y1="0" x2="0.5" y2="1">
-      <stop offset="0%" stop-color="#1B1E28" />
-      <stop offset="35%" stop-color="#11131C" />
-      <stop offset="100%" stop-color="#07080D" />
+    <linearGradient id="tile-bg-dark" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0%" stop-color="#191C26" />
+      <stop offset="45%" stop-color="#0F1118" />
+      <stop offset="100%" stop-color="#07080C" />
     </linearGradient>
 
-    <!-- 1.5px Outer Glass Rim Highlight -->
-    <linearGradient id="tile-rim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="rgba(255, 255, 255, 0.32)" />
-      <stop offset="30%" stop-color="rgba(255, 255, 255, 0.10)" />
-      <stop offset="100%" stop-color="rgba(255, 255, 255, 0.02)" />
+    <linearGradient id="tile-rim-dark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="rgba(255, 255, 255, 0.28)" />
+      <stop offset="35%" stop-color="rgba(255, 255, 255, 0.08)" />
+      <stop offset="100%" stop-color="rgba(255, 255, 255, 0.01)" />
     </linearGradient>
 
-    <!-- Atmospheric Emerald Ambient Radiance -->
-    <radialGradient id="halo-glow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#10B981" stop-opacity="0.28" />
-      <stop offset="45%" stop-color="#06B6D4" stop-opacity="0.08" />
-      <stop offset="100%" stop-color="#10B981" stop-opacity="0" />
-    </radialGradient>
-
-    <!-- Globe Sphere 3D Lighting -->
-    <radialGradient id="globe-body" cx="35%" cy="30%" r="70%">
-      <stop offset="0%" stop-color="#283246" />
-      <stop offset="35%" stop-color="#161B26" />
-      <stop offset="75%" stop-color="#0C0E15" />
-      <stop offset="100%" stop-color="#05060A" />
-    </radialGradient>
-
-    <!-- Globe Outer Rim Specular -->
-    <linearGradient id="globe-rim-stroke" x1="0.2" y1="0" x2="0.8" y2="1">
-      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.6" />
-      <stop offset="45%" stop-color="#34D399" stop-opacity="0.35" />
-      <stop offset="100%" stop-color="#10B981" stop-opacity="0.1" />
-    </linearGradient>
-
-    <!-- Front Switch Orbit Gradient -->
-    <linearGradient id="orbit-front-grad" x1="0" y1="0" x2="1" y2="0.8">
+    <linearGradient id="conduit-grad-dark" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#38BDF8" />
-      <stop offset="35%" stop-color="#2DD4BF" />
-      <stop offset="75%" stop-color="#34D399" />
+      <stop offset="45%" stop-color="#2DD4BF" />
       <stop offset="100%" stop-color="#10B981" />
     </linearGradient>
 
-    <!-- Back Switch Orbit Gradient -->
-    <linearGradient id="orbit-back-grad" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.4" />
-      <stop offset="50%" stop-color="#10B981" stop-opacity="0.2" />
-      <stop offset="100%" stop-color="#10B981" stop-opacity="0.4" />
-    </linearGradient>
+    <radialGradient id="node-ambient-dark" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#10B981" stop-opacity="0.25" />
+      <stop offset="100%" stop-color="#10B981" stop-opacity="0" />
+    </radialGradient>
 
-    <!-- macOS Standard Tile Drop Shadow -->
-    <filter id="tile-drop-shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="28" stdDeviation="32" flood-color="#000000" flood-opacity="0.60" />
-      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000000" flood-opacity="0.35" />
+    <filter id="tile-shadow-dark" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="28" stdDeviation="32" flood-color="rgba(0, 0, 0, 0.65)" />
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="rgba(0, 0, 0, 0.65)" />
     </filter>
 
-    <!-- Globe & Orbit Depth Shadow -->
-    <filter id="globe-depth" x="-25%" y="-25%" width="150%" height="150%">
-      <feDropShadow dx="0" dy="24" stdDeviation="28" flood-color="#000000" flood-opacity="0.70" />
-      <feDropShadow dx="0" dy="6" stdDeviation="18" flood-color="#10B981" flood-opacity="0.22" />
-    </filter>
-
-    <!-- Waypoint Core Bloom -->
-    <filter id="beacon-bloom" x="-40%" y="-40%" width="180%" height="180%">
-      <feDropShadow dx="0" dy="0" stdDeviation="12" flood-color="#34D399" flood-opacity="0.85" />
-      <feDropShadow dx="0" dy="4" stdDeviation="14" flood-color="#000000" flood-opacity="0.6" />
+    <filter id="route-depth-dark" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="20" stdDeviation="22" flood-color="rgba(0, 0, 0, 0.6)" />
+      <feDropShadow dx="0" dy="4" stdDeviation="14" flood-color="rgba(16, 185, 129, 0.3)" />
     </filter>
   </defs>
 
-  <!-- 1. Squircle Base Plate -->
-  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile-surface)" filter="url(#tile-drop-shadow)" />
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile-bg-dark)" filter="url(#tile-shadow-dark)" />
+  <rect x="100.75" y="100.75" width="822.5" height="822.5" rx="184.25" fill="none" stroke="url(#tile-rim-dark)" stroke-width="1.5" />
 
-  <!-- 2. Inner Rim Bevel Light -->
-  <rect x="100.75" y="100.75" width="822.5" height="822.5" rx="184.25" fill="none" stroke="url(#tile-rim)" stroke-width="1.5" />
-
-  <!-- 3. Tile Interior Atmosphere -->
-  <g clip-path="url(#tile-boundary)">
-    <clipPath id="tile-boundary">
+  <g clip-path="url(#tile-clip-dark)">
+    <clipPath id="tile-clip-dark">
       <rect x="100" y="100" width="824" height="824" rx="185" />
     </clipPath>
-
-    <!-- Emerald Ambient Radiance Pool -->
-    <circle cx="512" cy="512" r="410" fill="url(#halo-glow)" />
-
-    <!-- Top Specular Sheen (Apple-style natural skylight) -->
+    <circle cx="680" cy="680" r="320" fill="url(#node-ambient-dark)" />
     <ellipse cx="512" cy="160" rx="360" ry="100" fill="#FFFFFF" opacity="0.035" />
   </g>
 
-  <!-- 4. Central Mark: The SingSwitch 3D Global Router -->
-  <g filter="url(#globe-depth)">
+  <g filter="url(#route-depth-dark)">
+    <!-- Standby Direct Route -->
+    <path d="M 300 310 L 724 310" fill="none" stroke="#1E293B" stroke-width="64" stroke-linecap="round" />
+    <path d="M 300 310 L 724 310" fill="none" stroke="#334155" stroke-width="1.5" stroke-linecap="round" opacity="0.5" />
 
-    <!-- A. Back Orbit (passes behind the globe from top-right to bottom-left) -->
-    <g transform="rotate(-25 512 512)">
-      <!-- Back half of the ellipse: from 180 deg to 360 deg -->
-      <path d="M 212 512 A 300 115 0 0 1 812 512"
-            fill="none" stroke="url(#orbit-back-grad)" stroke-width="18" stroke-dasharray="6 8" />
-    </g>
+    <circle cx="724" cy="310" r="44" fill="#0F172A" stroke="#475569" stroke-width="6" />
+    <circle cx="724" cy="310" r="16" fill="#475569" opacity="0.6" />
 
-    <!-- B. The Globe (Sphere Radius 216px, Center 512, 512) -->
-    <circle cx="512" cy="512" r="216" fill="url(#globe-body)" stroke="url(#globe-rim-stroke)" stroke-width="2.5" />
+    <!-- Active Switched Tunnel Conduit -->
+    <path d="M 300 310 C 560 310, 480 714, 724 714" fill="none" stroke="url(#conduit-grad-dark)" stroke-width="84" stroke-linecap="round" />
+    <path d="M 300 310 C 560 310, 480 714, 724 714" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" opacity="0.9" />
 
-    <!-- Globe Grid: Parallels & Meridians -->
-    <g clip-path="url(#globe-clip)" fill="none" stroke="#64748B" stroke-width="1.7" stroke-linecap="round" opacity="0.45">
-      <clipPath id="globe-clip">
-        <circle cx="512" cy="512" r="215" />
-      </clipPath>
-      <!-- Equator -->
-      <line x1="296" y1="512" x2="728" y2="512" />
-      <!-- Latitude Parallels -->
-      <ellipse cx="512" cy="512" rx="216" ry="108" />
-      <ellipse cx="512" cy="512" rx="216" ry="176" />
-      <!-- Longitude Meridians -->
-      <line x1="512" y1="296" x2="512" y2="728" />
-      <ellipse cx="512" cy="512" rx="108" ry="216" />
-      <ellipse cx="512" cy="512" rx="172" ry="216" />
+    <!-- Ingress Node -->
+    <circle cx="300" cy="310" r="54" fill="#0F172A" stroke="#38BDF8" stroke-width="8" />
+    <circle cx="300" cy="310" r="22" fill="#F8FAFC" />
 
-      <!-- Top-left internal glass highlight -->
-      <ellipse cx="430" cy="410" rx="120" ry="80" fill="#FFFFFF" opacity="0.04" />
-    </g>
-
-    <!-- C. Front Orbit (Sweeps across the globe face) -->
-    <g transform="rotate(-25 512 512)">
-      <!-- Outer energy halo for front track -->
-      <path d="M 212 512 A 300 115 0 0 0 812 512"
-            fill="none" stroke="#10B981" stroke-width="46" stroke-linecap="round" opacity="0.22" />
-
-      <!-- Main Optic Tube -->
-      <path d="M 212 512 A 300 115 0 0 0 812 512"
-            fill="none" stroke="url(#orbit-front-grad)" stroke-width="26" stroke-linecap="round" />
-
-      <!-- Luminous White Spine Highlight -->
-      <path d="M 212 512 A 300 115 0 0 0 812 512"
-            fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" opacity="0.88" />
-
-      <!-- Ingress Node / Source (Left Apex: 212, 512) -->
-      <circle cx="212" cy="512" r="25" fill="#0F172A" stroke="#38BDF8" stroke-width="5" />
-      <circle cx="212" cy="512" r="9" fill="#E2E8F0" />
-
-      <!-- Active Connected Beacon (Right Apex: 812, 512) -->
-      <g filter="url(#beacon-bloom)">
-        <!-- Concentric pulse field -->
-        <circle cx="812" cy="512" r="48" fill="none" stroke="#34D399" stroke-width="3" opacity="0.45" />
-        <!-- Titanium bezel -->
-        <circle cx="812" cy="512" r="36" fill="#044E3B" stroke="#6EE7B7" stroke-width="6" />
-        <!-- Emerald active core -->
-        <circle cx="812" cy="512" r="20" fill="#10B981" />
-        <!-- White optic flare -->
-        <circle cx="812" cy="512" r="9" fill="#FFFFFF" />
-      </g>
-    </g>
-
+    <!-- Active Egress Gateway Node -->
+    <circle cx="724" cy="714" r="70" fill="none" stroke="rgba(52, 211, 153, 0.4)" stroke-width="5" />
+    <circle cx="724" cy="714" r="56" fill="#047857" stroke="#A7F3D0" stroke-width="8" />
+    <circle cx="724" cy="714" r="28" fill="#10B981" />
+    <circle cx="724" cy="714" r="12" fill="#FFFFFF" />
   </g>
 </svg>
