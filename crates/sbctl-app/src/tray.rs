@@ -14,10 +14,7 @@ struct TrayIcons {
     broken: Icon,
 }
 
-/// Build one state's icon, falling back to `fallback` when it cannot be built.
-///
-/// Failing the whole tray for one unavailable SF Symbol downgraded the app to a
-/// plain window on an older OS.
+/// Build one state without taking down the tray if its image cannot be loaded.
 fn fallback_icon(state: TrayVisualState, fallback: &Icon) -> Icon {
     build_tray_icon(state).unwrap_or_else(|err| {
         crate::diag::log(&format!("tray icon unavailable for {state:?}: {err}"));
@@ -27,9 +24,6 @@ fn fallback_icon(state: TrayVisualState, fallback: &Icon) -> Icon {
 
 impl TrayIcons {
     fn build_all() -> gpui_tray::Result<Self> {
-        // A state whose icon cannot be built falls back to the disconnected
-        // icon rather than failing the whole tray: an unavailable SF Symbol on
-        // an older OS would otherwise downgrade the app to a plain window.
         let disconnected = build_tray_icon(TrayVisualState::Disconnected)?;
         let connected = fallback_icon(TrayVisualState::Connected, &disconnected);
         let transitioning = fallback_icon(TrayVisualState::Transitioning, &disconnected);
@@ -94,47 +88,43 @@ pub struct TrayController {
 impl TrayController {
     pub fn install(store: &Entity<AppStore>, cx: &mut App) -> gpui_tray::Result<Self> {
         let icons = TrayIcons::build_all()?;
-        let (initial_visual, initial_tooltip, initial_fp, probing) = {
+        let (initial_visual, initial_tooltip, initial_fp) = {
             let s = store.read(cx);
             (
-                s.tray_visual_state(),
+                display_visual(s),
                 s.tray_tooltip(),
                 MenuFingerprint::from_store(s),
-                s.is_probing(),
             )
         };
 
         let store_for_menu = store.clone();
         let tray = Tray::builder()
-            // The first probe has not answered yet, so do not install a state
-            // the app has not observed.
-            .icon(if probing {
-                fallback_icon(TrayVisualState::Transitioning, &icons.get(initial_visual))
-            } else {
-                icons.get(initial_visual)
-            })
+            .icon(icons.get(initial_visual))
             .tooltip(initial_tooltip.clone())
             .on_activate(OpenMainWindow)
             .menu(move |cx| build_tray_menu(store_for_menu.read(cx)))
             .build(cx)?;
-        let tray_for_obs = tray.clone();
 
-        // Start from what is actually on screen: while probing the icon is the
-        // neutral one, so a first probe that settles on Disconnected must still
-        // replace it.
-        let mut prev_visual = if probing {
-            TrayVisualState::Transitioning
-        } else {
-            initial_visual
-        };
+        #[cfg(target_os = "macos")]
+        let mut orbit = Orbit::default();
+        #[cfg(target_os = "macos")]
+        orbit.update(initial_visual, store.read(cx).is_probing(), &tray, cx);
+
+        let tray_for_obs = tray.clone();
+        let mut prev_visual = initial_visual;
         let mut prev_tooltip = initial_tooltip;
         let mut prev_fp = initial_fp;
 
         let subscription = cx.observe(store, move |entity, cx| {
             let s = entity.read(cx);
-            let visual = s.tray_visual_state();
+            let visual = display_visual(s);
+            #[cfg(target_os = "macos")]
+            let probing = s.is_probing();
             let tooltip = s.tray_tooltip();
             let fp = MenuFingerprint::from_store(s);
+
+            #[cfg(target_os = "macos")]
+            orbit.update(visual, probing, &tray_for_obs, cx);
 
             if visual != prev_visual {
                 let _ = tray_for_obs.set_icon(icons.get(visual), cx);
@@ -159,6 +149,72 @@ impl TrayController {
     pub fn close(&self, cx: &mut App) {
         let _ = self.tray.close(cx);
     }
+}
+
+fn display_visual(store: &AppStore) -> TrayVisualState {
+    if store.is_probing() {
+        TrayVisualState::Transitioning
+    } else {
+        store.tray_visual_state()
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct Orbit {
+    frames: Option<std::rc::Rc<[Icon]>>,
+    task: Option<gpui_kit::Task<()>>,
+}
+
+#[cfg(target_os = "macos")]
+impl Orbit {
+    fn update(&mut self, visual: TrayVisualState, probing: bool, tray: &Tray, cx: &mut App) {
+        if visual != TrayVisualState::Transitioning || probing {
+            self.task = None;
+            return;
+        }
+        if self.task.as_ref().is_some_and(|task| !task.is_ready()) || reduce_motion() {
+            return;
+        }
+        if self.frames.is_none() {
+            self.frames = Some(match crate::icons::build_orbit_frames() {
+                Ok(frames) => frames.into(),
+                Err(err) => {
+                    crate::diag::log(&format!("tray: could not build orbit frames: {err}"));
+                    Vec::new().into()
+                }
+            });
+        }
+        let Some(frames) = self
+            .frames
+            .as_ref()
+            .filter(|frames| !frames.is_empty())
+            .cloned()
+        else {
+            return;
+        };
+        let tray = tray.clone();
+        self.task = Some(cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
+            // 36 frames at 110 ms is just under four seconds per orbit.
+            for frame in frames.iter().cycle().skip(1) {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(110))
+                    .await;
+                let reduce = reduce_motion();
+                let icon = if reduce { &frames[0] } else { frame };
+                if cx.update(|cx| tray.set_icon(icon.clone(), cx)).is_err() || reduce {
+                    break;
+                }
+            }
+        }));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn reduce_motion() -> bool {
+    let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+    // SAFETY: NSWorkspace exposes this Boolean property on all supported macOS versions.
+    unsafe { objc2::msg_send![&*workspace, accessibilityDisplayShouldReduceMotion] }
 }
 
 /// Keep everyday switches one click away, and group larger libraries.
