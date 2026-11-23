@@ -653,10 +653,10 @@ impl ProfilesView {
                             .text_xs()
                             .font_weight(fonts::EMPHASIS)
                             .text_color(cx.theme().muted_foreground)
-                            .child(div().flex_1().min_w(px(180.0)).pl(px(32.0)).child("PROFILE"))
-                            .child(div().flex_1().min_w(px(180.0)).child("SERVER / ENDPOINT"))
-                            .child(div().w(px(100.0)).flex_none().child("STATUS"))
-                            .child(div().w(px(180.0)).flex_none()),
+                            .child(div().flex_1().min_w(px(220.0)).pl(px(32.0)).child("PROFILE"))
+                            .child(div().w(px(200.0)).flex_none().child("SERVER / ENDPOINT"))
+                            .child(div().w(px(110.0)).flex_none().child("STATUS"))
+                            .child(div().w(px(150.0)).flex_none()),
                     )
                     .child(
                         v_flex()
@@ -728,7 +728,7 @@ impl ProfilesView {
                     .child(
                         h_flex()
                             .flex_1()
-                            .min_w(px(180.0))
+                            .min_w(px(220.0))
                             .items_center()
                             .gap(px(8.0))
                             .child(
@@ -776,25 +776,12 @@ impl ProfilesView {
                                     .text_color(cx.theme().foreground)
                                     .truncate()
                                     .child(profile.name.clone()),
-                            )
-                            .when(live, |row| {
-                                row.child(
-                                    div()
-                                        .px(px(6.0))
-                                        .py(px(1.0))
-                                        .rounded(px(4.0))
-                                        .bg(cx.theme().success.opacity(0.15))
-                                        .text_size(px(10.5))
-                                        .font_weight(fonts::EMPHASIS)
-                                        .text_color(cx.theme().success)
-                                        .child("ACTIVE"),
-                                )
-                            }),
+                            ),
                     )
                     .child(
                         div()
-                            .flex_1()
-                            .min_w(px(180.0))
+                            .w(px(200.0))
+                            .flex_none()
                             .font_family(fonts::mono_family())
                             .text_size(px(12.5))
                             .text_color(cx.theme().muted_foreground)
@@ -803,7 +790,7 @@ impl ProfilesView {
                     )
                     .child(
                         h_flex()
-                            .w(px(100.0))
+                            .w(px(110.0))
                             .flex_none()
                             .items_center()
                             .gap(px(6.0))
@@ -818,7 +805,7 @@ impl ProfilesView {
                     )
                     .child(
                         h_flex()
-                            .w(px(180.0))
+                            .w(px(150.0))
                             .flex_none()
                             .justify_end()
                             .gap(px(4.0))
