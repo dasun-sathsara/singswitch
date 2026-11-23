@@ -1,13 +1,17 @@
 # Bundled typefaces
 
-- `FeixenStandard-Regular.ttf`, `FeixenStandard-Bold.ttf`: Studio Feixen Standard. Proprietary
-  licence held for this private repository. Do not redistribute the binaries.
-- `GeistStandard-Regular.ttf`, `GeistStandard-Bold.ttf`: Vercel Geist Standard, SIL Open Font
-  License 1.1.
+Two Geist faces under the SIL Open Font License 1.1, from
+[vercel/geist-font](https://github.com/vercel/geist-font) v1.9.2.
 
-Only Regular and Bold are bundled because only those two weights exist in the supplied cuts. The
-app never requests 500 or 600, which the text system would synthesise.
+- `Geist-Regular.ttf`, `Geist-Bold.ttf`: Geist Sans, proportional. Family name `Geist`. Carries
+  the interface.
+- `GeistStandard-Regular.ttf`, `GeistStandard-Bold.ttf`: Geist Mono, fixed width. Family name
+  `Geist Standard`. Carries values, identifiers, logs and paths, where digits and addresses need
+  to line up under each other.
 
-`crates/singswitch-app/src/fonts.rs` embeds the binaries at compile time. If the assets are
-missing the build still succeeds and text falls back to the platform UI face; the failure is
-logged rather than fatal.
+Only Regular and Bold are bundled for each, because those are the only weights the app asks for.
+It never requests 500 or 600, which the text system would synthesise.
+
+`crates/singswitch-app/src/fonts.rs` embeds all four at compile time. If the assets are missing
+the build still succeeds and text falls back to the platform UI face; the failure is logged
+rather than fatal.

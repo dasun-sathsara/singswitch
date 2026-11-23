@@ -88,7 +88,6 @@ make cross      # macOS and Windows cross-compilation checks
 
 Building the macOS bundle from Linux needs `MAC_SDK=/path/to/MacOSX14.5.sdk` and shader stitching
 first; `scripts/cross-env.sh` and `scripts/stitch-macos-shaders.sh` do that.
-[docs/ui-plan.md](docs/ui-plan.md) covers the interface design and its open questions.
 
 ## License
 
