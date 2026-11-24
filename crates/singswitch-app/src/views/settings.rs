@@ -14,7 +14,7 @@ use gpui_kit::{
 use singswitch_core::layout::Layout;
 
 use crate::fonts;
-use crate::state::{AppStore, BannerTone, NoticeOrigin};
+use crate::state::{AppStore, NoticeOrigin};
 use crate::theme::{ThemePreference, surface};
 
 pub struct SettingsView {
@@ -62,7 +62,7 @@ impl Render for SettingsView {
             .when_some(notice, |el, notice| el.child(notice))
             .child(render_appearance_card(settings.theme, &self.store, cx))
             .child(render_behavior_card(&settings, &self.store, cx))
-            .child(render_paths_card(layout, &self.store, cx))
+            .child(render_paths_card(layout, cx))
     }
 }
 
@@ -172,7 +172,6 @@ fn render_behavior_card(
 ) -> impl IntoElement {
     let store_login = store.clone();
     let store_ip = store.clone();
-    let store_notify = store.clone();
 
     v_flex()
         .w_full()
@@ -217,20 +216,8 @@ fn render_behavior_card(
             },
             cx,
         ))
-        .child(setting_switch_row(
-            SwitchRowSpec {
-                id: "set-notifications",
-                title: "Desktop notifications",
-                description: "Show a system notification when the service switches or fails.",
-                checked: settings.desktop_notifications,
-                disabled: false,
-                border_top: true,
-            },
-            move |checked, _, cx| {
-                store_notify.update(cx, |s, cx| s.set_desktop_notifications(*checked, cx));
-            },
-            cx,
-        ))
+        // Desktop notifications are reserved for failures (AGENTS.md); there is
+        // no routine event left to toggle, so the row is gone.
         .child(render_auto_sync_row(settings, store, cx))
 }
 
@@ -380,11 +367,7 @@ fn setting_switch_row(
         )
 }
 
-fn render_paths_card(
-    layout: &Layout,
-    store: &Entity<AppStore>,
-    cx: &gpui_kit::App,
-) -> impl IntoElement {
+fn render_paths_card(layout: &Layout, cx: &gpui_kit::App) -> impl IntoElement {
     let mono_font = cx.theme().mono_font_family.clone();
     let paths = [
         ("Platform", layout.platform.as_str().to_string()),
@@ -443,7 +426,6 @@ fn render_paths_card(
         )
         .children(paths.into_iter().enumerate().map(|(ix, (label, value))| {
             let val_copy = value.clone();
-            let store_copy = store.clone();
             h_flex()
                 .w_full()
                 .justify_between()
@@ -477,14 +459,7 @@ fn render_paths_card(
                         .accessibility_label("Copy path")
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(val_copy.clone()));
-                            store_copy.update(cx, |s, cx| {
-                                s.set_notice(
-                                    NoticeOrigin::Settings,
-                                    BannerTone::Success,
-                                    "Copied to clipboard",
-                                    cx,
-                                );
-                            });
+                            // Clipboard writes need no confirmation strip.
                         }),
                 )
         }))

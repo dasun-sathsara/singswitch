@@ -444,8 +444,8 @@ impl Controller {
             ));
         }
 
-        self.notifier
-            .notify(&format!("sing-box switched to {}", target.name));
+        // No desktop notification on a routine switch: the app window shows
+        // the new active profile, and the tray tooltip carries it too.
         Ok(())
     }
 
@@ -599,7 +599,7 @@ impl Controller {
     pub fn stop(&self) -> Result<()> {
         let _lock = self.acquire_lock()?;
         self.manager.stop()?;
-        self.notifier.notify("sing-box stopped");
+        // No desktop notification on a routine stop (see AGENTS.md).
         Ok(())
     }
 
@@ -717,7 +717,7 @@ impl Controller {
             ]));
         }
 
-        self.notifier.notify(&format!("sing-box reloaded {name}"));
+        // No desktop notification on a routine reload (see AGENTS.md).
         Ok(true)
     }
 

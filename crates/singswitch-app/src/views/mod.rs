@@ -332,8 +332,6 @@ pub fn notice_strip(
     let (icon, color) = match notice.tone {
         BannerTone::Error => (IconName::CircleX, cx.theme().danger),
         BannerTone::Warning => (IconName::TriangleAlert, cx.theme().warning),
-        BannerTone::Success => (IconName::CircleCheck, cx.theme().success),
-        BannerTone::Info => (IconName::Info, cx.theme().info),
     };
     let store_dismiss = store.clone();
     Some(

@@ -69,10 +69,11 @@ pub struct LatencyReading {
     pub result: Result<Duration, String>,
 }
 
+/// Tone of a notice strip. Only `Warning` and `Error` are raised in practice:
+/// routine success and info are visible in the state they change, so they do
+/// not get a strip (AGENTS.md, "UI feedback rules").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BannerTone {
-    Info,
-    Success,
     Warning,
     Error,
 }
@@ -284,7 +285,9 @@ impl AppStore {
             )
         }) {
             Ok(c) => {
-                c.set_notifications_enabled(settings.desktop_notifications);
+                // Desktop notifications are failure-only (AGENTS.md), so the
+                // toggle stays on.
+                c.set_notifications_enabled(true);
                 // No synchronous snapshot here: it shelled out to
                 // `launchctl print` (30s deadline) and re-parsed every profile
                 // file before the first frame. The first paint shows an unknown
@@ -739,15 +742,6 @@ impl AppStore {
         cx.notify();
     }
 
-    pub fn set_desktop_notifications(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        self.settings.desktop_notifications = enabled;
-        if let Some(ctrl) = &self.ctrl {
-            ctrl.set_notifications_enabled(enabled);
-        }
-        self.persist_settings(cx);
-        cx.notify();
-    }
-
     /// Set the automatic sync interval, clamped to the supported range.
     ///
     /// `minutes` arrives from a menu of fixed choices, but it is clamped here
@@ -770,16 +764,7 @@ impl AppStore {
             Ok(()) => {
                 self.settings.launch_at_login = enabled;
                 self.persist_settings(cx);
-                self.set_notice(
-                    NoticeOrigin::Settings,
-                    BannerTone::Success,
-                    if enabled {
-                        "Launch at login enabled"
-                    } else {
-                        "Launch at login disabled"
-                    },
-                    cx,
-                );
+                // The switch itself shows the new state; no banner.
             }
             Err(err) => {
                 // The switch that failed lives in Settings, so the reason belongs
@@ -1078,11 +1063,8 @@ impl AppStore {
                         store.connected_since = Some(Instant::now());
                         store.was_running_expected = true;
                         store.selected_profile = Some(name.clone());
-                        store.notice = Some(Notice {
-                            origin,
-                            tone: BannerTone::Success,
-                            message: format!("Connected to {name}"),
-                        });
+                        // No success banner: the connection card already shows
+                        // "Connected" with this profile's name.
                         should_refresh_ip = store.settings.auto_refresh_ip;
                     }
                     Err(err) => {
@@ -1163,11 +1145,9 @@ impl AppStore {
                         // Save & Connect runs while the editor is mounted, so
                         // the result belongs on the editor, not the stage it
                         // covers.
-                        store.notice = Some(Notice {
-                            origin: NoticeOrigin::Editor,
-                            tone: BannerTone::Success,
-                            message: format!("Saved and connected to {name}"),
-                        });
+                        // No success banner: the editor's validation line and the
+                        // connection card both show the result.
+
                         should_refresh_ip = store.settings.auto_refresh_ip;
                     }
                     Err(err) => {
@@ -1234,11 +1214,8 @@ impl AppStore {
                         store.stop_requested = false;
                         store.was_running_expected = false;
                         store.connected_since = None;
-                        store.notice = Some(Notice {
-                            origin,
-                            tone: BannerTone::Info,
-                            message: "sing-box stopped".to_string(),
-                        });
+                        // No info banner: the card flips to "Disconnected".
+
                         should_refresh_ip = store.settings.auto_refresh_ip;
                     }
                     Err(err) => {
@@ -1276,12 +1253,7 @@ impl AppStore {
         self.editing = false;
         self.validation_generation = self.validation_generation.wrapping_add(1);
         self.editor_validation = None;
-        self.set_notice(
-            NoticeOrigin::Stage,
-            BannerTone::Success,
-            format!("Imported {name}"),
-            cx,
-        );
+        cx.notify();
     }
 
     pub fn create_profile(&mut self, name: &str, cx: &mut Context<Self>) -> CoreResult<()> {
@@ -1310,12 +1282,7 @@ impl AppStore {
         // never drawn.
         self.editing = false;
         self.restart_file_watcher(cx);
-        self.set_notice(
-            NoticeOrigin::Stage,
-            BannerTone::Success,
-            format!("Created {name}"),
-            cx,
-        );
+
         Ok(())
     }
 
@@ -1365,11 +1332,7 @@ impl AppStore {
                         store.validation_generation = store.validation_generation.wrapping_add(1);
                         store.editor_validation = None;
                         store.restart_file_watcher(cx);
-                        store.notice = Some(Notice {
-                            origin,
-                            tone: BannerTone::Success,
-                            message: format!("Imported {name}"),
-                        });
+                        // The new row appears in the list; no banner.
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
@@ -1484,11 +1447,7 @@ impl AppStore {
                         });
                     }
                     Ok(report) if report.synced.is_empty() => {
-                        store.notice = Some(Notice {
-                            origin: NoticeOrigin::Toolbar,
-                            tone: BannerTone::Info,
-                            message: "No remote profiles to sync".to_string(),
-                        });
+                        // Nothing to sync is the idle state, not a message.
                     }
                     Ok(_) => {
                         // Persist the stamp on success only: this is the value
@@ -1530,12 +1489,12 @@ impl AppStore {
         cx.notify();
 
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let (name, res, snap) = cx
+            let (res, snap) = cx
                 .background_executor()
                 .spawn(async move {
                     let res = ctrl.gui_sync_one(&name);
                     let snap = ctrl.snapshot().ok();
-                    (name, res, snap)
+                    (res, snap)
                 })
                 .await;
 
@@ -1545,17 +1504,8 @@ impl AppStore {
                     store.apply_snapshot(s, true);
                 }
                 match res {
-                    Ok(reloaded) => {
-                        let note = if reloaded {
-                            format!("Synced and reloaded {name}")
-                        } else {
-                            format!("Synced {name}")
-                        };
-                        store.notice = Some(Notice {
-                            origin,
-                            tone: BannerTone::Success,
-                            message: note,
-                        });
+                    Ok(_reloaded) => {
+                        // The profile list's disk revision moves on; no banner.
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
@@ -1613,18 +1563,9 @@ impl AppStore {
                                 message: format!("Synced {synced}; failed: {details}"),
                             });
                         } else if report.synced.is_empty() {
-                            store.notice = Some(Notice {
-                                origin,
-                                tone: BannerTone::Info,
-                                message: "No remote profiles to sync".to_string(),
-                            });
+                            // Nothing to sync is the idle state, not a message.
                         } else {
-                            let synced = count_noun(report.synced.len(), "profile", "profiles");
-                            store.notice = Some(Notice {
-                                origin,
-                                tone: BannerTone::Success,
-                                message: format!("Synced {synced}"),
-                            });
+                            // The list refreshes; no banner.
                         }
                     }
                     Err(err) => {
@@ -1676,22 +1617,12 @@ impl AppStore {
                 }
                 match res {
                     Ok(reloaded) => {
-                        let msg = if reloaded {
-                            format!("Saved {name} and reloaded sing-box")
-                        } else if allow_invalid {
-                            format!("Saved draft {name}")
-                        } else {
-                            format!("Saved {name}")
-                        };
+                        let _ = reloaded;
                         if !allow_invalid {
                             store.editor_validation =
                                 Some((name.clone(), EditorValidationState::Valid));
                         }
-                        store.notice = Some(Notice {
-                            origin,
-                            tone: BannerTone::Success,
-                            message: msg,
-                        });
+                        // The editor's validation line says "Configuration valid".
                     }
                     Err(err) => {
                         store.editor_validation = Some((
@@ -1735,11 +1666,7 @@ impl AppStore {
                 match res {
                     Ok(()) => {
                         store.editor_validation = Some((name, EditorValidationState::Valid));
-                        store.notice = Some(Notice {
-                            origin: NoticeOrigin::Editor,
-                            tone: BannerTone::Success,
-                            message: "Configuration valid".to_string(),
-                        });
+                        // editor_validation already carries the valid state.
                     }
                     Err(err) => {
                         let msg = error_text(&err);
@@ -1800,11 +1727,7 @@ impl AppStore {
                                 store.snapshot.profiles.first().map(|p| p.name.clone())
                             });
                         }
-                        store.notice = Some(Notice {
-                            origin,
-                            tone: BannerTone::Info,
-                            message: format!("Deleted {name}"),
-                        });
+                        // The row disappears from the list; no banner.
                     }
                     Err(err) => {
                         store.notice = Some(Notice {
@@ -1951,7 +1874,6 @@ impl AppStore {
         self.run_macos_admin_script(
             "Authorizing log permissions...",
             root_script,
-            "Updated /var/log/sing-box permissions",
             true,
             origin,
             cx,
@@ -1962,7 +1884,6 @@ impl AppStore {
         &mut self,
         phase: &'static str,
         root_script: String,
-        success_msg: &'static str,
         reload_logs_after: bool,
         origin: NoticeOrigin,
         cx: &mut Context<Self>,
@@ -2014,11 +1935,7 @@ impl AppStore {
                         if reload_logs_after {
                             store.reload_logs();
                         }
-                        store.notice = Some(Notice {
-                            origin,
-                            tone: BannerTone::Success,
-                            message: success_msg.to_string(),
-                        });
+                        // No success banner; the fix is visible in the logs.
                     }
                     Ok(out) => {
                         let msg = out.combined.trim().to_string();

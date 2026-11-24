@@ -178,14 +178,9 @@ impl NodesStrip {
 
             let _ = this.update(cx, |strip, cx| {
                 match &result {
-                    Ok(()) => store.update(cx, |s, cx| {
-                        s.set_notice(
-                            NoticeOrigin::Toolbar,
-                            BannerTone::Success,
-                            format!("{group} is now using {member}"),
-                            cx,
-                        );
-                    }),
+                    // No success banner: the group chip re-reads the daemon and
+                    // shows the new member itself.
+                    Ok(()) => {}
                     Err(err) => store.update(cx, |s, cx| {
                         s.set_notice(NoticeOrigin::Toolbar, BannerTone::Error, describe(err), cx);
                     }),

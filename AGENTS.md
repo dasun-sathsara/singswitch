@@ -129,3 +129,18 @@ inline `#[allow]` + comment, or **globally** only through a change to this
 file plus the lint threshold in `Cargo.toml` in the same commit, explaining
 the why in detail. CI for a push that weakens `make check` without touching
 this file is a red build by design.
+
+## UI feedback rules
+
+- No hover tooltips in the window. Controls explain themselves through their
+  label, icon, and disabled state; a tooltip that only repeats the label is
+  noise. (The tray's `set_tooltip` is the exception: a menu-bar item has no
+  window surface, so its tooltip is the only place its status text can live.)
+- No success or info banner strips. Operations that succeed are visible in
+  the state they change (the connection card, the profile row, the LATENCY
+  column); a green strip saying "Connected to X" on top of a card that already
+  says "Connected" is redundant. Errors and warnings keep the notice strip,
+  because a failure is not otherwise visible in the UI.
+- No desktop notifications for routine state changes (switch, stop, reload).
+  They are reserved for failures the user cannot see while the window is
+  hidden (an unexpected service drop, an activation failure).

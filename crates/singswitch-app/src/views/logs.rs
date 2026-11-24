@@ -18,7 +18,7 @@ use gpui_kit::{
 use singswitch_core::logs::{LogLevel, contains_ignore_ascii_case};
 
 use crate::fonts;
-use crate::state::{AppStore, BannerTone, LogSeverityFilter, LogStreamKind, NoticeOrigin};
+use crate::state::{AppStore, LogSeverityFilter, LogStreamKind, NoticeOrigin};
 use crate::theme::subtle_pill_bg;
 
 pub struct LogsView {
@@ -201,7 +201,6 @@ impl LogsView {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let line_copy = line.clone();
-        let store_banner = self.store.clone();
 
         v_flex()
             .w_full()
@@ -233,14 +232,7 @@ impl LogsView {
                                 cx.write_to_clipboard(ClipboardItem::new_string(
                                     line_copy.to_string(),
                                 ));
-                                store_banner.update(cx, |s, cx| {
-                                    s.set_notice(
-                                        NoticeOrigin::Logs,
-                                        BannerTone::Success,
-                                        "Line copied",
-                                        cx,
-                                    );
-                                });
+                                // Clipboard writes need no confirmation strip.
                             }),
                     )
                     .child(
@@ -494,14 +486,8 @@ impl Render for LogsView {
                                             .join("\n")
                                     };
                                     cx.write_to_clipboard(ClipboardItem::new_string(joined));
-                                    store_copy.update(cx, |s, cx| {
-                                        s.set_notice(
-                                            NoticeOrigin::Logs,
-                                            BannerTone::Success,
-                                            "Copied logs",
-                                            cx,
-                                        );
-                                    });
+                                    // Clipboard writes need no confirmation strip.
+
                                 }
                             }),
                     ),

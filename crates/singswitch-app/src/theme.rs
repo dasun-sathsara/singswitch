@@ -6,9 +6,9 @@ use gpui_kit::{App, Window, WindowAppearance, rgb};
 use serde::{Deserialize, Serialize};
 use singswitch_core::error::{Result, SingSwitchError};
 
-pub const MIN_WINDOW_WIDTH: f32 = 740.0;
+pub const MIN_WINDOW_WIDTH: f32 = 940.0;
 pub const MIN_WINDOW_HEIGHT: f32 = 440.0;
-pub const DEFAULT_WINDOW_WIDTH: f32 = 860.0;
+pub const DEFAULT_WINDOW_WIDTH: f32 = 960.0;
 // The guided editor's three section cards measure about 600 logical px before
 // the save bar; at 480 the second card was cut mid-input with no scroll cue,
 // because macOS reveals scrollbars only on hover. First-run and capture sizes
@@ -53,7 +53,6 @@ pub struct UiSettings {
     pub theme: ThemePreference,
     pub launch_at_login: bool,
     pub auto_refresh_ip: bool,
-    pub desktop_notifications: bool,
     pub window_width: f32,
     pub window_height: f32,
     /// Minutes between automatic remote-profile syncs. `0` means off.
@@ -71,7 +70,6 @@ impl Default for UiSettings {
             theme: ThemePreference::Light,
             launch_at_login: false,
             auto_refresh_ip: true,
-            desktop_notifications: true,
             window_width: DEFAULT_WINDOW_WIDTH,
             window_height: DEFAULT_WINDOW_HEIGHT,
             auto_sync_interval_minutes: 0,

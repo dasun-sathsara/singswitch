@@ -1309,11 +1309,6 @@ impl ProfileEditorPanel {
                     .label("Test latency")
                     .loading(busy)
                     .disabled(busy || !can_test)
-                    .tooltip(if can_test {
-                        "Fetch a 204 through this outbound without connecting"
-                    } else {
-                        "Fill in the server address and give the outbound a tag first"
-                    })
                     .on_click(cx.listener(|this, _, _, cx| this.test_latency(cx))),
             )
             .child(

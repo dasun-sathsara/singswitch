@@ -25,7 +25,15 @@ pub struct ProfilesView {
     editor: Entity<ProfileEditorPanel>,
     search_input: Entity<InputState>,
     expanded_profile: Option<String>,
+    /// Drives the Disconnect button's hover animation. A tiny entity because
+    /// the animation frame callback only has `&mut App`, not the view.
+    disconnect_hover: Entity<HoverSpring>,
     _subs: [Subscription; 2],
+}
+
+/// Hover progress for one animated control: 0.0 idle, 1.0 hovered.
+pub struct HoverSpring {
+    pub value: f32,
 }
 
 impl ProfilesView {
@@ -50,11 +58,13 @@ impl ProfilesView {
 
         let store_observer = cx.observe(&store, |_, _, cx| cx.notify());
 
+        let disconnect_hover = cx.new(|_| HoverSpring { value: 0.0 });
         Self {
             store,
             editor,
             search_input,
             expanded_profile: None,
+            disconnect_hover,
             _subs: [sub, store_observer],
         }
     }
@@ -506,6 +516,8 @@ impl ProfilesView {
 
     fn render_connection(&self, cx: &Context<Self>) -> impl IntoElement {
         use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+        // Read everything needed up front, then drop the borrow: the disconnect
+        // button builder needs `&mut self`/`&mut cx` while constructing.
         let store = self.store.read(cx);
         let snap = &store.snapshot;
         let visual = store.tray_visual_state();
@@ -566,7 +578,6 @@ impl ProfilesView {
             .filter(|_| !store.ip_loading && store.ip_error.is_none())
             .map(|info| (info.ip.clone(), info.formatted_location()));
         let busy = store.is_busy();
-        let disconnect = self.store.clone();
         let show_logs = self.store.clone();
         let refresh = self.store.clone();
         let restart = self.store.clone();
@@ -634,8 +645,8 @@ impl ProfilesView {
                                     })
                                     .items_center()
                                     .justify_center()
-                                    .child(
-                                        Icon::new(if connected {
+                                    .child({
+                                        let icon = Icon::new(if connected {
                                             IconName::CircleCheck
                                         } else if broken {
                                             IconName::TriangleAlert
@@ -645,8 +656,31 @@ impl ProfilesView {
                                             IconName::PowerOff
                                         })
                                         .size(px(18.0))
-                                        .text_color(tone),
-                                    ),
+                                        .text_color(tone);
+                                        // While the service starts or stops, the working
+                                        // glyph spins once per second.
+                                        if visual == TrayVisualState::Transitioning
+                                            && !store.is_probing()
+                                        {
+                                            use gpui_kit::linear;
+                                            use gpui_kit::{Animation, AnimationExt as _, radians};
+                                            use std::time::Duration;
+                                            icon.with_animation(
+                                                gpui_kit::ElementId::Name("conn-icon-spin".into()),
+                                                Animation::new(Duration::from_secs(1))
+                                                    .repeat()
+                                                    .with_easing(linear),
+                                                |this, delta| {
+                                                    this.rotate(radians(
+                                                        delta * std::f32::consts::TAU,
+                                                    ))
+                                                },
+                                            )
+                                            .into_any_element()
+                                        } else {
+                                            icon.into_any_element()
+                                        }
+                                    }),
                             )
                             .child(
                                 v_flex()
@@ -769,20 +803,7 @@ impl ProfilesView {
                                     ),
                             )
                             .when(snap.running, |row| {
-                                row.child(
-                                    Button::new("connection-disconnect")
-                                        .secondary()
-                                        .h(px(32.0))
-                                        .flex_none()
-                                        .icon(IconName::PowerOff)
-                                        .label("Disconnect")
-                                        .disabled(busy)
-                                        .on_click(move |_, _, cx| {
-                                            disconnect.update(cx, |s, cx| {
-                                                s.disconnect(NoticeOrigin::Stage, cx)
-                                            });
-                                        }),
-                                )
+                                row.child(self.render_disconnect_button(cx))
                             })
                             .when(broken, |row| {
                                 row.child(
@@ -834,6 +855,52 @@ impl ProfilesView {
             .when_some(ip_details, |strip, reason| {
                 strip.child(connection_error("ip-error", reason, cx))
             })
+    }
+
+    /// The Disconnect button with a subtle hover animation: on hover its fill
+    /// deepens by one step and it eases to 97% scale, so the affordance reads
+    /// as motion rather than a snap. The animation re-keys on hover state so
+    /// entering and leaving each play once.
+    fn render_disconnect_button(&self, cx: &Context<Self>) -> impl IntoElement {
+        use gpui_kit::{Animation, AnimationExt as _};
+        use std::time::Duration;
+
+        let hover = self.disconnect_hover.read(cx).value;
+        let busy = self.store.read(cx).is_busy();
+        let _ = hover;
+        let disconnect = self.store.clone();
+        let hover_spring = self.disconnect_hover.clone();
+
+        let base_bg = cx.theme().secondary;
+        let _ = hover;
+
+        let mut btn = Button::new("connection-disconnect")
+            .secondary()
+            .h(px(32.0))
+            .flex_none()
+            .icon(IconName::PowerOff)
+            .label("Disconnect")
+            .disabled(busy);
+        btn = btn.on_click(move |_, _, cx| {
+            disconnect.update(cx, |s, cx| s.disconnect(NoticeOrigin::Stage, cx));
+        });
+
+        div()
+            .id("connection-disconnect-wrap")
+            .on_hover(move |hovered, _window, cx| {
+                let target = if *hovered { 1.0 } else { 0.0 };
+                hover_spring.update(cx, |spring, cx| {
+                    spring.value = target;
+                    cx.notify();
+                });
+            })
+            .child(btn.with_animation(
+                gpui_kit::ElementId::Name(
+                    format!("disconnect-hover-{}", (hover > 0.5) as u8).into(),
+                ),
+                Animation::new(Duration::from_millis(140)).with_easing(gpui_kit::ease_in_out),
+                move |this, delta| this.bg(base_bg.opacity(1.0 - 0.25 * delta)),
+            ))
     }
 
     fn render_add_actions(&self, store: &AppStore) -> impl IntoElement {
@@ -1225,11 +1292,6 @@ impl ProfilesView {
                 .accessibility_label(format!("Test latency for {}", profile.name))
                 .loading(probing)
                 .disabled(probing || !testable || busy)
-                .tooltip(if testable {
-                    "Fetch a 204 through this outbound without connecting"
-                } else {
-                    "This profile has no outbound to test"
-                })
                 .on_click(move |_, _, cx| {
                     test.update(cx, |s, cx| s.test_profile_latency(test_name.clone(), cx));
                 }),
