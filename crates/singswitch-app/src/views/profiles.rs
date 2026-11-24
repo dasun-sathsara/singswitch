@@ -586,32 +586,29 @@ impl ProfilesView {
             // A 3px accent rule on the left edge carries the state colour. A
             // full border tinted green read as a glowing frame around the
             // whole card; a rule reads as a status marker and leaves the card
-            // itself neutral.
-            .child(
-                div()
-                    .id("connection-accent")
-                    .w(px(3.0))
-                    .flex_none()
-                    .self_start()
-                    .mt(px(2.0))
-                    .mb(px(2.0))
-                    .h(px(34.0))
-                    .rounded_full()
-                    .bg(if connected {
-                        cx.theme().success
-                    } else if broken {
-                        cx.theme().danger
-                    } else if visual == TrayVisualState::Transitioning {
-                        cx.theme().warning
-                    } else {
-                        cx.theme().muted_foreground.opacity(0.4)
-                    }),
-            )
+            // itself neutral. It sits beside the content in one row, not
+            // above it, so it spans the card's height as a vertical bar.
             .child(
                 h_flex()
                     .w_full()
-                    .items_center()
+                    .items_stretch()
                     .gap(px(12.0))
+                    .child(
+                        div()
+                            .id("connection-accent")
+                            .w(px(3.0))
+                            .flex_none()
+                            .rounded_full()
+                            .bg(if connected {
+                                cx.theme().success
+                            } else if broken {
+                                cx.theme().danger
+                            } else if visual == TrayVisualState::Transitioning {
+                                cx.theme().warning
+                            } else {
+                                cx.theme().muted_foreground.opacity(0.4)
+                            }),
+                    )
                     // LEFT: Status & Profile Identity
                     .child(
                         h_flex()
