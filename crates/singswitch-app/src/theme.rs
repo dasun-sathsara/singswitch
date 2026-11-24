@@ -236,11 +236,17 @@ pub fn surface(cx: &App) -> gpui_kit::Hsla {
     }
 }
 
+/// Fill for chips and pills that sit on the secondary surface.
+///
+/// The strip background is `secondary` itself, so a pill must be a step
+/// darker than it or it disappears: light `#F1F5F9` was 1.05:1 against
+/// `#F8FAFC`. This keeps the chip visible in both themes (light 1.24:1,
+/// dark 1.55:1 against the strip) while staying quiet.
 pub fn subtle_pill_bg(cx: &App) -> gpui_kit::Hsla {
     if cx.theme().is_dark() {
         rgb(0x1A1C24).into()
     } else {
-        rgb(0xF1F5F9).into()
+        rgb(0xE8EDF3).into()
     }
 }
 

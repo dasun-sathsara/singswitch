@@ -9,7 +9,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
 use gpui_kit::{
     AnyElement, App, AsyncApp, Context, Entity, IntoElement, ParentElement as _, Render,
     SharedString, Styled as _, Subscription, Task, WeakEntity, Window, div,
@@ -206,7 +206,10 @@ impl NodesStrip {
 
         match group.kind {
             GroupKind::Urltest => {
-                // Picked by the daemon's own probes, so there is nothing to click.
+                // Picked by the daemon's own probes, so there is nothing to
+                // click. Same chip family as the selector below: one surface,
+                // one border, one height — the kind is carried by the icon,
+                // not by a different fill that read as selected-vs-not.
                 h_flex()
                     .flex_none()
                     .items_center()
@@ -219,7 +222,7 @@ impl NodesStrip {
                     .border_color(cx.theme().border)
                     .text_size(px(12.0))
                     .text_color(cx.theme().muted_foreground)
-                    .child(Icon::new(IconName::Waypoints).small())
+                    .child(Icon::new(IconName::Gauge).small())
                     .child(div().max_w(px(180.0)).truncate().child(label))
                     .into_any_element()
             }
@@ -267,49 +270,48 @@ impl Render for NodesStrip {
             !self.groups.is_empty() && store.selected_tab == NavTab::Profiles && !store.editing;
         let running = store.snapshot.running;
 
-        // `v_flex()` alone still lays out as a block, pushing the stage down a
-        // few pixels on every profile screen even when no group exists. A
-        // hidden strip must occupy exactly nothing.
+        // A hidden strip must occupy exactly nothing, or it pushes the stage
+        // down a few pixels on every profile screen even when no group exists.
         if !visible {
             return div().h_0().w_full();
         }
 
-        v_flex().w_full().child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .gap(px(6.0))
-                .px(px(14.0))
-                .pb(px(6.0))
-                .child(
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap(px(6.0))
+            .px(px(14.0))
+            // Symmetric: a bottom-only padding sat the chips above the band's
+            // midline.
+            .py(px(8.0))
+            .child(
+                div()
+                    .flex_none()
+                    .pr(px(2.0))
+                    .text_size(px(11.0))
+                    .font_weight(fonts::EMPHASIS)
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Nodes"),
+            )
+            .children(
+                self.groups
+                    .iter()
+                    .map(|group| self.render_group(group, running, cx)),
+            )
+            .when_some(self.live_error.clone(), |row, reason| {
+                row.child(
                     div()
+                        .flex_1()
+                        .min_w(px(0.0))
                         .flex_none()
-                        .pr(px(2.0))
+                        .max_w(px(360.0))
+                        .truncate()
+                        .pl(px(6.0))
                         .text_size(px(11.0))
-                        .font_weight(fonts::EMPHASIS)
                         .text_color(cx.theme().muted_foreground)
-                        .child("Nodes"),
+                        .child(reason),
                 )
-                .children(
-                    self.groups
-                        .iter()
-                        .map(|group| self.render_group(group, running, cx)),
-                )
-                .when_some(self.live_error.clone(), |row, reason| {
-                    row.child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .flex_none()
-                            .max_w(px(360.0))
-                            .truncate()
-                            .pl(px(6.0))
-                            .text_size(px(11.0))
-                            .text_color(cx.theme().muted_foreground)
-                            .child(reason),
-                    )
-                }),
-        )
+            })
     }
 }
 
