@@ -124,6 +124,10 @@ pub struct AppStore {
     pub init_error: Option<String>,
     pub snapshot: Snapshot,
     pub settings: UiSettings,
+    /// Geometry last written to disk, so a close can tell a real change from the
+    /// live copy the bounds observer keeps current.
+    persisted_window_width: f32,
+    persisted_window_height: f32,
     pub window_open: bool,
     /// Whether a tray/menu-bar item exists to restore the window from.
     ///
@@ -268,6 +272,8 @@ impl AppStore {
             ctrl,
             init_error: init_error.clone(),
             snapshot,
+            persisted_window_width: settings.window_width,
+            persisted_window_height: settings.window_height,
             settings,
             window_open: false,
             tray_available: false,
@@ -496,15 +502,25 @@ impl AppStore {
     pub fn update_window_size(&mut self, width: f32, height: f32, persist: bool) {
         let w = width.max(MIN_WINDOW_WIDTH);
         let h = height.max(MIN_WINDOW_HEIGHT);
-        if (w - self.settings.window_width).abs() >= WINDOW_SIZE_EPSILON
-            || (h - self.settings.window_height).abs() >= WINDOW_SIZE_EPSILON
-        {
+        let moved = (w - self.settings.window_width).abs() >= WINDOW_SIZE_EPSILON
+            || (h - self.settings.window_height).abs() >= WINDOW_SIZE_EPSILON;
+        if moved {
             self.settings.window_width = w;
             self.settings.window_height = h;
-            if persist {
-                // Window geometry is not a user action; a failure here should
-                // not raise a notice mid-interaction.
-                let _ = self.settings.save();
+        }
+        // Compare against what was last written, not against the live value: the
+        // bounds observer mirrors every resize into `settings`, so a close that
+        // checks `moved` would find the size already equal and never write it.
+        let unwritten = (self.settings.window_width - self.persisted_window_width).abs()
+            >= WINDOW_SIZE_EPSILON
+            || (self.settings.window_height - self.persisted_window_height).abs()
+                >= WINDOW_SIZE_EPSILON;
+        if persist && unwritten {
+            // Window geometry is not a user action; a failure here should
+            // not raise a notice mid-interaction.
+            if self.settings.save().is_ok() {
+                self.persisted_window_width = self.settings.window_width;
+                self.persisted_window_height = self.settings.window_height;
             }
         }
     }
@@ -1246,6 +1262,12 @@ impl AppStore {
                 }
                 match res {
                     Ok(()) => {
+                        // Same race as `create_profile`: the snapshot taken here
+                        // may precede the import, and a poll that started earlier
+                        // lands later with a profile list that still lacks this
+                        // name, reselecting over it. Pin the selection until a
+                        // snapshot that knows about the name arrives.
+                        store.pinned_selection = Some((name.clone(), 1));
                         store.selected_profile = Some(name.clone());
                         store.selected_tab = NavTab::Profiles;
                         store.editing = false;
