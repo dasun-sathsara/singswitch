@@ -116,6 +116,15 @@ pub fn apply_preview_state(scene: &str, store: &Entity<AppStore>, cx: &mut App) 
                 s.editing = false;
                 setup_sample_logs(s);
             }
+            "nodes" => {
+                // The preview's active config declares a selector, a urltest
+                // and a `clash_api`; the daemon is not running under snap.py,
+                // so the declared groups render with no live overlay — exactly
+                // the state a config-only capture shows.
+                setup_populated_snapshot(s);
+                s.selected_tab = NavTab::Profiles;
+                s.editing = false;
+            }
             "settings" => {
                 setup_populated_snapshot(s);
                 s.selected_tab = NavTab::Settings;
@@ -133,6 +142,11 @@ fn setup_populated_snapshot(s: &mut AppStore) {
     let preview_dir = std::path::PathBuf::from("/tmp/singswitch_preview");
     let _ = std::fs::create_dir_all(&preview_dir);
     let p1_path = preview_dir.join("home-vless.json");
+    // Every populated scene points the active config here, so captures never
+    // depend on whatever /usr/local/etc/sing-box/config.json happens to be on
+    // the machine taking them. Without this, a box with selector groups in
+    // its real config rendered them into the connections scene.
+    s.preview_point_active_config(p1_path.clone());
     let p1_content = r#"{
   "log": { "level": "info", "timestamp": true },
   "dns": {
@@ -174,8 +188,21 @@ fn setup_populated_snapshot(s: &mut AppStore) {
         }
       }
     },
+    {
+      "type": "selector",
+      "tag": "region",
+      "outbounds": ["proxy", "direct"]
+    },
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": ["proxy"]
+    },
     { "type": "direct", "tag": "direct" }
   ],
+  "experimental": {
+    "clash_api": { "external_controller": "127.0.0.1:19955" }
+  },
   "route": {
     "auto_detect_interface": true,
     "final": "proxy",

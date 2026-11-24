@@ -18,7 +18,7 @@ use crate::error::{Result, SingSwitchError};
 
 /// Local daemon calls: long enough for a busy machine, short enough that the
 /// window never waits on a wedged API.
-pub const CLASH_API_TIMEOUT: Duration = Duration::from_secs(5);
+const CLASH_API_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A `/proxies` body is a few KiB. Cap it so a misconfigured controller that
 /// answers with something else cannot exhaust memory.
@@ -75,13 +75,6 @@ pub struct GroupInfo {
     pub members: Vec<String>,
     /// Live selection from the Clash API; `None` until one has been fetched.
     pub selected: Option<String>,
-}
-
-impl GroupInfo {
-    /// Whether the user is allowed to change the selection.
-    pub fn is_selectable(&self) -> bool {
-        self.kind == GroupKind::Selector
-    }
 }
 
 /// Where the Clash API lives, as declared by the active config.

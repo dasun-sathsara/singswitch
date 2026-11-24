@@ -51,7 +51,7 @@ Uninstall: `./scripts/uninstall-macos.sh` or `.\scripts\uninstall.ps1`.
 
 ## CLI
 
-Every GUI action has a CLI equivalent: `use`, `off`, `status`, `list`, `add`, `pull`, `sync`, `edit`, `rm`, `check`, `logs`, `ip`. All commands take `--json`; exit codes are fixed at 0–4 ([docs/cli-json.md](docs/cli-json.md)).
+`use`, `off`, `status`, `list`, `add`, `pull`, `sync`, `edit`, `rm`, `check`, `logs`, `ip` cover switching and lifecycle. Share-link import, latency tests, selector-group switching and scheduled auto-sync live in the app only. All commands take `--json`; exit codes are fixed at 0–4 ([docs/cli-json.md](docs/cli-json.md)).
 
 ## Security
 

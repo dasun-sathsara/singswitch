@@ -1,7 +1,8 @@
-use gpui_kit::{App, AsyncApp, Entity, Menu, MenuItem, Subscription};
+use gpui_kit::{App, AsyncApp, Context, Entity, Menu, MenuItem, Subscription};
 use gpui_tray::{Icon, Tray};
 use singswitch_core::checker::{DEFAULT_LATENCY_PROBE_URL, ExecChecker};
 use singswitch_core::form_model::ProfileFormModel;
+use std::time::Duration;
 
 use crate::actions::{
     DisconnectService, EditProfile, Noop, OpenLogsView, OpenMainWindow, QuitApp, SwitchProfile,
@@ -460,35 +461,43 @@ pub fn run_latency_test(store: Entity<AppStore>, name: String, cx: &mut App) {
             })
             .await;
 
-        store.update(cx, |store, cx| {
-            match result {
-                Ok(elapsed) => {
-                    let message =
-                        format!("{name}: {}", crate::views::editor::format_latency(elapsed));
-                    store.set_notice(
-                        NoticeOrigin::Toolbar,
-                        BannerTone::Success,
-                        message.clone(),
-                        cx,
-                    );
-                    if let Some(ctrl) = &store.ctrl {
-                        ctrl.notifier.notify(&format!("Latency {message}"));
-                    }
-                }
-                Err(message) => {
-                    store.set_notice(
-                        NoticeOrigin::Toolbar,
-                        BannerTone::Error,
-                        message.clone(),
-                        cx,
-                    );
-                    if let Some(ctrl) = &store.ctrl {
-                        ctrl.notifier.notify_error("Latency test failed", &message);
-                    }
-                }
-            };
-            cx.notify();
-        });
+        store.update(cx, |store, cx| report_latency(store, &name, result, cx));
     })
     .detach();
+}
+
+/// One notice for both callers (tray and editor) keeps the wording identical
+/// wherever the number came from.
+fn report_latency(
+    store: &mut AppStore,
+    name: &str,
+    result: Result<Duration, String>,
+    cx: &mut Context<AppStore>,
+) {
+    match result {
+        Ok(elapsed) => {
+            let message = format!("{name}: {}", crate::views::editor::format_latency(elapsed));
+            store.set_notice(
+                NoticeOrigin::Toolbar,
+                BannerTone::Success,
+                message.clone(),
+                cx,
+            );
+            if let Some(ctrl) = &store.ctrl {
+                ctrl.notifier.notify(&format!("Latency {message}"));
+            }
+        }
+        Err(message) => {
+            store.set_notice(
+                NoticeOrigin::Toolbar,
+                BannerTone::Error,
+                message.clone(),
+                cx,
+            );
+            if let Some(ctrl) = &store.ctrl {
+                ctrl.notifier.notify_error("Latency test failed", &message);
+            }
+        }
+    };
+    cx.notify();
 }

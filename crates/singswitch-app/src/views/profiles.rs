@@ -371,15 +371,11 @@ impl ProfilesView {
                 s.busy_phase = None;
                 match result {
                     Ok(_) => {
-                        s.selected_profile = Some(name.clone());
-                        s.selected_tab = crate::actions::NavTab::Profiles;
-                        s.editing = false;
-                        s.set_notice(
-                            NoticeOrigin::Stage,
-                            BannerTone::Success,
-                            format!("Imported {name}"),
-                            cx,
-                        );
+                        // Same race as `create_profile` and `pull_profile`: a
+                        // poll that started earlier can land with a profile
+                        // list that still lacks the new name and reselect the
+                        // previous profile over it. The store owns the pin.
+                        s.import_landed(name.clone(), cx);
                     }
                     Err(err) => {
                         // The store's shared error printer (error_text) is

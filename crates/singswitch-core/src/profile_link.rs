@@ -28,7 +28,7 @@ const MAX_LINK_CHARS: usize = 16 * 1024;
 const DEFAULT_PORT: u16 = 443;
 
 /// Build a minimal sing-box config from `link` and return its JSON bytes.
-pub fn profile_from_link(link: &str) -> Result<Vec<u8>> {
+fn profile_from_link(link: &str) -> Result<Vec<u8>> {
     let proxy = outbound_from_link(link)?;
     let config = config_with_proxy(proxy);
     let text = serde_json::to_string_pretty(&config).map_err(|err| {
@@ -668,6 +668,32 @@ fn shadowsocks_outbound_for(
     Ok(out)
 }
 
+/// vmess base64 holds JSON whose types vary by generator (port as a number
+/// or a string are both common). Coerce only the types that carry the same
+/// value (a number to its digits); reject the rest: `null` does not mean the
+/// string "null", and an array host connects nowhere while passing `check`.
+fn vmess_field_tree(tree: Value) -> Result<Value> {
+    if !matches!(tree, Value::Object(_) | Value::Null) {
+        return Err(share_link_error("the vmess link decodes to no JSON object")
+            .with_hint("a vmess link reads vmess://base64(json)"));
+    }
+    Ok(tree)
+}
+
+fn vmess_field(tree: &Value, key: &str) -> Result<String> {
+    match tree.get(key) {
+        Some(Value::String(text)) => Ok(text.clone()),
+        Some(Value::Number(number)) => Ok(number.to_string()),
+        Some(Value::Bool(true)) => Ok("true".to_string()),
+        Some(Value::Bool(false)) => Ok("false".to_string()),
+        Some(Value::Null) | None => Ok(String::new()),
+        Some(_) => Err(share_link_error(format!(
+            "the vmess link's {key:?} field is not a string or number"
+        ))
+        .with_hint("re-export the subscription from your provider")),
+    }
+}
+
 fn vmess_outbound(rest: &str) -> Result<Map<String, Value>> {
     let link = ShareLink::parse(rest);
     let decoded = decode_base64(link.authority.trim())
@@ -680,26 +706,9 @@ fn vmess_outbound(rest: &str) -> Result<Map<String, Value>> {
         .map_err(|err| share_link_error(format!("the vmess link decodes to no JSON: {err}")))?;
 
     // vmess base64 holds JSON whose types vary by generator (port as number
-    // or string is both common). Coerce only the types that carry the same
-    // value (a number to its digits), reject the rest: `null` does not mean
-    // the string "null", and an array host connects nowhere while passing
-    // `check`.
-    let field = |key: &str| -> Result<String> {
-        match tree.get(key) {
-            Some(Value::String(text)) => Ok(text.clone()),
-            Some(Value::Number(number)) => Ok(number.to_string()),
-            Some(Value::Bool(true)) => Ok("true".to_string()),
-            Some(Value::Bool(false)) => Ok("false".to_string()),
-            Some(Value::Null) | None => Ok(String::new()),
-            Some(other) => {
-                let _ = other;
-                Err(share_link_error(format!(
-                    "the vmess link's {key:?} field is not a string or number"
-                ))
-                .with_hint("re-export the subscription from your provider"))
-            }
-        }
-    };
+    // or string is both common), and the schema has no fixed home.
+    let tree = vmess_field_tree(tree)?;
+    let field = |key: &str| vmess_field(&tree, key);
 
     let server = field("add")?;
     if server.trim().is_empty() {
@@ -713,26 +722,42 @@ fn vmess_outbound(rest: &str) -> Result<Map<String, Value>> {
 
     let mut out = base_outbound("vmess", server.trim(), port);
     out.insert("uuid".to_string(), Value::String(uuid.trim().to_string()));
-    let cipher = field("scy")?;
+    out.insert("security".to_string(), json!(vmess_cipher(&field("scy")?)));
     out.insert(
-        "security".to_string(),
-        json!(if cipher.trim().is_empty() {
-            "auto"
-        } else {
-            cipher.trim()
-        }),
+        "alter_id".to_string(),
+        json!(field("aid")?.trim().parse::<u32>().unwrap_or(0)),
     );
-    let alter_id = field("aid")?.trim().parse::<u32>().unwrap_or(0);
-    out.insert("alter_id".to_string(), json!(alter_id));
+    apply_vmess_tls_and_transport(&mut out, server.trim(), &field)?;
+    Ok(out)
+}
 
+/// `scy` is optional in the wild; sing-box's `auto` keeps both AES and
+/// ChaCha20 working without the link naming one.
+fn vmess_cipher(cipher: &str) -> &str {
+    if cipher.trim().is_empty() {
+        "auto"
+    } else {
+        cipher.trim()
+    }
+}
+
+/// vmess exports no certificate waiver in the wild, and no reality: the
+/// v2rayN base64 schema carries neither. The sni falls back to the transport
+/// host because generators put the certificate name there.
+fn apply_vmess_tls_and_transport(
+    out: &mut Map<String, Value>,
+    server: &str,
+    field: &impl Fn(&str) -> Result<String>,
+) -> Result<()> {
     let host = first_host(&field("host")?);
     let sni = field("sni")?;
+    let sni = if sni.trim().is_empty() { &host } else { &sni };
     apply_tls(
-        &mut out,
+        out,
         TlsOptions {
             security: Security::parse(&field("tls")?, Security::None)?,
-            server: server.trim(),
-            sni: if sni.trim().is_empty() { &host } else { &sni },
+            server,
+            sni,
             fingerprint: &field("fp")?,
             public_key: "",
             short_id: "",
@@ -746,15 +771,14 @@ fn vmess_outbound(rest: &str) -> Result<Map<String, Value>> {
         _ => path.clone(),
     };
     apply_transport(
-        &mut out,
+        out,
         TransportOptions {
             kind: &field("net")?,
             host: &host,
             path: &path,
             service: &service,
         },
-    )?;
-    Ok(out)
+    )
 }
 
 /// The first entry of a VMess `host` field, which may be a comma-separated list.

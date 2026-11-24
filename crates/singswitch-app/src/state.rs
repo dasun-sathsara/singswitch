@@ -476,6 +476,14 @@ impl AppStore {
         }
     }
 
+    /// Preview mode only: the nodes scene renders the strip against a config
+    /// under /tmp, but nothing outside preview ever constructs a store without
+    /// a controller, so the override lives in the same place the preview state
+    /// is seeded instead of reaching real layout code.
+    pub fn preview_point_active_config(&mut self, path: std::path::PathBuf) {
+        self.fallback_layout.active_config_path = path;
+    }
+
     /// Error and warning counts for the navigation badge.
     ///
     /// Read on every shell render; it used to rescan up to 5000 records each
@@ -1223,6 +1231,26 @@ impl AppStore {
             });
         })
         .detach();
+    }
+
+    /// Record that a share-link import created `name` on disk.
+    ///
+    /// Mirrors the post-landing half of `pull_profile`: the pin holds the
+    /// selection against a poll that started earlier and lacks the name, and
+    /// the validation generation drops the previous profile's pending reply.
+    pub fn import_landed(&mut self, name: String, cx: &mut Context<Self>) {
+        self.pinned_selection = Some((name.clone(), 1));
+        self.selected_profile = Some(name.clone());
+        self.selected_tab = NavTab::Profiles;
+        self.editing = false;
+        self.validation_generation = self.validation_generation.wrapping_add(1);
+        self.editor_validation = None;
+        self.set_notice(
+            NoticeOrigin::Stage,
+            BannerTone::Success,
+            format!("Imported {name}"),
+            cx,
+        );
     }
 
     pub fn create_profile(&mut self, name: &str, cx: &mut Context<Self>) -> CoreResult<()> {

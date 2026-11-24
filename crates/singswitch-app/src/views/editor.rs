@@ -1,7 +1,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{Editor, EditorState, InputState};
+use gpui_kit::component::input::{Editor, EditorState, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
@@ -140,6 +140,22 @@ pub struct ProfileEditorPanel {
 impl ProfileEditorPanel {
     pub fn new(store: Entity<AppStore>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let json_editor = cx.new(|cx| EditorState::new(window, cx).language("json"));
+        // The doc revision is the timestamp the latency readout compares
+        // against (`latency_readout`); it must move on every keystroke in the
+        // JSON buffer, or a measurement taken against old text repaints as
+        // current after the buffer stops parsing. Loading a profile bumps it
+        // separately in `sync_with_store`.
+        cx.subscribe_in(&json_editor, window, {
+            |this, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.doc_revision = this.doc_revision.wrapping_add(1);
+                    this.latency_generation = this.latency_generation.wrapping_add(1);
+                    this.latency = None;
+                    cx.notify();
+                }
+            }
+        })
+        .detach();
         let port_ph = DEFAULT_SERVER_PORT.to_string();
         let mtu_ph = DEFAULT_TUN_MTU.to_string();
 
