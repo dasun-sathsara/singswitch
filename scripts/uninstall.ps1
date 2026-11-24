@@ -11,13 +11,21 @@ $SingBoxData = "$env:ProgramData\sing-box"
 $SingSwitchState = "$env:ProgramData\singswitch"
 
 Write-Host "==> Stopping and removing singswitch-agent and sing-box services..."
-if (Get-Service -Name "singswitch-agent" -ErrorAction SilentlyContinue) {
-    Stop-Service -Name "singswitch-agent" -Force -ErrorAction SilentlyContinue
-    sc.exe delete "singswitch-agent" | Out-Null
-}
-if (Get-Service -Name "sing-box" -ErrorAction SilentlyContinue) {
-    Stop-Service -Name "sing-box" -Force -ErrorAction SilentlyContinue
-    sc.exe delete "sing-box" | Out-Null
+# `sc delete` only marks a service for deletion; it disappears when the last
+# handle closes. Removing the install directory underneath a still-terminating
+# service is how an uninstall leaves a locked, half-deleted tree behind.
+foreach ($svc in @("singswitch-agent", "sing-box")) {
+    $found = Get-Service -Name $svc -ErrorAction SilentlyContinue
+    if (-not $found) { continue }
+    if ($found.Status -ne 'Stopped') {
+        Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+        $found.WaitForStatus('Stopped', '00:00:30')
+    }
+    sc.exe delete $svc | Out-Null
+    for ($i = 0; $i -lt 60; $i++) {
+        if (-not (Get-Service -Name $svc -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 500
+    }
 }
 
 Write-Host "==> Removing Start Menu shortcut, HKCU Run entry, and binaries..."

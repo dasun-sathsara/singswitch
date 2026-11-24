@@ -27,6 +27,12 @@ fi
 
 CLANG_BIN="${CLANG_BIN:-$(command -v clang)}"
 AR_BIN="${AR_BIN:-$(command -v llvm-ar || command -v llvm-ar-18)}"
+# An empty path here is exported as CC_aarch64_apple_darwin and then fails much
+# later inside a build script, where the cause is not obvious.
+if [[ -z "$CLANG_BIN" || -z "$AR_BIN" ]]; then
+    echo "error: need clang and llvm-ar (or llvm-ar-18) on PATH for the macOS cross build" >&2
+    exit 1
+fi
 
 export CC_aarch64_apple_darwin="$CLANG_BIN"
 export CXX_aarch64_apple_darwin="${CLANG_BIN}++"

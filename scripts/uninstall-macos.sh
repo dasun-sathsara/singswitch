@@ -24,14 +24,26 @@ sudo rm -f /etc/newsyslog.d/singswitch.conf
 
 # Enable-at-login writes a per-user LaunchAgent. Under sudo, HOME is root's, so
 # resolve the console user's home instead of trusting $HOME.
-TARGET_USER="${SUDO_USER:-$USER}"
-TARGET_HOME="$(eval echo ~"${TARGET_USER}")"
-AGENT_PLIST="${TARGET_HOME}/Library/LaunchAgents/app.lexiflix.singswitch.plist"
-if [[ -f "$AGENT_PLIST" ]]; then
+#
+# Ask the directory service rather than `eval echo ~user`: eval executes
+# whatever the variable holds, and this path decides which file gets deleted.
+TARGET_USER="${SUDO_USER:-$(id -un)}"
+TARGET_HOME="$(dscl . -read "/Users/${TARGET_USER}" NFSHomeDirectory 2>/dev/null \
+    | sed -n 's/^NFSHomeDirectory: //p')" || TARGET_HOME=""
+if [[ -n "$TARGET_HOME" && ! -d "$TARGET_HOME" ]]; then
+    TARGET_HOME=""
+fi
+if [[ -z "$TARGET_HOME" ]]; then
+    echo "warning: could not resolve a home directory for ${TARGET_USER}; leaving any LaunchAgent in place" >&2
+fi
+AGENT_PLIST="${TARGET_HOME:+${TARGET_HOME}/Library/LaunchAgents/app.lexiflix.singswitch.plist}"
+if [[ -n "$AGENT_PLIST" && -f "$AGENT_PLIST" ]]; then
     # bootout has to run in the user's GUI domain, which needs the user's uid,
     # not the uid of the root shell running this script.
-    TARGET_UID="$(id -u "$TARGET_USER")"
-    launchctl bootout "gui/${TARGET_UID}/app.lexiflix.singswitch" 2>/dev/null || true
+    TARGET_UID="$(id -u "$TARGET_USER" 2>/dev/null || true)"
+    if [[ -n "$TARGET_UID" ]]; then
+        launchctl bootout "gui/${TARGET_UID}/app.lexiflix.singswitch" 2>/dev/null || true
+    fi
     rm -f "$AGENT_PLIST"
 fi
 
