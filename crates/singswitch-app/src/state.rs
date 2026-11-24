@@ -164,6 +164,17 @@ pub struct AppStore {
     /// dropped so "Configuration valid" can never describe text it never saw.
     validation_generation: u64,
     pub busy_phase: Option<String>,
+    /// An automatic sync is running.
+    ///
+    /// Separate from `busy_phase` so the UI does not report the app as busy on
+    /// a schedule nobody asked for, while still keeping the next tick from
+    /// starting a second sync on top of the first.
+    auto_sync_in_flight: bool,
+    /// When this process last ran an automatic sync, on the monotonic clock.
+    ///
+    /// Mirrors `settings.last_auto_sync_at`, which is wall-clock; the ticker
+    /// compares against this one and the stored value only seeds it at launch.
+    last_auto_sync: Option<Instant>,
     /// Feedback scoped to the control or screen that produced it. The Toolbar
     /// origin is the one strip that spans the window.
     pub notice: Option<Notice>,
@@ -300,6 +311,8 @@ impl AppStore {
             ip_refresh_pending: false,
             validation_generation: 0,
             busy_phase: None,
+            auto_sync_in_flight: false,
+            last_auto_sync: None,
             notice: init_error.map(|m| Notice {
                 origin: NoticeOrigin::Toolbar,
                 tone: BannerTone::Warning,
@@ -1294,6 +1307,130 @@ impl AppStore {
         .detach();
     }
 
+    /// Decide whether a sync is due, and record the attempt when it is.
+    ///
+    /// Returns whether a sync should start now; on `true` it also records the
+    /// attempt, so a sync that fails still waits a full interval before the
+    /// next one rather than retrying every second.
+    fn auto_sync_due(&mut self, now: Instant) -> bool {
+        let minutes = self.settings.auto_sync_interval_minutes;
+        if minutes == 0 {
+            return false;
+        }
+        // A hidden window still syncs: the whole point is to keep profiles
+        // current while the app sits in the tray. A busy store does not: the
+        // restart that a changed profile triggers would fight whatever the
+        // user is already running.
+        if self.busy_phase.is_some() || self.auto_sync_in_flight || self.ctrl.is_none() {
+            return false;
+        }
+        let interval = Duration::from_secs(u64::from(minutes) * 60);
+        // The clock the interval is measured against is persisted, so a
+        // relaunch inside the window does not sync again.
+        let due = self
+            .last_auto_sync(now)
+            .is_none_or(|last| now.saturating_duration_since(last) >= interval);
+        if due {
+            self.last_auto_sync = Some(now);
+        }
+        due
+    }
+
+    /// When auto-sync last ran, as an `Instant` on this process's clock.
+    ///
+    /// `None` means it has never run, which is due immediately. The persisted
+    /// value is wall-clock (unix seconds) because it outlives the process;
+    /// `Instant` is what the ticker compares against. A stored time in the
+    /// future (clock moved back, or the file edited) counts as "just ran"
+    /// rather than as "overdue forever".
+    fn last_auto_sync(&self, now: Instant) -> Option<Instant> {
+        if let Some(local) = self.last_auto_sync {
+            return Some(local);
+        }
+        let elapsed_since_stamp = self
+            .settings
+            .last_auto_sync_at
+            .and_then(|secs| unix_now().and_then(|now| now.checked_sub(secs)))
+            .map(Duration::from_secs)
+            .unwrap_or(Duration::ZERO);
+        Some(now.checked_sub(elapsed_since_stamp).unwrap_or(now))
+    }
+
+    /// Run one automatic sync when its interval has come around.
+    ///
+    /// Called from the shared ticker loop; it does the same work the toolbar's
+    /// "Sync remote profiles" button does, on the same background task shape,
+    /// so an automatic sync and a manual one cannot behave differently.
+    pub fn maybe_auto_sync(&mut self, cx: &mut Context<Self>) {
+        if !self.auto_sync_due(Instant::now()) {
+            return;
+        }
+        self.settings.last_auto_sync_at = unix_now();
+        // The notice and the timer are separate failures: a settings file that
+        // cannot be written must not stop the sync, and the sync reports itself.
+        self.persist_settings(cx);
+        self.run_auto_sync(cx);
+    }
+
+    /// The background half of an automatic sync, identical in shape to `sync_all`.
+    fn run_auto_sync(&mut self, cx: &mut Context<Self>) {
+        let Some(ctrl) = self.ctrl.clone() else {
+            return;
+        };
+        // No busy spinner: nobody asked for this, and a control that goes dead
+        // on its own schedule reads as a hang. The busy guard in
+        // `auto_sync_due` already keeps it from stacking.
+        self.auto_sync_in_flight = true;
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let (res, snap) = cx
+                .background_executor()
+                .spawn(async move {
+                    let res = ctrl.gui_sync_all();
+                    let snap = ctrl.snapshot().ok();
+                    (res, snap)
+                })
+                .await;
+
+            let _ = this.update(cx, |store, cx| {
+                store.auto_sync_in_flight = false;
+                if let Some(s) = snap {
+                    store.apply_snapshot(s, true);
+                }
+                store.notice = Some(match res {
+                    Ok(report) if !report.failed.is_empty() => Notice {
+                        origin: NoticeOrigin::Toolbar,
+                        tone: BannerTone::Warning,
+                        message: format!(
+                            "Automatic sync failed for {}",
+                            count_noun(report.failed.len(), "profile", "profiles")
+                        ),
+                    },
+                    Ok(report) if report.synced.is_empty() => Notice {
+                        origin: NoticeOrigin::Toolbar,
+                        tone: BannerTone::Info,
+                        message: "No remote profiles to sync".to_string(),
+                    },
+                    Ok(report) => Notice {
+                        origin: NoticeOrigin::Toolbar,
+                        tone: BannerTone::Success,
+                        message: format!(
+                            "Profiles synced automatically ({})",
+                            count_noun(report.synced.len(), "profile", "profiles")
+                        ),
+                    },
+                    Err(err) => Notice {
+                        origin: NoticeOrigin::Toolbar,
+                        tone: BannerTone::Error,
+                        message: error_text(&err),
+                    },
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub fn sync_profile(&mut self, name: String, origin: NoticeOrigin, cx: &mut Context<Self>) {
         if self.busy_phase.is_some() {
             return;
@@ -2022,6 +2159,10 @@ impl AppStore {
                             last_poll = Instant::now();
                             store.refresh_snapshot(false, cx);
                         }
+                        // Rides this tick on purpose. A second timer would be
+                        // another wake-up a second and another thing to cancel
+                        // when the store goes away.
+                        store.maybe_auto_sync(cx);
                     })
                     .is_ok();
                 if !keep_going {
@@ -2156,4 +2297,15 @@ fn push_bounded_logs(buf: &mut Vec<LogRecord>, lines: Vec<String>) {
 
 pub(crate) fn count_noun(n: usize, singular: &str, plural: &str) -> String {
     format!("{n} {}", if n == 1 { singular } else { plural })
+}
+
+/// Wall-clock seconds since the epoch, for the persisted auto-sync stamp.
+///
+/// `None` on a clock before 1970, which no real machine has; the caller then
+/// simply treats the interval as already elapsed.
+fn unix_now() -> Option<u64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs())
 }

@@ -12,6 +12,15 @@ pub const DEFAULT_WINDOW_WIDTH: f32 = 820.0;
 pub const DEFAULT_WINDOW_HEIGHT: f32 = 480.0;
 pub const WINDOW_SIZE_EPSILON: f32 = 2.0;
 
+/// Shortest interval that still counts as "on", in minutes.
+///
+/// Every auto-sync re-downloads each remote profile, and a changed active
+/// profile restarts the daemon, so a one-minute interval would keep dropping
+/// the tunnel. Five minutes is the shortest that cannot do that constantly.
+pub const MIN_AUTO_SYNC_INTERVAL_MINUTES: u32 = 5;
+/// Longest interval, in minutes: once a day.
+pub const MAX_AUTO_SYNC_INTERVAL_MINUTES: u32 = 24 * 60;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemePreference {
@@ -43,6 +52,13 @@ pub struct UiSettings {
     pub desktop_notifications: bool,
     pub window_width: f32,
     pub window_height: f32,
+    /// Minutes between automatic remote-profile syncs. `0` means off.
+    pub auto_sync_interval_minutes: u32,
+    /// Unix seconds of the last automatic sync.
+    ///
+    /// Persisted so a relaunch cannot re-run a sync that just happened: the
+    /// interval has to hold across restarts, not only across ticks.
+    pub last_auto_sync_at: Option<u64>,
 }
 
 impl Default for UiSettings {
@@ -54,6 +70,8 @@ impl Default for UiSettings {
             desktop_notifications: true,
             window_width: DEFAULT_WINDOW_WIDTH,
             window_height: DEFAULT_WINDOW_HEIGHT,
+            auto_sync_interval_minutes: 0,
+            last_auto_sync_at: None,
         }
     }
 }
@@ -68,8 +86,27 @@ impl UiSettings {
             return Self::default();
         };
         match fs::read_to_string(&path) {
-            Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
+            Ok(raw) => {
+                let mut settings: Self = serde_json::from_str(&raw).unwrap_or_default();
+                settings.clamp_auto_sync_interval();
+                settings
+            }
             Err(_) => Self::default(),
+        }
+    }
+
+    /// Hold the interval to the range the rest of the app assumes.
+    ///
+    /// The file is hand-editable, so a persisted `1` (constant syncing) or a
+    /// huge value (never syncing again) has to be corrected on the way in
+    /// rather than trusted.
+    fn clamp_auto_sync_interval(&mut self) {
+        let minutes = self.auto_sync_interval_minutes;
+        if minutes != 0 {
+            self.auto_sync_interval_minutes = minutes.clamp(
+                MIN_AUTO_SYNC_INTERVAL_MINUTES,
+                MAX_AUTO_SYNC_INTERVAL_MINUTES,
+            );
         }
     }
 
