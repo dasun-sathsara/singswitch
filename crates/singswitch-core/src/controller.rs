@@ -91,6 +91,27 @@ pub struct SyncReport {
     pub failed: Vec<(String, String)>,
 }
 
+/// Whether a remote refresh actually altered what is on disk.
+///
+/// The caller needs this to decide whether to touch the running service at all:
+/// reloading identical bytes restarts the daemon and drops the tunnel for no
+/// reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshOutcome {
+    /// The file was created, or its contents changed.
+    Changed,
+    /// The fetched body already matched the file; nothing was written.
+    Unchanged,
+}
+
+/// Whether a freshly fetched body differs from the bytes already on disk.
+///
+/// A missing file always counts as a change, even for an empty body: it still
+/// has to be created.
+fn body_differs(existing: Option<&[u8]>, fetched: &[u8]) -> bool {
+    existing.is_none_or(|current| current != fetched)
+}
+
 /// Optional trace callback for `--verbose` diagnostics.
 pub type DebugHook = Arc<dyn Fn(&str) + Send + Sync>;
 
@@ -769,7 +790,11 @@ impl Controller {
                 )
             })?;
 
-        self.refresh_profile_locked(name, &url)?;
+        if self.refresh_profile_locked(name, &url)? == RefreshOutcome::Unchanged {
+            // Nothing on disk moved, so re-pointing or restarting the service
+            // would only interrupt the tunnel to load bytes it already has.
+            return Ok(false);
+        }
         let (is_active, running) = self.is_active_and_running(name);
         if !is_active {
             return Ok(false);
@@ -836,8 +861,10 @@ impl Controller {
                     .push((name.clone(), "missing source URL".to_string()));
                 continue;
             };
+            // The outcome only matters for the active profile below; an
+            // inactive one is never activated, so both outcomes are a success.
             match self.refresh_profile_locked(name, &url) {
-                Ok(()) => report.synced.push(name.clone()),
+                Ok(_) => report.synced.push(name.clone()),
                 Err(err) => report.failed.push((name.clone(), err.to_string())),
             }
         }
@@ -860,7 +887,8 @@ impl Controller {
             if let Some(url) = source {
                 match self.refresh_profile_locked(&active_name, &url) {
                     Err(err) => report.failed.push((active_name, err.to_string())),
-                    Ok(()) => {
+                    Ok(RefreshOutcome::Unchanged) => report.synced.push(active_name),
+                    Ok(RefreshOutcome::Changed) => {
                         let running = self
                             .manager
                             .probe()
@@ -892,7 +920,7 @@ impl Controller {
         Ok(report)
     }
 
-    fn refresh_profile_locked(&self, name: &str, url: &str) -> Result<()> {
+    fn refresh_profile_locked(&self, name: &str, url: &str) -> Result<RefreshOutcome> {
         let path = path_for(&self.layout.profiles_dir, name);
         if !path.exists() {
             return Err(SingSwitchError::general(format!(
@@ -902,7 +930,23 @@ impl Controller {
         }
         let body = fetch_remote_profile(url)?;
         validate_remote_body(self.checker.as_ref(), &body)?;
-        write_file_atomic(&path, &body, 0o644)
+
+        // Compare before writing, not after: `write_file_atomic` replaces the
+        // inode, so an unchanged body would still bump the mtime, wake the
+        // profiles watcher, and leave the caller unable to tell a real change
+        // from a no-op.
+        let existing = match fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            // Vanished between the exists() check and here: recreate it.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(store_error(err, &self.layout.profiles_dir, "read")),
+        };
+        if !body_differs(existing.as_deref(), &body) {
+            return Ok(RefreshOutcome::Unchanged);
+        }
+
+        write_file_atomic(&path, &body, 0o644)?;
+        Ok(RefreshOutcome::Changed)
     }
 
     /// Delete a profile, refusing if active & running unless `force` is true (which stops
@@ -1327,4 +1371,36 @@ fn find_singswitch_cli_exe() -> Option<PathBuf> {
         "",
     );
     (!fallback.as_os_str().is_empty() && fallback.is_file()).then_some(fallback)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Profile bytes come from a remote server, so the comparison has to be
+    /// exact: a "close enough" match would skip rewriting a profile whose
+    /// server or key changed, and the tunnel would keep using the stale one.
+    #[test]
+    fn identical_body_is_unchanged() {
+        assert!(!body_differs(Some(b"{\"a\":1}\n"), b"{\"a\":1}\n"));
+    }
+
+    #[test]
+    fn any_byte_difference_is_changed() {
+        assert!(body_differs(Some(b"{\"a\":1}\n"), b"{\"a\":2}\n"));
+        // Trailing newline only: still a different file on disk.
+        assert!(body_differs(Some(b"{\"a\":1}"), b"{\"a\":1}\n"));
+        // Reordered keys are a different body even when they mean the same thing.
+        assert!(body_differs(
+            Some(b"{\"a\":1,\"b\":2}"),
+            b"{\"b\":2,\"a\":1}"
+        ));
+    }
+
+    #[test]
+    fn missing_file_is_changed() {
+        // Created, not refreshed: it has to be written.
+        assert!(body_differs(None, b"{}"));
+        assert!(body_differs(None, b""));
+    }
 }
