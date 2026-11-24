@@ -15,18 +15,18 @@
 
 When sing-box runs through a TUN interface, switching to a broken profile kills your network along with the daemon. SingSwitch guards the switch: it validates the config first, activates it atomically, and rolls back to your previous profile if the daemon fails within the health window.
 
-That's it. Everything else — the editor, logs, IP display, CLI — is a convenience layered on that one switch.
+That's it. The editor, logs, IP display, and CLI are conveniences layered on that one switch.
 
 ## Screenshots
 
 <table>
   <tr>
     <td><img src="docs/screenshots/01_connections_dark.png" width="410" alt="Connections" /></td>
-    <td><img src="docs/screenshots/04_editor_json_dark.png" width="410" alt="Editor" /></td>
+    <td><img src="docs/screenshots/04_editor_json_light.png" width="410" alt="Editor" /></td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/05_logs_dark.png" width="410" alt="Logs" /></td>
-    <td><img src="docs/screenshots/06_settings_dark.png" width="410" alt="Settings" /></td>
+    <td><img src="docs/screenshots/06_settings_light.png" width="410" alt="Settings" /></td>
   </tr>
 </table>
 
@@ -55,7 +55,7 @@ Every GUI action has a CLI equivalent: `use`, `off`, `status`, `list`, `add`, `p
 
 ## Security
 
-Profile activation is an unprivileged atomic symlink swap — no root daemon, no persistent privileges. Service restarts go through four `NOPASSWD` sudo rules on macOS and a named pipe on Windows. Details in [SECURITY.md](SECURITY.md).
+Profile activation is an unprivileged atomic symlink swap, so there is no root daemon and no persistent privileges. Service restarts go through four `NOPASSWD` sudo rules on macOS and a named pipe on Windows. Details in [SECURITY.md](SECURITY.md).
 
 ## License
 
