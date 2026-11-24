@@ -51,3 +51,14 @@ pub struct EditProfile {
 pub struct SelectTab {
     pub tab: NavTab,
 }
+
+/// Point a Clash-style `selector` group at another member.
+///
+/// Runtime-only: the switch goes to the profile's own experimental Clash API, so
+/// nothing about the stored profile changes.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = singswitch_app, no_json)]
+pub struct SwitchGroup {
+    pub group: String,
+    pub member: String,
+}
