@@ -1111,6 +1111,22 @@ fn format_duration(secs: u64) -> String {
 
 impl Render for ProfilesView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Deleting the expanded profile leaves only its name behind. Creating a
+        // profile with that name later would then open its details on arrival.
+        // Only pays a store read while a row is actually expanded.
+        let expansion_gone = self.expanded_profile.as_deref().is_some_and(|name| {
+            !self
+                .store
+                .read(cx)
+                .snapshot
+                .profiles
+                .iter()
+                .any(|p| p.name == name)
+        });
+        if expansion_gone {
+            self.expanded_profile = None;
+        }
+
         let s = self.store.read(cx);
         if s.editing {
             v_flex()
