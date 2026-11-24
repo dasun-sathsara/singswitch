@@ -44,8 +44,10 @@ mkdir -p "$CACHE_DIR" "$OUT_DIR"
 
 if [[ ! -f "$CACHED" ]]; then
     echo "==> Downloading ${ARCHIVE}..."
-    curl -fsSL --retry 3 -o "${CACHED}.part" "$URL"
-    mv "${CACHED}.part" "$CACHED"
+    # --proto/--tlsv1.2: a redirect must not be able to downgrade the pinned
+    # release to plaintext on the way here.
+    curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "${CACHED}.part" "$URL"
+    mv -f "${CACHED}.part" "$CACHED"
 fi
 
 if command -v sha256sum >/dev/null 2>&1; then
@@ -82,6 +84,12 @@ else
 fi
 cp "$SRC_DIR/LICENSE" "$OUT_DIR/sing-box/"
 
-chmod 755 "$OUT_DIR/sing-box/"sing-box* 2>/dev/null || true
+# Name the staged files instead of globbing "sing-box*", which also matches
+# anything else the archive happened to drop in that directory.
+if [[ "$PLATFORM" == "windows-amd64" ]]; then
+    chmod 755 "$OUT_DIR/sing-box/sing-box.exe"
+else
+    chmod 755 "$OUT_DIR/sing-box/sing-box"
+fi
 
 echo "==> Staged sing-box ${SINGBOX_VERSION} for ${PLATFORM} in ${OUT_DIR}/sing-box"

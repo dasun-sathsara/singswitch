@@ -11,6 +11,22 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Both service registrations below are re-entrant for the same reason: install
+# over a live install must work, and Windows refuses to create a service whose
+# name is still registered, or to delete one while a process holds it.
+function Remove-SingSwitchService {
+    param([string]$Name)
+    if (-not (Get-Service -Name $Name -ErrorAction SilentlyContinue)) { return }
+    # `sc delete` only marks the service; it disappears when the last handle
+    # closes, so wait for the name to be free instead of racing the `create`.
+    sc.exe delete $Name | Out-Null
+    for ($i = 0; $i -lt 60; $i++) {
+        if (-not (Get-Service -Name $Name -ErrorAction SilentlyContinue)) { return }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "Service $Name is still registered after deletion; reboot or stop the process holding it."
+}
+
 $InstallDir = "$env:ProgramFiles\singswitch"
 $SingBoxData = "$env:ProgramData\sing-box"
 $ProfilesDir = "$SingBoxData\profiles"
@@ -26,6 +42,19 @@ if (-not (Test-Path $singswitchSrc)) { throw "Missing $singswitchSrc. Build with
 if (-not (Test-Path $appSrc))   { throw "Missing $appSrc. Build with: cargo build --release --workspace --target x86_64-pc-windows-msvc" }
 
 Write-Host "==> Copying binaries to $InstallDir..."
+# Windows keeps a running image locked, so overwriting the helper binary while
+# its service is up fails. Re-running the installer over an existing install is
+# the documented repair step, so stop the services before the copies, not after.
+$AgentService = "singswitch-agent"
+foreach ($svc in @($AgentService, "sing-box")) {
+    $found = Get-Service -Name $svc -ErrorAction SilentlyContinue
+    if ($found -and $found.Status -ne 'Stopped') {
+        Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+        # Stop-Service returns once the stop is requested; the image stays
+        # locked until the process is actually gone.
+        $found.WaitForStatus('Stopped', '00:00:30')
+    }
+}
 Copy-Item $singswitchSrc "$InstallDir\singswitch.exe" -Force
 Copy-Item $appSrc   "$InstallDir\singswitch-app.exe" -Force
 
@@ -44,18 +73,19 @@ if (Test-Path $BundledSingBox) {
 }
 
 # Harden ProgramData ACLs so unprivileged users can read logs/profiles while service updates remain protected.
-icacls $SingSwitchState  /inheritance:r /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F" /grant "Users:(OI)(CI)R" | Out-Null
+icacls $SingSwitchState /inheritance:r /grant "*S-1-5-18:(OI)(CI)F" /grant "*S-1-5-32-544:(OI)(CI)F" /grant "*S-1-5-32-545:(OI)(CI)R" | Out-Null
 # The tray app runs unprivileged and still has to exec the managed sing-box for
 # `check` and `version`, so the binary directory needs execute rights for Users.
-icacls $ManagedBinDir /grant "Users:(OI)(CI)RX" | Out-Null
-icacls $SingBoxData /inheritance:r /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F" /grant "Users:(OI)(CI)RX" | Out-Null
-icacls $ProfilesDir /grant "Users:(OI)(CI)M" | Out-Null
-icacls $LogsDir     /grant "Users:(OI)(CI)R" | Out-Null
+icacls $ManagedBinDir /grant "*S-1-5-32-545:(OI)(CI)RX" | Out-Null
+icacls $SingBoxData /inheritance:r /grant "*S-1-5-18:(OI)(CI)F" /grant "*S-1-5-32-544:(OI)(CI)F" /grant "*S-1-5-32-545:(OI)(CI)RX" | Out-Null
+icacls $ProfilesDir /grant "*S-1-5-32-545:(OI)(CI)M" | Out-Null
+icacls $LogsDir     /grant "*S-1-5-32-545:(OI)(CI)R" | Out-Null
 
 # Add install directory to machine PATH if absent.
 $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-if ($machinePath -notlike "*$InstallDir*") {
-    [Environment]::SetEnvironmentVariable("Path", "$machinePath;$InstallDir", "Machine")
+$pathParts = @($machinePath -split ';' | Where-Object { $_ })
+if ($pathParts -notcontains $InstallDir) {
+    [Environment]::SetEnvironmentVariable("Path", (@($pathParts) + $InstallDir) -join ';', "Machine")
 }
 
 # Register WinSW sing-box service when WinSW and sing-box binaries are present.
@@ -64,6 +94,10 @@ if ($SkipService) {
 } elseif ((Test-Path $WinSwExe) -and (Test-Path $SingBoxExe)) {
     $ServiceDir = Split-Path -Parent $WinSwExe
     $WinSwXml = Join-Path $ServiceDir "sing-box.xml"
+    # WinSW `install` fails outright when the service already exists, and the
+    # XML is only read at install time, so re-running the installer needs the
+    # old registration gone before the rewritten config can take effect.
+    Remove-SingSwitchService "sing-box"
     $EscSingBoxExe = [System.Security.SecurityElement]::Escape($SingBoxExe)
     $EscArguments = [System.Security.SecurityElement]::Escape("run -c `"$SingBoxData\config.json`"")
     $EscLogsDir = [System.Security.SecurityElement]::Escape($LogsDir)
@@ -95,12 +129,7 @@ if ($SkipService) {
 }
 
 # Register privileged singswitch named-pipe helper service (allows unprivileged tray/GUI control without UAC prompts).
-$AgentService = "singswitch-agent"
-if (Get-Service -Name $AgentService -ErrorAction SilentlyContinue) {
-    Stop-Service -Name $AgentService -Force -ErrorAction SilentlyContinue
-    sc.exe delete $AgentService | Out-Null
-    Start-Sleep -Seconds 1
-}
+Remove-SingSwitchService $AgentService
 sc.exe create $AgentService binPath= "`"$InstallDir\singswitch.exe`" agent" start= auto DisplayName= "SingSwitch Helper" | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "sc.exe could not create the $AgentService service (exit $LASTEXITCODE)."

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import subprocess
+import tempfile
 import time
 import os
 from PIL import Image, ImageDraw, ImageFilter
@@ -13,7 +14,10 @@ scene = sys.argv[1]
 theme = sys.argv[2]
 out_png = sys.argv[3]
 
-display = ":95"
+# Ports are shared between checkouts: a second capture on the same :NN either
+# fails to start Xvfb or, worse, screenshots the other run's window. Allow an
+# override and verify the server we started is the one we are about to use.
+display = os.environ.get("SINGSWITCH_SNAP_DISPLAY", ":95")
 env = os.environ.copy()
 env["DISPLAY"] = display
 env["VK_DRIVER_FILES"] = "/usr/share/vulkan/icd.d/lvp_icd.json"
@@ -22,19 +26,30 @@ env["SINGSWITCH_THEME"] = theme
 env["GPUI_X11_SCALE_FACTOR"] = "2.0"
 
 # Start isolated Xvfb with high-res virtual display
-xvfb = subprocess.Popen(["Xvfb", display, "-screen", "0", "2560x1600x24"])
+xvfb = subprocess.Popen(["Xvfb", display, "-screen", "0", "2560x1600x24", "-nolisten", "tcp"])
 time.sleep(0.5)
+if xvfb.poll() is not None:
+    print(
+        f"error: Xvfb exited on {display} (exit {xvfb.returncode}); "
+        "another display may already be in use. Set SINGSWITCH_SNAP_DISPLAY=:NN.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 app = None
+raw_path = None
 try:
     cmd = ["./target/debug/singswitch-app", "--preview", scene, "--theme", theme]
     app = subprocess.Popen(cmd, env=env)
     time.sleep(2.5)
 
-    raw_path = "/tmp/raw_snap.png"
+    # A fixed /tmp path means concurrent captures overwrite each other's frame.
+    raw_fd, raw_path = tempfile.mkstemp(prefix="singswitch-snap-", suffix=".png")
+    os.close(raw_fd)
     subprocess.run(["import", "-window", "root", raw_path], env=env, check=True)
 
     img = Image.open(raw_path)
+    img.load()
     bbox = img.getbbox()
     if bbox:
         cropped = img.crop(bbox)
@@ -81,3 +96,5 @@ finally:
         xvfb.wait(timeout=1.0)
     except Exception:
         xvfb.kill()
+    if raw_path and os.path.exists(raw_path):
+        os.unlink(raw_path)

@@ -28,7 +28,10 @@ fi
 
 echo "==> Building release binaries for aarch64-apple-darwin..."
 cargo build --release -p singswitch-cli --target aarch64-apple-darwin
-cargo build --release -p singswitch-app "${APP_FEATURES[@]}" --target aarch64-apple-darwin
+# Guarded expansion: macOS ships bash 3.2, where `set -u` plus `"${arr[@]}"` on
+# an empty array aborts with "unbound variable", which is every build without
+# the Feixen cut.
+cargo build --release -p singswitch-app ${APP_FEATURES[@]+"${APP_FEATURES[@]}"} --target aarch64-apple-darwin
 
 echo "==> Assembling macOS .app bundle..."
 "$ROOT_DIR/scripts/bundle-macos.sh" aarch64-apple-darwin release

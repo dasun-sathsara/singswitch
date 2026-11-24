@@ -65,11 +65,11 @@ def bundled_by_default(icon_dir: pathlib.Path) -> set[str]:
     listing = icon_dir.parent.parent / "default-icons.txt"
     if not listing.exists():
         return set()
-    return {line.strip() for line in listing.read_text().split() if line.strip()}
+    return {line.strip() for line in listing.read_text(encoding="utf-8").split() if line.strip()}
 
 
 def declared_domain_icons() -> set[str]:
-    source = ASSETS_RS.read_text()
+    source = ASSETS_RS.read_text(encoding="utf-8")
     match = re.search(r"icon_assets!\(\s*DomainIcons,\s*\[(.*?)\]\s*\);", source, re.S)
     if not match:
         sys.exit("icon check: could not find the DomainIcons list in assets.rs")
@@ -81,7 +81,7 @@ def used_icons() -> set[str]:
     for source in APP.rglob("*.rs"):
         # Only enum variants. `IconName::path` and `IconName::ALL` are real
         # associated items and are not icons.
-        used |= set(re.findall(r"IconName::([A-Z]\w*)", source.read_text()))
+        used |= set(re.findall(r"IconName::([A-Z]\w*)", source.read_text(encoding="utf-8")))
     return used
 
 
