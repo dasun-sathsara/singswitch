@@ -452,7 +452,9 @@ impl ProfilesView {
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Add a VLESS + Reality profile or import a sing-box configuration to start routing."),
+                            .child(
+                                        "Create a profile, paste a subscription URL, or paste a share link to start routing.",
+                                    ),
                     )
                     .child(
                         h_flex()
@@ -514,8 +516,18 @@ impl ProfilesView {
             match visual {
                 TrayVisualState::Transitioning => cx.theme().warning,
                 TrayVisualState::Broken => cx.theme().danger,
-                TrayVisualState::Connected => cx.theme().success,
+                TrayVisualState::Connected => crate::theme::success_text(cx),
                 TrayVisualState::Disconnected => cx.theme().muted_foreground,
+            }
+        };
+        // The dot is a non-text indicator: 3:1 suffices, and the fill green is
+        // the one the tray and theme already agree on.
+        let dot = if store.is_probing() {
+            tone
+        } else {
+            match visual {
+                TrayVisualState::Connected => cx.theme().success,
+                _ => tone,
             }
         };
         let active = snap.active.as_ref().filter(|_| snap.running).cloned();
@@ -593,7 +605,7 @@ impl ProfilesView {
                             .py(px(3.0))
                             .rounded_full()
                             .bg(tone.opacity(0.12))
-                            .child(div().size(px(6.5)).flex_none().rounded_full().bg(tone))
+                            .child(div().size(px(6.5)).flex_none().rounded_full().bg(dot))
                             .child(
                                 div()
                                     .text_xs()
@@ -666,6 +678,17 @@ impl ProfilesView {
                                     .text_xs()
                                     .text_color(cx.theme().foreground)
                                     .child(ip),
+                            )
+                            // A hairline between the read-only value and the
+                            // buttons keeps copy and refresh reading as
+                            // controls; without it the whole pill read as one
+                            // uninteractive label.
+                            .child(
+                                div()
+                                    .h(px(14.0))
+                                    .w(px(1.0))
+                                    .bg(cx.theme().border)
+                                    .mx(px(2.0)),
                             )
                             .when_some(ip_to_copy, |pill, (ip, _)| {
                                 pill.child(
@@ -909,7 +932,7 @@ impl ProfilesView {
         let select = self.store.clone();
         let endpoint = profile.facts.endpoint.clone();
         let (status, color) = if live {
-            ("Connected", cx.theme().success)
+            ("Connected", crate::theme::success_text(cx))
         } else if !ready {
             ("Needs setup", cx.theme().warning)
         } else {
@@ -992,7 +1015,7 @@ impl ProfilesView {
                             .w(px(200.0))
                             .flex_none()
                             .font_family(fonts::mono_family())
-                            .text_size(px(12.5))
+                            .text_size(px(12.0))
                             .text_color(cx.theme().muted_foreground)
                             .truncate()
                             .child(endpoint.unwrap_or_else(|| "—".into())),

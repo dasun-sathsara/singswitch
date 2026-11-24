@@ -265,7 +265,7 @@ fn connection_indicator(store: &AppStore, cx: &gpui_kit::App) -> impl IntoElemen
     let color = match visual {
         TrayVisualState::Transitioning => cx.theme().warning,
         TrayVisualState::Broken => cx.theme().danger,
-        TrayVisualState::Connected => cx.theme().success,
+        TrayVisualState::Connected => crate::theme::success_text(cx),
         TrayVisualState::Disconnected => cx.theme().muted_foreground,
     };
 

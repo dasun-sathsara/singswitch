@@ -300,7 +300,10 @@ impl Render for NodesStrip {
                         div()
                             .flex_1()
                             .min_w(px(0.0))
+                            .flex_none()
+                            .max_w(px(360.0))
                             .truncate()
+                            .pl(px(6.0))
                             .text_size(px(11.0))
                             .text_color(cx.theme().muted_foreground)
                             .child(reason),
@@ -310,10 +313,22 @@ impl Render for NodesStrip {
     }
 }
 
-/// One line for a notice: the message, then the hint that makes it actionable.
+/// One line for the strip's inline error: the human fact first, internal
+/// plumbing (URLs, errno text) kept out of the row. A refusal while the
+/// service runs means the controller died or loopback is blocked, and the
+/// fix is on the service side, not in this string.
 fn describe(err: &singswitch_core::error::SingSwitchError) -> String {
-    if err.hints.is_empty() {
-        return err.message.clone();
+    let refused = err
+        .message
+        .to_ascii_lowercase()
+        .contains("connection refused");
+    if refused {
+        return "live selections unavailable: the controller is not answering".to_string();
     }
-    format!("{} — {}", err.message, err.hints.join("; "))
+    let mut hint = err.hints.first().cloned().unwrap_or_default();
+    // URLs and raw OS errors belong in the expandable detail, not the strip.
+    if let Some((cut, _)) = hint.char_indices().nth(77) {
+        hint = format!("{}…", &hint[..cut]);
+    }
+    format!("{} — {}", err.message, hint)
 }

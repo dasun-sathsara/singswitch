@@ -8,8 +8,12 @@ use singswitch_core::error::{Result, SingSwitchError};
 
 pub const MIN_WINDOW_WIDTH: f32 = 740.0;
 pub const MIN_WINDOW_HEIGHT: f32 = 440.0;
-pub const DEFAULT_WINDOW_WIDTH: f32 = 820.0;
-pub const DEFAULT_WINDOW_HEIGHT: f32 = 480.0;
+pub const DEFAULT_WINDOW_WIDTH: f32 = 860.0;
+// The guided editor's three section cards measure about 600 logical px before
+// the save bar; at 480 the second card was cut mid-input with no scroll cue,
+// because macOS reveals scrollbars only on hover. First-run and capture sizes
+// now show the whole form.
+pub const DEFAULT_WINDOW_HEIGHT: f32 = 620.0;
 pub const WINDOW_SIZE_EPSILON: f32 = 2.0;
 
 /// Shortest interval that still counts as "on", in minutes.
@@ -180,6 +184,9 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.ring = rgb(0x3B82F6).into();
             theme.selection = rgb(0x1E293B).into();
             theme.caret = rgb(0x60A5FA).into();
+            // Same as the light theme's override, for the same reason: the
+            // default #404040 track is 1.76:1 on a surface card.
+            theme.switch = rgb(0x6B7280).into();
         } else {
             theme.background = rgb(0xF8FAFC).into();
             theme.foreground = rgb(0x0F172A).into();
@@ -212,6 +219,10 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.ring = rgb(0x2563EB).into();
             theme.selection = rgb(0xDBEAFE).into();
             theme.caret = rgb(0x2563EB).into();
+            // The switch's off track defaulted to #D4D4D4, 1.48:1 on a card:
+            // the one part of a row a user must find to turn it on was its
+            // faintest element. Non-text UI needs 3:1.
+            theme.switch = rgb(0x7E8894).into();
         }
     });
 }
@@ -230,5 +241,30 @@ pub fn subtle_pill_bg(cx: &App) -> gpui_kit::Hsla {
         rgb(0x1A1C24).into()
     } else {
         rgb(0xF1F5F9).into()
+    }
+}
+
+/// The success colour at text grade.
+///
+/// `theme().success` is tuned for fills and indicators (light `#059669` is
+/// 3.77:1 on white), but several places set small text in it: the profile
+/// status word, the connected state words, the "Valid JSON" footer. Small
+/// text needs 4.5:1, so light theme answers with a deeper green while dark
+/// keeps the fill green, which already clears 7:1 on every surface.
+/// Selection tint with an unmistakable hue shift against `subtle_pill_bg`
+/// hover, so a selected log row cannot masquerade as a hovered one.
+pub fn selection_tint(cx: &App) -> gpui_kit::Hsla {
+    if cx.theme().is_dark() {
+        rgb(0x1E293B).into()
+    } else {
+        rgb(0xDBEAFE).into()
+    }
+}
+
+pub fn success_text(cx: &App) -> gpui_kit::Hsla {
+    if cx.theme().is_dark() {
+        cx.theme().success
+    } else {
+        rgb(0x047857).into()
     }
 }

@@ -28,6 +28,28 @@ env["GPUI_X11_SCALE_FACTOR"] = "2.0"
 # Start isolated Xvfb with high-res virtual display
 xvfb = subprocess.Popen(["Xvfb", display, "-screen", "0", "2560x1600x24", "-nolisten", "tcp"])
 time.sleep(0.5)
+
+# The preview's scene match is exact (dashes, not underscores), and an unknown
+# name silently falls back to the connections scene: two screenshots of
+# different screens then come out identical with no error. Refuse to capture
+# an unknown scene instead of shipping the fallback by accident.
+KNOWN_SCENES = {
+    "empty",
+    "connections",
+    "profiles",
+    "notice",
+    "editor-guided",
+    "editor-json",
+    "logs",
+    "settings",
+    "nodes",
+}
+if scene not in KNOWN_SCENES:
+    print(
+        f"error: unknown scene {scene!r}; known scenes: {', '.join(sorted(KNOWN_SCENES))}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 if xvfb.poll() is not None:
     print(
         f"error: Xvfb exited on {display} (exit {xvfb.returncode}); "

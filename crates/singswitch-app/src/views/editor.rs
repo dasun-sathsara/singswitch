@@ -907,8 +907,8 @@ impl ProfileEditorPanel {
                 "Checking config...".to_string(),
             ),
             EditorValidationState::Valid => (
-                cx.theme().success,
-                cx.theme().success,
+                crate::theme::success_text(cx),
+                crate::theme::success_text(cx),
                 IconName::CircleCheck,
                 "Config valid.".to_string(),
             ),
@@ -1197,11 +1197,17 @@ impl ProfileEditorPanel {
         // currently say, and the tunnel row is only ever drawn from this pass.
         // A parse failure is surfaced by `render`'s own readiness pass, not here.
         let form = self.build_model_from_inputs(cx);
+        // Field rows whose section switch is off render inert and dimmed: the
+        // writer honestly serialises only enabled sections, so a live-looking
+        // input there would invite edits the saved file cannot carry.
+        let tls_fields_live = self.model.tls_enabled;
+        let reality_fields_live = self.model.reality_enabled;
         v_flex()
             .flex_1()
             .min_h(px(0.0))
             .w_full()
             .overflow_y_scrollbar()
+            .pb(px(8.0))
             .gap_3()
             .child(
                 form_section("Server", cx)
@@ -1222,12 +1228,32 @@ impl ProfileEditorPanel {
                 form_section("TLS and Reality", cx)
                     .child(self.render_tls_switches(cx))
                     .child(form_row_2(
-                        labeled_input("Server name", &self.in_server_name, cx),
-                        labeled_input("uTLS fingerprint", &self.in_utls_fp, cx),
+                        labeled_input_opt(
+                            "Server name",
+                            &self.in_server_name,
+                            !tls_fields_live,
+                            cx,
+                        ),
+                        labeled_input_opt(
+                            "uTLS fingerprint",
+                            &self.in_utls_fp,
+                            !tls_fields_live,
+                            cx,
+                        ),
                     ))
                     .child(form_row_2(
-                        labeled_input("Reality public key", &self.in_reality_pubkey, cx),
-                        labeled_input("Reality short ID", &self.in_reality_short_id, cx),
+                        labeled_input_opt(
+                            "Reality public key",
+                            &self.in_reality_pubkey,
+                            !reality_fields_live,
+                            cx,
+                        ),
+                        labeled_input_opt(
+                            "Reality short ID",
+                            &self.in_reality_short_id,
+                            !reality_fields_live,
+                            cx,
+                        ),
                     )),
             )
             .child(
@@ -1290,19 +1316,22 @@ impl ProfileEditorPanel {
                     })
                     .on_click(cx.listener(|this, _, _, cx| this.test_latency(cx))),
             )
-            .when(!message.is_empty(), |row| {
-                row.child(
-                    div()
-                        .id("editor-latency-readout")
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .truncate()
-                        .text_xs()
-                        .font_weight(fonts::EMPHASIS)
-                        .text_color(colour)
-                        .child(message),
-                )
-            })
+            .child(
+                div()
+                    .id("editor-latency-readout")
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .truncate()
+                    .text_xs()
+                    .font_weight(fonts::EMPHASIS)
+                    .when(message.is_empty(), |el| {
+                        el.text_color(cx.theme().muted_foreground.opacity(0.7))
+                            .child("Not tested")
+                    })
+                    .when(!message.is_empty(), |el| {
+                        el.text_color(colour).child(message)
+                    }),
+            )
     }
 
     fn render_tls_switches(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -1431,7 +1460,7 @@ impl ProfileEditorPanel {
                                     .child(
                                         div()
                                             .font_weight(fonts::EMPHASIS)
-                                            .text_color(cx.theme().success)
+                                            .text_color(crate::theme::success_text(cx))
                                             .child("Valid JSON"),
                                     ),
                                 Err(msg) => h_flex()
@@ -1754,32 +1783,71 @@ pub fn format_latency(elapsed: Duration) -> String {
 }
 
 fn form_section(title: &'static str, cx: &App) -> gpui_kit::Div {
+    // Same card family as the settings screen: radius 10, hairline border,
+    // surface fill. The editor previously used a borderless rounded-12 card that
+    // grouped on a 5% fill delta alone (1.07:1 in dark), invisible next to the
+    // bordered cards two screens over.
     v_flex()
         .w_full()
         .flex_none()
         .p(px(12.0))
         .gap_2()
-        .rounded(px(12.0))
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(cx.theme().border)
         .bg(crate::theme::surface(cx))
-        .child(div().text_base().font_weight(fonts::EMPHASIS).child(title))
+        // Section titles use the settings screens' eyebrow grammar: small
+        // caps in muted ink, so the page's 14px tier stays reserved for the
+        // profile name in the toolbar and field labels stay one rung under
+        // their values.
+        .child(
+            div()
+                .text_size(px(11.0))
+                .font_weight(fonts::EMPHASIS)
+                .text_color(cx.theme().muted_foreground.opacity(0.85))
+                .pb(px(2.0))
+                .child(title.to_uppercase()),
+        )
 }
 
 fn labeled_input(label: &'static str, state: &Entity<InputState>, cx: &App) -> gpui_kit::Div {
+    labeled_input_opt(label, state, false, cx)
+}
+
+/// `unavailable` marks the row's inputs as inert (their section's switch is
+/// off): visibly dimmed, so a user cannot type into a field the written config
+/// will not carry. The value stays visible for reference; only the control is
+/// dead.
+fn labeled_input_opt(
+    label: &'static str,
+    state: &Entity<InputState>,
+    unavailable: bool,
+    cx: &App,
+) -> gpui_kit::Div {
+    let label_style = if unavailable {
+        div()
+            .text_xs()
+            .font_normal()
+            .text_color(cx.theme().muted_foreground.opacity(0.6))
+    } else {
+        // Labels used to carry full foreground ink, brighter than the values
+        // they labeled; hierarchy runs the other way round.
+        div()
+            .text_xs()
+            .font_normal()
+            .text_color(cx.theme().muted_foreground)
+    };
     v_flex()
         .flex_1()
         .min_w(px(180.0))
         .gap_1()
-        .child(
-            div()
-                .text_xs()
-                .font_normal()
-                .text_color(cx.theme().foreground)
-                .child(label),
-        )
+        .when(unavailable, |el| el.opacity(0.55))
+        .child(label_style.child(label))
         .child(
             gpui_kit::component::input::Input::new(state)
                 .h(px(28.0))
-                .cleanable(true),
+                .cleanable(true)
+                .disabled(unavailable),
         )
 }
 

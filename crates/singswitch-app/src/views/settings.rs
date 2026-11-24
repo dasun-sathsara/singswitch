@@ -4,9 +4,12 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
+use std::rc::Rc;
+
 use gpui_kit::{
-    AnyElement, ClipboardItem, Context, Entity, IntoElement, ParentElement as _, Render,
-    SharedString, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use singswitch_core::layout::Layout;
 
@@ -255,12 +258,15 @@ fn render_auto_sync_row(
         .map(|(_, label)| label.to_string())
         .unwrap_or_else(|| format!("Custom ({minutes} min)"));
 
+    // The same divider weight as the switch rows above it; a full-opacity
+    // rule here made the sync row read as a section bolted onto the card
+    // rather than its fourth row.
     h_flex()
         .w_full()
         .pt(px(10.0))
         .mt(px(2.0))
         .border_t_1()
-        .border_color(cx.theme().border)
+        .border_color(cx.theme().border.opacity(0.5))
         .justify_between()
         .items_center()
         .child(
@@ -276,12 +282,15 @@ fn render_auto_sync_row(
                 ),
         )
         .child(
+            // A trailing chevron names it as a disclosure: without one, the
+            // wide grey slab read as a status badge, which is what the rows
+            // above teach a grey pill means.
             Button::new("set-auto-sync")
                 .secondary()
                 .small()
                 .min_w(px(130.0))
-                .justify_between()
                 .label(label)
+                .dropdown_caret(true)
                 .disabled(false)
                 .dropdown_menu(move |menu, _, _| {
                     let mut menu = menu;
@@ -319,14 +328,31 @@ fn setting_switch_row(
     on_change: impl Fn(&bool, &mut Window, &mut gpui_kit::App) + 'static,
     cx: &gpui_kit::App,
 ) -> impl IntoElement {
+    // The row is the click target, not just the 36x20 switch: every settings
+    // pane a user has met targets the whole row, and a title that answers a
+    // click that does nothing teaches learned helplessness about the labels.
+    let title_for_row = spec.title;
+    let on_change = Rc::new(on_change);
+    let row_on_change = on_change.clone();
+    let checked_now = spec.checked;
     h_flex()
+        .id(SharedString::from(format!("switch-row-{}", spec.id)))
         .w_full()
         .justify_between()
         .items_center()
+        .cursor_pointer()
         .pt(if spec.border_top { px(10.0) } else { px(0.0) })
         .when(spec.border_top, |row| {
             row.border_t_1()
                 .border_color(cx.theme().border.opacity(0.5))
+        })
+        .when(!spec.disabled, |row| {
+            row.hover(|style| style.bg(cx.theme().muted.opacity(0.4)))
+                .rounded(px(6.0))
+                .on_mouse_down(gpui_kit::MouseButton::Left, move |_, window, cx| {
+                    let next = !checked_now;
+                    row_on_change(&next, window, cx);
+                })
         })
         .child(
             v_flex()
@@ -336,7 +362,7 @@ fn setting_switch_row(
                         .text_sm()
                         .font_medium()
                         .text_color(cx.theme().foreground)
-                        .child(spec.title),
+                        .child(title_for_row),
                 )
                 .child(
                     div()
@@ -350,7 +376,8 @@ fn setting_switch_row(
                 .checked(spec.checked)
                 .color(cx.theme().success)
                 .disabled(spec.disabled)
-                .on_change(on_change),
+                .accessibility_label(spec.title)
+                .on_change(move |checked, window, cx| on_change(checked, window, cx)),
         )
 }
 

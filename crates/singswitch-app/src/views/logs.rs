@@ -160,6 +160,9 @@ impl LogsView {
         Button::new("logs-severity")
             .secondary()
             .h(px(28.0))
+            // The caret separates this control from the static count pill two
+            // slots right, which uses the same fill.
+            .dropdown_caret(true)
             .label(match severity {
                 LogSeverityFilter::All => "All levels",
                 LogSeverityFilter::Error => "Errors only",
@@ -422,11 +425,20 @@ impl Render for LogsView {
                             .flex()
                             .items_center()
                             .rounded_full()
-                            .bg(cx.theme().muted.opacity(0.6))
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(crate::theme::subtle_pill_bg(cx))
                             .font_family(crate::fonts::mono_family())
                             .text_size(px(11.5))
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!("{count} of {total_count}")),
+                            // "N of M" only when a filter is hiding something;
+                            // at full view the bare count says everything the
+                            // "of M" would.
+                            .text_color(cx.theme().foreground.opacity(0.8))
+                            .child(if count == total_count {
+                                count.to_string()
+                            } else {
+                                format!("{count} of {total_count}")
+                            }),
                     )
                     .child(
                         Button::new("logs-clear")
@@ -681,8 +693,17 @@ fn render_log_rows(
                     .gap(px(10.0))
                     .items_center()
                     .cursor_pointer()
-                    .when(is_selected, |d| d.bg(hover_bg))
-                    .hover(|d| d.bg(hover_bg))
+                    // Selection and hover are different facts and must not
+                    // paint the same: a selected row tells the detail pane's
+                    // content, a hovered row is under no such claim.
+                    .when(is_selected, |d| {
+                        // The accent-tinted row plus the blue edge: neutral
+                        // hover cannot be mistaken for a selection.
+                        d.bg(crate::theme::selection_tint(cx))
+                            .border_l_2()
+                            .border_color(cx.theme().ring)
+                    })
+                    .when(!is_selected, |d| d.hover(|d| d.bg(hover_bg)))
                     .on_click(cx.listener(move |view, _, _, cx| {
                         view.selected_id = Some(rec_id);
                         cx.notify();
