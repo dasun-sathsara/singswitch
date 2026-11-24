@@ -223,12 +223,17 @@ impl Render for WorkspaceShell {
             .font_family(fonts::ui_family())
             .text_size(px(14.0))
             .child(if cfg!(target_os = "macos") {
-                // The stock bar is 34px; 40px gives the nav row real air
-                // instead of sitting on the border.
+                // Keep the 44px bar for the nav row, but clear the left 78px
+                // where AppKit draws the traffic lights at (20, 12).
                 {
                     let mut bar = TitleBar::new();
                     bar.style().size.height = Some(px(44.0).into());
-                    bar.child(self.render_navigation(cx))
+                    bar.child(
+                        h_flex()
+                            .size_full()
+                            .pl(px(78.0))
+                            .child(self.render_navigation(cx)),
+                    )
                 }
             } else {
                 {

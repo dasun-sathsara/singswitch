@@ -27,10 +27,9 @@ mod views;
 
 #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod desktop {
-    use gpui_kit::component::TitleBar;
     use gpui_kit::{
-        AnyWindowHandle, App, AppContext as _, Entity, Global, KeyBinding, QuitMode, WindowBounds,
-        WindowOptions, open_window, px, size,
+        AnyWindowHandle, App, AppContext as _, Entity, Global, KeyBinding, QuitMode,
+        TitlebarOptions, WindowBounds, WindowOptions, open_window, point, px, size,
     };
 
     use crate::actions::{
@@ -268,7 +267,17 @@ mod desktop {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(width), px(height)), cx)),
             window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT))),
-            ..TitleBar::window_options()
+            // AppKit's own values: a 28px title bar with the traffic lights at
+            // (20, 12). Anything smaller crops the buttons' hit area; the custom
+            // TitleBar keeps its taller layout and simply leaves the left 78px
+            // empty on macOS.
+            titlebar: Some(TitlebarOptions {
+                title: Some("SingSwitch".into()),
+                appears_transparent: true,
+                traffic_light_position: Some(point(px(20.0), px(12.0))),
+            }),
+            app_owns_titlebar_drag: true,
+            ..Default::default()
         };
 
         match open_window(options, cx, move |window, cx| {
