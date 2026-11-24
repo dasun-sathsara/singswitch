@@ -7,6 +7,7 @@ use gpui_kit::{AsyncApp, Context, SharedString, Task, WeakEntity};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use singswitch_core::controller::{Controller, Snapshot, StatusView};
 use singswitch_core::error::{ExitCode, Result as CoreResult, SingSwitchError};
+use singswitch_core::form_model::ProfileFormModel;
 use singswitch_core::ip::{IpInfo, fetch_ip_info};
 use singswitch_core::layout::Layout;
 use singswitch_core::logs::{LogLevel, read_appended_lines, read_tail_lines};
@@ -55,6 +56,17 @@ pub struct Notice {
     pub origin: NoticeOrigin,
     pub tone: BannerTone,
     pub message: String,
+}
+
+/// The last latency probe for one profile, as the profile list shows it.
+///
+/// Pinned to the disk revision it was measured against: a config rewritten
+/// after the probe no longer describes what was measured, so the column falls
+/// back to "—" instead of showing a number for a different server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LatencyReading {
+    pub since_disk_revision: u64,
+    pub result: Result<Duration, String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,6 +192,12 @@ pub struct AppStore {
     /// Feedback scoped to the control or screen that produced it. The Toolbar
     /// origin is the one strip that spans the window.
     pub notice: Option<Notice>,
+    /// Last latency probe per profile, rendered in the profile list's LATENCY
+    /// column. Keyed by name; a profile's entry is dropped with the profile.
+    pub latency_results: std::collections::HashMap<String, LatencyReading>,
+    /// Profiles with a probe currently running, so a second click on the same
+    /// row cannot stack a second `tools fetch`.
+    latency_in_flight: HashSet<String>,
     pub editor_validation: Option<(String, EditorValidationState)>,
     pub selected_tab: NavTab,
     pub selected_profile: Option<String>,
@@ -320,6 +338,8 @@ impl AppStore {
                 tone: BannerTone::Warning,
                 message: m,
             }),
+            latency_results: std::collections::HashMap::new(),
+            latency_in_flight: HashSet::new(),
             editor_validation: None,
             selected_tab: NavTab::Profiles,
             editing: false,
@@ -368,6 +388,11 @@ impl AppStore {
     /// The store starts empty and fills from the background probe, so without
     /// this the first frame of every launch claimed "Disconnected" and showed a
     /// first-run card to people who already had profiles.
+    /// Whether a latency probe is running for one profile, for the render side.
+    pub fn latency_probing(&self, name: &str) -> bool {
+        self.latency_in_flight.contains(name)
+    }
+
     pub fn is_probing(&self) -> bool {
         // First answer only. Keying this on `snapshot_poll_in_flight` flipped the
         // first-run card and tray tooltip on every 5s poll for a user who simply
@@ -791,6 +816,12 @@ impl AppStore {
         }
 
         let profiles_changed = snap.profiles != self.snapshot.profiles;
+        if profiles_changed {
+            // A profile that no longer exists takes its latency reading with it;
+            // a renamed-away entry must not paint a row for a name that is gone.
+            self.latency_results
+                .retain(|name, _| snap.profiles.iter().any(|p| &p.name == name));
+        }
         self.snapshot = snap;
         if profiles_changed || bump_disk {
             self.disk_revision = self.disk_revision.wrapping_add(1);
@@ -1799,6 +1830,73 @@ impl AppStore {
         // the leftover flag started a second fetch when the first finished.
         self.ip_generation = self.ip_generation.wrapping_add(1);
         self.ip_info = None;
+    }
+
+    /// A latency probe against a named profile's outbound. The result lands in
+    /// `latency_results` so the profile list's LATENCY column shows it; it never
+    /// becomes a banner, because a measurement is data, not a failure.
+    ///
+    /// Testing must never touch the running daemon: `tools fetch` only
+    /// pre-starts the outbound.
+    pub fn test_profile_latency(&mut self, name: String, cx: &mut Context<Self>) {
+        if self.latency_in_flight.contains(&name) {
+            return;
+        }
+        let Some(path) = self
+            .snapshot
+            .profiles
+            .iter()
+            .find(|profile| profile.name == name)
+            .map(|profile| profile.path.clone())
+        else {
+            return;
+        };
+        self.latency_in_flight.insert(name.clone());
+        cx.notify();
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let probe_name = name.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    // The outbound tag lives in the document, and the store's
+                    // snapshot does not carry it.
+                    let tag = std::fs::read_to_string(&path)
+                        .map_err(|err| format!("could not read {probe_name}: {err}"))
+                        .and_then(|raw| {
+                            ProfileFormModel::from_json_str(&raw)
+                                .map_err(|err| format!("{probe_name} is not a valid config: {err}"))
+                        })
+                        .and_then(|model| match model.has_managed_outbound {
+                            true => Ok(model.outbound_tag),
+                            false => Err(format!("{probe_name} has no outbound to test")),
+                        })?;
+                    singswitch_core::checker::ExecChecker::default()
+                        .probe_latency(
+                            &path,
+                            &tag,
+                            singswitch_core::checker::DEFAULT_LATENCY_PROBE_URL,
+                        )
+                        .map_err(|err| match err.hints.is_empty() {
+                            true => err.message.clone(),
+                            false => format!("{} — {}", err.message, err.hints.join("; ")),
+                        })
+                })
+                .await;
+
+            let _ = this.update(cx, |store, cx| {
+                store.latency_in_flight.remove(&name);
+                store.latency_results.insert(
+                    name.clone(),
+                    LatencyReading {
+                        since_disk_revision: store.disk_revision,
+                        result,
+                    },
+                );
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn refresh_ip(&mut self, cx: &mut Context<Self>) {

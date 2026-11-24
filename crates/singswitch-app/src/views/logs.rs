@@ -359,7 +359,7 @@ impl Render for LogsView {
                             .border_color(cx.theme().border.opacity(0.5))
                             .child(
                                 Button::new("tab-service")
-                                    .h(px(30.0))
+                                    .h(px(28.0))
                                     .when(stream == LogStreamKind::Error, Button::secondary)
                                     .when(stream != LogStreamKind::Error, Button::ghost)
                                     .label("Service")
@@ -370,7 +370,7 @@ impl Render for LogsView {
                             )
                             .child(
                                 Button::new("tab-access")
-                                    .h(px(30.0))
+                                    .h(px(28.0))
                                     .when(stream == LogStreamKind::Access, Button::secondary)
                                     .when(stream != LogStreamKind::Access, Button::ghost)
                                     .label("Access")

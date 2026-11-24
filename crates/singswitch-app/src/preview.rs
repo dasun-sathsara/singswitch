@@ -296,6 +296,22 @@ fn setup_populated_snapshot(s: &mut AppStore) {
     };
 
     s.selected_profile = Some("home-vless".to_string());
+    // Show one measured and one failed reading in the LATENCY column, so the
+    // captures exercise both states.
+    s.latency_results.insert(
+        "home-vless".to_string(),
+        crate::state::LatencyReading {
+            since_disk_revision: s.disk_revision,
+            result: Ok(std::time::Duration::from_millis(312)),
+        },
+    );
+    s.latency_results.insert(
+        "singapore-vless".to_string(),
+        crate::state::LatencyReading {
+            since_disk_revision: s.disk_revision,
+            result: Err("handshake timeout".to_string()),
+        },
+    );
     s.ip_info = Some(IpInfo {
         ip: "103.219.171.115".to_string(),
         city: "Singapore".to_string(),

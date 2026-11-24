@@ -988,7 +988,7 @@ impl ProfileEditorPanel {
                     .child(
                         Button::new("editor-back")
                             .ghost()
-                            .h(px(30.0))
+                            .h(px(28.0))
                             .icon(IconName::ChevronLeft)
                             .label("Profiles")
                             .on_click(cx.listener(|this, _, _, cx| {

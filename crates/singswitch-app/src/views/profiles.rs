@@ -14,8 +14,8 @@ use gpui_kit::{
 };
 
 use crate::icons::TrayVisualState;
-use crate::state::{AppStore, BannerTone, NoticeOrigin};
-use crate::views::editor::ProfileEditorPanel;
+use crate::state::{AppStore, BannerTone, LatencyReading, NoticeOrigin};
+use crate::views::editor::{ProfileEditorPanel, format_latency};
 use singswitch_core::logs::contains_ignore_ascii_case;
 use singswitch_core::profile::Profile;
 use singswitch_core::profile_link;
@@ -579,22 +579,39 @@ impl ProfilesView {
             .flex_none()
             .rounded(px(10.0))
             .border_1()
-            .border_color(if connected {
-                cx.theme().success.opacity(0.35)
-            } else if broken {
-                cx.theme().danger.opacity(0.35)
-            } else {
-                cx.theme().border
-            })
+            .border_color(cx.theme().border)
             .bg(crate::theme::surface(cx))
             .p(px(14.0))
             .gap(px(8.0))
+            // A 3px accent rule on the left edge carries the state colour. A
+            // full border tinted green read as a glowing frame around the
+            // whole card; a rule reads as a status marker and leaves the card
+            // itself neutral.
+            .child(
+                div()
+                    .id("connection-accent")
+                    .w(px(3.0))
+                    .flex_none()
+                    .self_start()
+                    .mt(px(2.0))
+                    .mb(px(2.0))
+                    .h(px(34.0))
+                    .rounded_full()
+                    .bg(if connected {
+                        cx.theme().success
+                    } else if broken {
+                        cx.theme().danger
+                    } else if visual == TrayVisualState::Transitioning {
+                        cx.theme().warning
+                    } else {
+                        cx.theme().muted_foreground.opacity(0.4)
+                    }),
+            )
             .child(
                 h_flex()
                     .w_full()
                     .items_center()
-                    .justify_between()
-                    .gap(px(16.0))
+                    .gap(px(12.0))
                     // LEFT: Status & Profile Identity
                     .child(
                         h_flex()
@@ -697,6 +714,7 @@ impl ProfilesView {
                     // RIGHT: Telemetry & Actions
                     .child(
                         h_flex()
+                            .ml_auto()
                             .flex_none()
                             .items_center()
                             .gap(px(8.0))
@@ -952,6 +970,7 @@ impl ProfilesView {
                                     .child("PROFILE"),
                             )
                             .child(div().w(px(200.0)).flex_none().child("SERVER / ENDPOINT"))
+                            .child(div().w(px(90.0)).flex_none().child("LATENCY"))
                             .child(div().w(px(110.0)).flex_none().child("STATUS"))
                             .child(div().w(px(150.0)).flex_none()),
                     )
@@ -1090,6 +1109,7 @@ impl ProfilesView {
                             .truncate()
                             .child(endpoint.unwrap_or_else(|| "—".into())),
                     )
+                    .child(self.render_latency_cell(profile, store, busy, cx))
                     .child(
                         h_flex()
                             .w(px(110.0))
@@ -1159,6 +1179,72 @@ impl ProfilesView {
             .when(expanded, |row| {
                 row.child(self.render_profile_details(profile, store, live, cx))
             })
+    }
+
+    /// The LATENCY column cell: a small ghost button that runs the probe, and
+    /// the reading beside it. A probe never touches the running daemon, so it
+    /// is not disabled by `busy`; it is only disabled while that profile's own
+    /// probe is already in flight.
+    fn render_latency_cell(
+        &self,
+        profile: &Profile,
+        store: &AppStore,
+        busy: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let name = profile.name.clone();
+        let testable = profile.config_parsed && profile.facts.endpoint.is_some();
+        let reading: Option<&LatencyReading> = store.latency_results.get(&name);
+        let stale = reading.is_some_and(|r| r.since_disk_revision != store.disk_revision);
+        let probing = store.latency_probing(&name);
+
+        let (text, color) = if probing {
+            ("Testing…".to_string(), cx.theme().muted_foreground)
+        } else if stale {
+            ("—".to_string(), cx.theme().muted_foreground.opacity(0.6))
+        } else {
+            match reading.map(|r| &r.result) {
+                Some(Ok(elapsed)) => (format_latency(*elapsed), crate::theme::success_text(cx)),
+                Some(Err(message)) => (truncate_label(message, 18), cx.theme().danger),
+                None => ("—".to_string(), cx.theme().muted_foreground.opacity(0.6)),
+            }
+        };
+
+        let test = self.store.clone();
+        let test_name = name.clone();
+        h_flex()
+            .w(px(90.0))
+            .flex_none()
+            .items_center()
+            .gap(px(4.0))
+            .child(
+                Button::new(gpui_kit::SharedString::from(format!(
+                    "latency-{}",
+                    profile.name
+                )))
+                .ghost()
+                .xsmall()
+                .icon(IconName::Gauge)
+                .accessibility_label(format!("Test latency for {}", profile.name))
+                .loading(probing)
+                .disabled(probing || !testable || busy)
+                .tooltip(if testable {
+                    "Fetch a 204 through this outbound without connecting"
+                } else {
+                    "This profile has no outbound to test"
+                })
+                .on_click(move |_, _, cx| {
+                    test.update(cx, |s, cx| s.test_profile_latency(test_name.clone(), cx));
+                }),
+            )
+            .child(
+                div()
+                    .font_family(fonts::mono_family())
+                    .text_xs()
+                    .truncate()
+                    .text_color(color)
+                    .child(text),
+            )
     }
 
     fn render_profile_details(
@@ -1388,6 +1474,17 @@ fn detail_row_inner(
                 .truncate()
                 .child(value),
         )
+}
+
+/// Cap an error string for the narrow LATENCY cell, with an ellipsis when cut.
+fn truncate_label(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
 }
 
 fn format_duration(secs: u64) -> String {

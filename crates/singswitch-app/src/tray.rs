@@ -1,15 +1,11 @@
-use gpui_kit::{App, AsyncApp, Context, Entity, Menu, MenuItem, Subscription};
+use gpui_kit::{App, Entity, Menu, MenuItem, Subscription};
 use gpui_tray::{Icon, Tray};
-use singswitch_core::checker::{DEFAULT_LATENCY_PROBE_URL, ExecChecker};
-use singswitch_core::form_model::ProfileFormModel;
-use std::time::Duration;
 
 use crate::actions::{
     DisconnectService, EditProfile, Noop, OpenLogsView, OpenMainWindow, QuitApp, SwitchProfile,
-    TestLatency,
 };
 use crate::icons::{TrayVisualState, build_tray_icon};
-use crate::state::{AppStore, BannerTone, NoticeOrigin};
+use crate::state::AppStore;
 
 struct TrayIcons {
     connected: Icon,
@@ -242,9 +238,9 @@ const INLINE_PROFILE_LIMIT: usize = 4;
 
 fn build_tray_menu(store: &AppStore) -> Vec<MenuItem> {
     let mut items = build_menu_items(store);
-    // A probe spawns a process and waits on the network, so it is disabled on
-    // exactly the same terms as a switch.
-    items.extend(latency_items(store, store.is_busy()));
+    // Latency probing lives in the main window's profile list, where a result
+    // has a column to land in; a tray row could only report through a
+    // notification, and a probe from a hidden window is easy to miss.
     items.push(MenuItem::separator());
     items.push(MenuItem::action("Open SingSwitch", OpenMainWindow));
     items.push(MenuItem::action("Quit SingSwitch", QuitApp));
@@ -348,50 +344,6 @@ fn build_menu_items(store: &AppStore) -> Vec<MenuItem> {
     items
 }
 
-/// The "Test latency" section: one row per profile, in name order.
-///
-/// Its own section rather than a row inside the switch list, because the reason
-/// to use it is the profile you are *not* connected to: measuring an alternative
-/// before switching is the whole point, and it never changes the connection.
-/// The result goes to the notification centre, since no tray row can be updated
-/// in place.
-fn latency_items(store: &AppStore, disabled: bool) -> Vec<MenuItem> {
-    let mut profiles: Vec<&str> = store
-        .snapshot
-        .profiles
-        .iter()
-        .filter(|profile| profile.config_parsed && profile.facts.endpoint.is_some())
-        .map(|profile| profile.name.as_str())
-        .collect();
-    profiles.sort_unstable();
-    if profiles.is_empty() {
-        return Vec::new();
-    }
-    let mut items = vec![MenuItem::separator()];
-    let rows: Vec<MenuItem> = profiles
-        .into_iter()
-        .map(|name| {
-            MenuItem::action(
-                format!("Test latency: {name}"),
-                TestLatency {
-                    name: name.to_owned(),
-                },
-            )
-            .disabled(disabled)
-        })
-        .collect();
-    if rows.len() <= INLINE_PROFILE_LIMIT {
-        items.extend(rows);
-    } else {
-        items.push(MenuItem::submenu(Menu {
-            name: "Test latency".into(),
-            items: rows,
-            disabled,
-        }));
-    }
-    items
-}
-
 fn connect_item(label: String, name: &str, disabled: bool) -> MenuItem {
     MenuItem::action(
         label,
@@ -400,104 +352,4 @@ fn connect_item(label: String, name: &str, disabled: bool) -> MenuItem {
         },
     )
     .disabled(disabled)
-}
-
-/// Run a latency test for a profile the tray named, and report it where a tray
-/// click can be heard.
-///
-/// The tray has no rows to update in place, and the window may be hidden when
-/// the menu is used, so the answer goes to the notification centre (subject to
-/// the existing desktop-notification setting) and to the toolbar strip for the
-/// case where the window is open. Testing must never touch the running daemon:
-/// `tools fetch` only pre-starts the outbound.
-pub fn run_latency_test(store: Entity<AppStore>, name: String, cx: &mut App) {
-    if store.read(cx).is_busy() {
-        return;
-    }
-    let Some(path) = store
-        .read(cx)
-        .snapshot
-        .profiles
-        .iter()
-        .find(|profile| profile.name == name)
-        .map(|profile| profile.path.clone())
-    else {
-        store.update(cx, |store, cx| {
-            store.set_notice(
-                NoticeOrigin::Toolbar,
-                BannerTone::Warning,
-                format!("There is no profile named {name}"),
-                cx,
-            );
-        });
-        return;
-    };
-
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        let (name, result) = cx
-            .background_executor()
-            .spawn(async move {
-                // The outbound tag lives in the document, and the store's
-                // snapshot does not carry it.
-                let tag = std::fs::read_to_string(&path)
-                    .map_err(|err| format!("could not read {name}: {err}"))
-                    .and_then(|raw| {
-                        ProfileFormModel::from_json_str(&raw)
-                            .map_err(|err| format!("{name} is not a valid config: {err}"))
-                    })
-                    .and_then(|model| match model.has_managed_outbound {
-                        true => Ok(model.outbound_tag),
-                        false => Err(format!("{name} has no outbound to test")),
-                    });
-                let result = tag.and_then(|tag| {
-                    ExecChecker::default()
-                        .probe_latency(&path, &tag, DEFAULT_LATENCY_PROBE_URL)
-                        .map_err(|err| match err.hints.is_empty() {
-                            true => err.message.clone(),
-                            false => format!("{} — {}", err.message, err.hints.join("; ")),
-                        })
-                });
-                (name, result)
-            })
-            .await;
-
-        store.update(cx, |store, cx| report_latency(store, &name, result, cx));
-    })
-    .detach();
-}
-
-/// One notice for both callers (tray and editor) keeps the wording identical
-/// wherever the number came from.
-fn report_latency(
-    store: &mut AppStore,
-    name: &str,
-    result: Result<Duration, String>,
-    cx: &mut Context<AppStore>,
-) {
-    match result {
-        Ok(elapsed) => {
-            let message = format!("{name}: {}", crate::views::editor::format_latency(elapsed));
-            store.set_notice(
-                NoticeOrigin::Toolbar,
-                BannerTone::Success,
-                message.clone(),
-                cx,
-            );
-            if let Some(ctrl) = &store.ctrl {
-                ctrl.notifier.notify(&format!("Latency {message}"));
-            }
-        }
-        Err(message) => {
-            store.set_notice(
-                NoticeOrigin::Toolbar,
-                BannerTone::Error,
-                message.clone(),
-                cx,
-            );
-            if let Some(ctrl) = &store.ctrl {
-                ctrl.notifier.notify_error("Latency test failed", &message);
-            }
-        }
-    };
-    cx.notify();
 }

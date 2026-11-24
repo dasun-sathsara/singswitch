@@ -155,7 +155,7 @@ fn theme_button(
 ) -> Button {
     let st = store.clone();
     Button::new(id)
-        .h(px(30.0))
+        .h(px(28.0))
         .when_some(icon, Button::icon)
         .when(current == target, Button::secondary)
         .when(current != target, Button::ghost)
