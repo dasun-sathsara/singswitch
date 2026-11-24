@@ -30,7 +30,7 @@ That's it. The editor, logs, IP display, and CLI are conveniences layered on tha
   </tr>
 </table>
 
-Also here: a guided form editor alongside the JSON one, log streaming with filtering, a CLI with `--json` for everything, and a menu-bar tray so the window stays out of the way. Light theme included.
+Also here: a guided form editor alongside the JSON one, log streaming with filtering, a CLI with `--json` for everything, and a native tray. The tray shows current status in its icon, switches profiles directly from the menu, jumps to logs on a connection issue, and pins the app to the menu bar (macOS) or system tray (Windows) at login. Light theme included.
 
 ## Install
 
