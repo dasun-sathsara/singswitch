@@ -9,6 +9,22 @@ use crate::layout::resolve_singbox_binary;
 /// Default validation timeout preventing a hung `sing-box` child process.
 const DEFAULT_CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Cap on a latency probe, which is a single round trip and nothing more.
+///
+/// The 20s validation budget would make an unreachable server look like a hang
+/// rather than the answer "unreachable".
+const LATENCY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Endpoint the latency test fetches. A 204 with no body, so the measured time
+/// is the round trip and not the download.
+pub const DEFAULT_LATENCY_PROBE_URL: &str = "https://www.gstatic.com/generate_204";
+
+/// How much of sing-box's complaint to keep in a probe error.
+///
+/// `tools fetch` writes the fetched body to stdout, so the useful line is at the
+/// end of the combined output and the head is response HTML.
+const PROBE_ERROR_TAIL: usize = 400;
+
 /// Validates sing-box configuration files and reports the `sing-box` binary version.
 pub trait Checker: Send + Sync {
     fn check(&self, path: &Path) -> Result<()>;
@@ -37,6 +53,14 @@ impl ExecChecker {
     }
 
     fn run_singbox(&self, args: &[&str]) -> Result<(bool, String)> {
+        self.run_singbox_with_timeout(args, self.timeout)
+    }
+
+    /// Run the managed binary with a caller-chosen deadline.
+    ///
+    /// The probe cannot use `self.timeout`: 20s of waiting on a dead server is
+    /// indistinguishable from a hung app.
+    fn run_singbox_with_timeout(&self, args: &[&str], timeout: Duration) -> Result<(bool, String)> {
         let bin = self.resolve()?;
         let mut cmd = Command::new(&bin);
         cmd.args(args);
@@ -64,7 +88,7 @@ impl ExecChecker {
         let out_handle = std::thread::spawn(move || read_pipe(stdout));
         let err_handle = std::thread::spawn(move || read_pipe(stderr));
 
-        let deadline = Instant::now() + self.timeout;
+        let deadline = Instant::now() + timeout;
         let status = loop {
             if let Some(status) = child.try_wait()? {
                 break status;
@@ -74,8 +98,9 @@ impl ExecChecker {
                 let _ = child.wait();
                 return Err(SingSwitchError::general(format!(
                     "sing-box timed out after {}s",
-                    self.timeout.as_secs()
-                )));
+                    timeout.as_secs()
+                ))
+                .with_hint("check that the profile's server is reachable"));
             }
             std::thread::sleep(Duration::from_millis(20));
         };
@@ -89,6 +114,79 @@ impl ExecChecker {
             (true, true) => String::new(),
         };
         Ok((status.success(), combined))
+    }
+
+    /// Measure one round trip through `outbound_tag` without activating the
+    /// profile.
+    ///
+    /// `sing-box tools fetch` builds the box and runs `PreStart()` only: no
+    /// inbounds, so no TUN device, no listening ports, and no root. It then
+    /// fetches `url` through the named outbound, which is exactly a latency
+    /// test. The profile is read from `config_path` into a temp copy first; a
+    /// profile can set `log.output`, and running the user's own file in place
+    /// must never happen.
+    pub fn probe_latency(
+        &self,
+        config_path: &Path,
+        outbound_tag: &str,
+        url: &str,
+    ) -> Result<Duration> {
+        let bytes = std::fs::read(config_path).map_err(|err| {
+            SingSwitchError::general(format!(
+                "could not read {} for a latency test: {err}",
+                config_path.display()
+            ))
+            .with_hint("reload the profile list and try again")
+        })?;
+        self.probe_latency_bytes(&bytes, outbound_tag, url)
+    }
+
+    /// As [`probe_latency`](Self::probe_latency), for a document that is not on
+    /// disk yet: the editor tests what is in the buffer, not the last save.
+    pub fn probe_latency_bytes(
+        &self,
+        config: &[u8],
+        outbound_tag: &str,
+        url: &str,
+    ) -> Result<Duration> {
+        let tag = outbound_tag.trim();
+        if tag.is_empty() {
+            return Err(SingSwitchError::validation(
+                "this profile has no outbound tag to test".to_string(),
+            )
+            .with_hint("give the outbound a tag in the JSON tab"));
+        }
+        let temp = temp_profile_copy("singswitch-latency-", config)?;
+        let path = temp.path().to_string_lossy().into_owned();
+        let started = Instant::now();
+        let (ok, output) = self
+            .run_singbox_with_timeout(
+                &["tools", "fetch", "-c", &path, "-o", tag, url],
+                LATENCY_TIMEOUT,
+            )
+            .map_err(|err| {
+                err.with_hint(
+                    "the latency test needs sing-box 1.14 or newer and a reachable server",
+                )
+            })?;
+        if ok {
+            return Ok(started.elapsed());
+        }
+        let cleaned = crate::logs::strip_ansi(&output);
+        let trimmed = cleaned.trim();
+        let tail: String = trimmed
+            .chars()
+            .rev()
+            .take(PROBE_ERROR_TAIL)
+            .collect::<Vec<char>>()
+            .into_iter()
+            .rev()
+            .collect();
+        Err(SingSwitchError::general(format!(
+            "latency test through {tag} failed: {}",
+            tail.trim()
+        ))
+        .with_hint("check the outbound's server and that it is reachable from this machine"))
     }
 }
 
@@ -123,13 +221,24 @@ impl Checker for ExecChecker {
 
 /// Write `bytes` to a temporary `.json` file and validate it through `checker`.
 pub(crate) fn check_temp_bytes(checker: &dyn Checker, prefix: &str, bytes: &[u8]) -> Result<()> {
+    let tmp = temp_profile_copy(prefix, bytes)?;
+    checker.check(tmp.path())
+}
+
+/// Copy `bytes` into a private temp file that removes itself on drop.
+///
+/// Both the validator and the latency probe hand the file to sing-box instead
+/// of the profile's own path: a profile can set `log.output`, so running it in
+/// place would write into the user's log from a read-only check, and a probe
+/// must not touch the profiles directory at all.
+fn temp_profile_copy(prefix: &str, bytes: &[u8]) -> Result<tempfile::NamedTempFile> {
     let mut tmp = tempfile::Builder::new()
         .prefix(prefix)
         .suffix(".json")
         .tempfile()?;
     tmp.write_all(bytes)?;
     tmp.flush()?;
-    checker.check(tmp.path())
+    Ok(tmp)
 }
 
 fn read_pipe(pipe: Option<impl std::io::Read>) -> String {
@@ -144,5 +253,44 @@ fn read_pipe(pipe: Option<impl std::io::Read>) -> String {
     match String::from_utf8(buf) {
         Ok(text) => text,
         Err(err) => String::from_utf8_lossy(err.as_bytes()).into_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_copy_is_isolated() -> bool {
+        let Ok(first) = temp_profile_copy("singswitch-test-", b"{\"log\":{}}\n") else {
+            return false;
+        };
+        let Ok(second) = temp_profile_copy("singswitch-test-", b"{\"log\":{}}\n") else {
+            return false;
+        };
+        // Two probes running at once must not read each other's bytes.
+        if first.path() == second.path() {
+            return false;
+        }
+        let content = std::fs::read_to_string(first.path()).unwrap_or_default();
+        if content != "{\"log\":{}}\n" {
+            return false;
+        }
+        let first_path = first.path().to_path_buf();
+        drop(first);
+        !first_path.exists()
+    }
+
+    #[test]
+    fn temp_profile_copy_is_unique_and_cleaned_up() {
+        assert!(temp_copy_is_isolated());
+    }
+
+    #[test]
+    fn empty_outbound_tag_is_rejected_before_spawning() {
+        // No binary is resolved here on purpose: the tag check must come first,
+        // or a machine without sing-box reports the wrong problem.
+        let checker = ExecChecker::default();
+        let err = checker.probe_latency_bytes(b"{}", "  ", DEFAULT_LATENCY_PROBE_URL);
+        assert!(err.is_err());
     }
 }

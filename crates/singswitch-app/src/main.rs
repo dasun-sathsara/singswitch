@@ -372,6 +372,12 @@ mod desktop {
             });
         });
 
+        cx.on_action(|action: &crate::actions::TestLatency, cx: &mut App| {
+            let store = cx.global::<AppGlobalState>().store.clone();
+            let name = action.name.clone();
+            crate::tray::run_latency_test(store, name, cx);
+        });
+
         cx.on_action(|_: &SyncAll, cx: &mut App| {
             let store = cx.global::<AppGlobalState>().store.clone();
             let origin = store.read(cx).notice_origin_for_current_tab();

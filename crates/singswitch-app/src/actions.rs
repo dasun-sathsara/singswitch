@@ -46,6 +46,16 @@ pub struct EditProfile {
     pub name: String,
 }
 
+/// Measure one round trip through a named profile's outbound, from the tray.
+///
+/// A distinct action rather than a payload on `SwitchProfile`: testing latency
+/// must not activate anything, and the tray needs to say so in its own row.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = singswitch_app, no_json)]
+pub struct TestLatency {
+    pub name: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = singswitch_app, no_json)]
 pub struct SelectTab {

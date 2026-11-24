@@ -19,6 +19,7 @@ icon_assets!(
         CloudDownload,
         FilePlus,
         FolderCog,
+        Gauge,
         Link,
         Monitor,
         PowerOff,
