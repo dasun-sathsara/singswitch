@@ -1,14 +1,14 @@
 # JSON output
 
 Every command accepts `--json` and prints exactly one JSON document to stdout. Errors go to the
-same stream in the same shape, so a caller never has to parse two formats:
+same stream in the same shape, so a caller parses one format:
 
 ```json
 {"schema": 1, "code": 2, "error": "profile needs a server", "hints": ["singswitch edit home"]}
 ```
 
 `schema` is `1`. It changes only when an existing field changes meaning or type, and the release
-notes say which. Adding a field does not bump it, so read the fields you need and ignore the rest.
+notes say which. New fields do not bump it, so read the fields you need and ignore the rest.
 
 ## Exit codes
 
@@ -25,8 +25,8 @@ The code is repeated in the JSON body, so a caller that loses the exit status st
 ## Prompts
 
 No command prompts when stdin is not a terminal. `add` and `edit` open `$EDITOR` only when stdin
-is a terminal and neither `--from` nor `--set` was given. A script can therefore call them without
-passing a flag to suppress the editor.
+is a terminal and neither `--from` nor `--set` was given. A script can call them without passing
+a flag to suppress the editor.
 
 ## Readiness
 
@@ -43,14 +43,14 @@ rotates or truncates mid-stream it emits a marker line:
 {"gap": "log rotated or truncated"}
 ```
 
-Without that line a reader could not tell a quiet service from a lost tail.
+The marker separates a quiet service from a lost tail.
 
 ## `--set`
 
 `--set key=value` rejects an unknown key, an out-of-range port, and a malformed value before
-anything is written. It also refuses a value with nowhere to go. Setting `tun_mtu` on a config
-with no tunnel is an error naming the missing section, not a silent no-op.
+anything is written. It also refuses a value with nowhere to go: setting `tun_mtu` on a config
+without a tunnel is an error naming the missing section, not a silent no-op.
 
 Values are written only into sections the document already has. A one-field edit never adds a
-`log` section or a tag to an untagged outbound, because rewriting a working config is how you
-lose custom DNS or routing rules.
+`log` section or a tag to an untagged outbound, because rewriting a working config loses custom
+DNS or routing rules.

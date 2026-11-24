@@ -1,11 +1,10 @@
 # SingSwitch engineering standards
 
 This document is a **binding contract** for every change to this repository,
-whether made by a human or by an AI agent. It distills the conventions Zed's
-codebase observes — precision in error handling, ruthless consistency, small
-reviewable diffs, no silent failures — into rules that fit a codebase of this
-size. Where Zed's practices don't fit this project's scale, we adapt rather
-than copy.
+whether made by a human or by an AI agent. It carries over the conventions
+Zed's codebase observes (precision in error handling, ruthless consistency,
+small reviewable diffs, no silent failures), adapted to this project's size.
+Where Zed's practices don't fit, we adapt rather than copy.
 
 ## Enforcement
 
@@ -94,8 +93,8 @@ and hints because users act on them (`error.rs`).
 ## Performance
 
 - No new dependencies without a workspace-level justification in the PR.
-- The log views are virtualized against a cache; keep list rendering O(visible)
-  — reverting to per-row `format!` allocation or rebuilding filters on every
+- The log views are virtualized against a cache; keep list rendering O(visible).
+  Reverting to per-row `format!` allocation or rebuilding filters on every
   keystroke is a regression.
 - No synchronous I/O in `render`. No allocations in hover/blink paths (the
   editor's derived-JSON cache pattern is the reference).

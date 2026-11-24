@@ -1,8 +1,8 @@
 # Security
 
 SingSwitch runs sing-box, which opens a TUN interface and routes all host traffic as `root` on
-macOS or `LocalSystem` on Windows. The boundary below is about one thing: a compromised user
-session, or a malformed profile, must not turn SingSwitch into a way to run any command as root.
+macOS or `LocalSystem` on Windows. This document covers one boundary: a compromised user session
+or a malformed profile must not turn SingSwitch into a way to run any command as root.
 
 ## macOS
 
@@ -51,7 +51,7 @@ On both platforms the daemon runs a sing-box that an ordinary user cannot replac
 root-owned copy at `/usr/local/libexec/singswitch/sing-box`; Windows gets
 `%ProgramData%\singswitch\bin\sing-box.exe` with `libcronet.dll`. Both come from the
 checksum-verified release pinned in `scripts/sing-box.lock`. A Homebrew, WinGet, or `PATH` sing-box
-is used only when no managed copy exists.
+runs only when no managed copy exists.
 
 ## What this does not protect
 
