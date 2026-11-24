@@ -601,7 +601,11 @@ impl ProfileEditorPanel {
                 h_flex()
                     .items_center()
                     .gap(px(8.0))
-                    .child(Icon::new(IconName::TriangleAlert).small().text_color(cx.theme().warning))
+                    .child(
+                        Icon::new(IconName::TriangleAlert)
+                            .small()
+                            .text_color(cx.theme().warning),
+                    )
                     .child(
                         div()
                             .text_xs()
@@ -631,9 +635,12 @@ impl ProfileEditorPanel {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let (border, text_col, icon, label) = match validation {
-            EditorValidationState::Idle => {
-                (cx.theme().border, cx.theme().foreground, IconName::Info, String::new())
-            }
+            EditorValidationState::Idle => (
+                cx.theme().border,
+                cx.theme().foreground,
+                IconName::Info,
+                String::new(),
+            ),
             EditorValidationState::Validating => (
                 cx.theme().border,
                 cx.theme().muted_foreground,
@@ -646,9 +653,12 @@ impl ProfileEditorPanel {
                 IconName::CircleCheck,
                 "Config valid.".to_string(),
             ),
-            EditorValidationState::Invalid(msg) => {
-                (cx.theme().danger, cx.theme().danger, IconName::CircleX, msg.clone())
-            }
+            EditorValidationState::Invalid(msg) => (
+                cx.theme().danger,
+                cx.theme().danger,
+                IconName::CircleX,
+                msg.clone(),
+            ),
         };
 
         let can_force_draft =
@@ -1069,7 +1079,12 @@ impl ProfileEditorPanel {
                         cx.theme().border
                     })
                     .bg(crate::theme::surface(cx))
-                    .child(div().flex_1().w_full().child(Editor::new(&self.json_editor).h(relative(1.0))))
+                    .child(
+                        div()
+                            .flex_1()
+                            .w_full()
+                            .child(Editor::new(&self.json_editor).h(relative(1.0))),
+                    )
                     .child(
                         h_flex()
                             .w_full()
@@ -1085,13 +1100,32 @@ impl ProfileEditorPanel {
                                 Ok(()) => h_flex()
                                     .items_center()
                                     .gap(px(6.0))
-                                    .child(Icon::new(IconName::CircleCheck).xsmall().text_color(cx.theme().success))
-                                    .child(div().font_weight(fonts::EMPHASIS).text_color(cx.theme().success).child("Valid JSON")),
+                                    .child(
+                                        Icon::new(IconName::CircleCheck)
+                                            .xsmall()
+                                            .text_color(cx.theme().success),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_weight(fonts::EMPHASIS)
+                                            .text_color(cx.theme().success)
+                                            .child("Valid JSON"),
+                                    ),
                                 Err(msg) => h_flex()
                                     .items_center()
                                     .gap(px(6.0))
-                                    .child(Icon::new(IconName::CircleX).xsmall().text_color(cx.theme().danger))
-                                    .child(div().font_weight(fonts::EMPHASIS).text_color(cx.theme().danger).truncate().child(msg)),
+                                    .child(
+                                        Icon::new(IconName::CircleX)
+                                            .xsmall()
+                                            .text_color(cx.theme().danger),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_weight(fonts::EMPHASIS)
+                                            .text_color(cx.theme().danger)
+                                            .truncate()
+                                            .child(msg),
+                                    ),
                             })
                             .child(div().text_color(cx.theme().muted_foreground).child(
                                 if cfg!(target_os = "macos") {

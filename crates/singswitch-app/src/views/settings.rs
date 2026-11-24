@@ -187,36 +187,42 @@ fn render_behavior_card(
                 .child("STARTUP AND NOTIFICATIONS"),
         )
         .child(setting_switch_row(
-            "set-launch-login",
-            "Open at login",
-            "Start SingSwitch in the menu bar or tray when you sign in.",
-            settings.launch_at_login,
-            false,
-            false,
+            SwitchRowSpec {
+                id: "set-launch-login",
+                title: "Open at login",
+                description: "Start SingSwitch in the menu bar or tray when you sign in.",
+                checked: settings.launch_at_login,
+                disabled: false,
+                border_top: false,
+            },
             move |checked, _, cx| {
                 store_login.update(cx, |s, cx| s.toggle_launch_at_login(*checked, cx));
             },
             cx,
         ))
         .child(setting_switch_row(
-            "set-auto-ip",
-            "Refresh the public IP after connect",
-            "Look up the public IP at launch and after each switch.",
-            settings.auto_refresh_ip,
-            false,
-            true,
+            SwitchRowSpec {
+                id: "set-auto-ip",
+                title: "Refresh the public IP after connect",
+                description: "Look up the public IP at launch and after each switch.",
+                checked: settings.auto_refresh_ip,
+                disabled: false,
+                border_top: true,
+            },
             move |checked, _, cx| {
                 store_ip.update(cx, |s, cx| s.set_auto_refresh_ip(*checked, cx));
             },
             cx,
         ))
         .child(setting_switch_row(
-            "set-notifications",
-            "Desktop notifications",
-            "Show a system notification when the service switches or fails.",
-            settings.desktop_notifications,
-            false,
-            true,
+            SwitchRowSpec {
+                id: "set-notifications",
+                title: "Desktop notifications",
+                description: "Show a system notification when the service switches or fails.",
+                checked: settings.desktop_notifications,
+                disabled: false,
+                border_top: true,
+            },
             move |checked, _, cx| {
                 store_notify.update(cx, |s, cx| s.set_desktop_notifications(*checked, cx));
             },
@@ -224,13 +230,18 @@ fn render_behavior_card(
         ))
 }
 
-fn setting_switch_row(
+/// A single settings toggle row: title, description, and a bound switch.
+struct SwitchRowSpec {
     id: &'static str,
     title: &'static str,
     description: &'static str,
     checked: bool,
     disabled: bool,
     border_top: bool,
+}
+
+fn setting_switch_row(
+    spec: SwitchRowSpec,
     on_change: impl Fn(&bool, &mut Window, &mut gpui_kit::App) + 'static,
     cx: &gpui_kit::App,
 ) -> impl IntoElement {
@@ -238,9 +249,10 @@ fn setting_switch_row(
         .w_full()
         .justify_between()
         .items_center()
-        .pt(if border_top { px(10.0) } else { px(0.0) })
-        .when(border_top, |row| {
-            row.border_t_1().border_color(cx.theme().border.opacity(0.5))
+        .pt(if spec.border_top { px(10.0) } else { px(0.0) })
+        .when(spec.border_top, |row| {
+            row.border_t_1()
+                .border_color(cx.theme().border.opacity(0.5))
         })
         .child(
             v_flex()
@@ -250,20 +262,20 @@ fn setting_switch_row(
                         .text_sm()
                         .font_medium()
                         .text_color(cx.theme().foreground)
-                        .child(title),
+                        .child(spec.title),
                 )
                 .child(
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(description),
+                        .child(spec.description),
                 ),
         )
         .child(
-            Switch::new(id)
-                .checked(checked)
+            Switch::new(spec.id)
+                .checked(spec.checked)
                 .color(cx.theme().success)
-                .disabled(disabled)
+                .disabled(spec.disabled)
                 .on_change(on_change),
         )
 }

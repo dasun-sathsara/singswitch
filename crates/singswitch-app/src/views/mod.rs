@@ -160,7 +160,11 @@ impl WorkspaceShell {
                                 el.hover(|style| style.bg(cx.theme().secondary.opacity(0.7)))
                             })
                             .text_size(px(13.0))
-                            .font_weight(if is_active { fonts::EMPHASIS } else { FontWeight::NORMAL })
+                            .font_weight(if is_active {
+                                fonts::EMPHASIS
+                            } else {
+                                FontWeight::NORMAL
+                            })
                             .text_color(if is_active {
                                 cx.theme().foreground
                             } else {

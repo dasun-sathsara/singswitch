@@ -486,9 +486,9 @@ impl ProfilesView {
                                         .icon(IconName::Copy)
                                         .accessibility_label("Copy public IP")
                                         .on_click(move |_, _, cx| {
-                                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
-                                                ip.clone(),
-                                            ));
+                                            cx.write_to_clipboard(
+                                                gpui_kit::ClipboardItem::new_string(ip.clone()),
+                                            );
                                         }),
                                 )
                             })
@@ -653,7 +653,13 @@ impl ProfilesView {
                             .text_xs()
                             .font_weight(fonts::EMPHASIS)
                             .text_color(cx.theme().muted_foreground)
-                            .child(div().flex_1().min_w(px(220.0)).pl(px(32.0)).child("PROFILE"))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(220.0))
+                                    .pl(px(32.0))
+                                    .child("PROFILE"),
+                            )
                             .child(div().w(px(200.0)).flex_none().child("SERVER / ENDPOINT"))
                             .child(div().w(px(110.0)).flex_none().child("STATUS"))
                             .child(div().w(px(150.0)).flex_none()),
@@ -678,7 +684,9 @@ impl ProfilesView {
                                         }),
                                 )
                             })
-                            .children(profiles.map(|profile| self.render_profile(profile, store, cx))),
+                            .children(
+                                profiles.map(|profile| self.render_profile(profile, store, cx)),
+                            ),
                     ),
             )
     }
@@ -745,18 +753,21 @@ impl ProfilesView {
                                 })
                                 .toggled(expanded)
                                 .accessibility_label(format!("{} details", profile.name))
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.expanded_profile =
-                                        if view.expanded_profile.as_ref() == Some(&detail_name) {
+                                .on_click(cx.listener(
+                                    move |view, _, _, cx| {
+                                        view.expanded_profile = if view.expanded_profile.as_ref()
+                                            == Some(&detail_name)
+                                        {
                                             None
                                         } else {
                                             Some(detail_name.clone())
                                         };
-                                    select.update(cx, |s, cx| {
-                                        s.select_profile(Some(detail_name.clone()), cx)
-                                    });
-                                    cx.notify();
-                                })),
+                                        select.update(cx, |s, cx| {
+                                            s.select_profile(Some(detail_name.clone()), cx)
+                                        });
+                                        cx.notify();
+                                    },
+                                )),
                             )
                             .child(
                                 Icon::new(if live {

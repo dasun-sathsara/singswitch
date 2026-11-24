@@ -7,10 +7,14 @@ use crate::error::{Result, SingSwitchError, first_line};
 use crate::runner::Runner;
 use crate::service::{Health, Manager, RunState};
 
-static SC_STATE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"STATE\s*:\s*(\d+)\s+(\S+)").expect("regex"));
-static SC_PID_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"PID\s*:\s*(\d+)").expect("regex"));
+static SC_STATE_RE: LazyLock<Regex> = LazyLock::new(|| literal_regex(r"STATE\s*:\s*(\d+)\s+(\S+)"));
+static SC_PID_RE: LazyLock<Regex> = LazyLock::new(|| literal_regex(r"PID\s*:\s*(\d+)"));
+
+// Same policy as launchd.rs: constant patterns; a bad one is a program bug.
+fn literal_regex(pattern: &'static str) -> Regex {
+    #[allow(clippy::expect_used)]
+    Regex::new(pattern).expect("constant regex must compile")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WinRawState {

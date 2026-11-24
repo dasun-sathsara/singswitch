@@ -1,9 +1,6 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
-extern crate gpui_kit as gpui;
-
-#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod actions;
 #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod assets;

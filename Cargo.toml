@@ -10,7 +10,10 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-authors = ["Dasun Sathsara <x@dasunsathsara.com>"]
+authors = ["Dasun Sathsara <dasun@dasunsathsara.com>"]
+repository = "https://github.com/dasun-sathsara/singswitch"
+keywords = ["sing-box", "proxy", "vpn", "tun"]
+categories = ["network-programming"]
 rust-version = "1.89"
 
 [workspace.dependencies]
@@ -33,6 +36,39 @@ objc2-app-kit = "0.3.2"
 objc2-foundation = "0.3.2"
 gpui-kit = { version = "0.10.0", features = ["syntect"] }
 gpui-tray = { version = "0.3.0", default-features = false, features = ["gpui-kit", "menu-state"] }
+
+[workspace.lints.rust]
+# Warnings that gate CI. Removing a line here weakens `make check` / gate.sh;
+# the gate script asserts `unused_must_use = "deny"` is present. Changes to this
+# table must follow the exception process in AGENTS.md (same-commit edits, with
+# reasoning) — do not relax these to make a branch pass.
+unused_must_use = "deny"
+nonstandard_style = { level = "warn", priority = -1 }
+future_incompatible = { level = "warn", priority = -1 }
+rust_2018_idioms = { level = "warn", priority = -1 }
+# `Context<T>`/`Window` elide lifetimes everywhere in gpui-style code; making
+# every call site spell `Context<'_, T>` is churn with no safety value here.
+# Kept as warn in the toolchain but allowed at the crate level because the
+# gpui API shape (not our code) triggers all 83 instances.
+elided_lifetimes_in_paths = "allow"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -2 }
+suspicious = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+# Review-triggered module-level allow is the escape hatch, not a lint downgrade.
+unwrap_used = { level = "warn", priority = -1 }
+expect_used = { level = "warn", priority = -1 }
+panic = { level = "warn", priority = -1 }
+print_stdout = { level = "warn", priority = -1 }
+print_stderr = { level = "warn", priority = -1 }
+dbg_macro = { level = "warn", priority = -1 }
+# Bundle size is guarded; growth must be justified in the PR. The `cargo`
+# group fires on transitive tree facts we do not control (duplicate syn from
+# upstream crates), so only its correctness-relevant lint stays on: metadata.
+cargo = { level = "warn", priority = -1 }
+multiple_crate_versions = "allow"
 
 [profile.release]
 opt-level = 3

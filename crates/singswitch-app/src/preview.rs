@@ -43,11 +43,13 @@ pub fn preview_theme() -> Option<ThemePreference> {
             };
         }
     }
-    std::env::var("SINGSWITCH_THEME").ok().map(|t| match t.to_lowercase().as_str() {
-        "dark" => ThemePreference::Dark,
-        "light" => ThemePreference::Light,
-        _ => ThemePreference::System,
-    })
+    std::env::var("SINGSWITCH_THEME")
+        .ok()
+        .map(|t| match t.to_lowercase().as_str() {
+            "dark" => ThemePreference::Dark,
+            "light" => ThemePreference::Light,
+            _ => ThemePreference::System,
+        })
 }
 
 pub fn apply_preview_state(scene: &str, store: &Entity<AppStore>, cx: &mut App) {
@@ -283,17 +285,50 @@ fn setup_populated_snapshot(s: &mut AppStore) {
 
 fn setup_sample_logs(s: &mut AppStore) {
     let raw_entries = [
-        (LogLevel::Info, "14:22:01.102 sing-box 1.11.0 initialized with configuration /usr/local/etc/sing-box/config.json"),
-        (LogLevel::Info, "14:22:01.105 [inbound/tun-in] inbound created: interface utun123, mtu 9000, stack system"),
-        (LogLevel::Info, "14:22:01.112 [router] default route rules initialized (14 rules loaded)"),
-        (LogLevel::Info, "14:22:01.140 [outbound/vless-out] TLS Reality handshake completed with 104.28.19.42:443"),
-        (LogLevel::Info, "14:22:02.320 [inbound/tun-in] connection from 198.18.0.1:52194 to tcp:1.1.1.1:443 routed to [outbound/vless-out]"),
-        (LogLevel::Info, "14:22:05.811 [dns] query response: resolved api.github.com to 140.82.121.4 (via remote DNS)"),
-        (LogLevel::Warn, "14:22:18.490 [outbound/vless-out] handshake latency 142ms exceeded target threshold 100ms"),
-        (LogLevel::Info, "14:22:25.100 [router] matched rule geoip:private -> direct"),
-        (LogLevel::Error, "14:23:05.612 [outbound/vless-out] connection reset by peer (server closed stream 4)"),
-        (LogLevel::Info, "14:23:06.015 [outbound/vless-out] re-established connection to 104.28.19.42:443 (tls reality)"),
-        (LogLevel::Info, "14:23:40.910 [inbound/tun-in] TCP flow finished: 2.4 MB ingress, 480 KB egress"),
+        (
+            LogLevel::Info,
+            "14:22:01.102 sing-box 1.11.0 initialized with configuration /usr/local/etc/sing-box/config.json",
+        ),
+        (
+            LogLevel::Info,
+            "14:22:01.105 [inbound/tun-in] inbound created: interface utun123, mtu 9000, stack system",
+        ),
+        (
+            LogLevel::Info,
+            "14:22:01.112 [router] default route rules initialized (14 rules loaded)",
+        ),
+        (
+            LogLevel::Info,
+            "14:22:01.140 [outbound/vless-out] TLS Reality handshake completed with 104.28.19.42:443",
+        ),
+        (
+            LogLevel::Info,
+            "14:22:02.320 [inbound/tun-in] connection from 198.18.0.1:52194 to tcp:1.1.1.1:443 routed to [outbound/vless-out]",
+        ),
+        (
+            LogLevel::Info,
+            "14:22:05.811 [dns] query response: resolved api.github.com to 140.82.121.4 (via remote DNS)",
+        ),
+        (
+            LogLevel::Warn,
+            "14:22:18.490 [outbound/vless-out] handshake latency 142ms exceeded target threshold 100ms",
+        ),
+        (
+            LogLevel::Info,
+            "14:22:25.100 [router] matched rule geoip:private -> direct",
+        ),
+        (
+            LogLevel::Error,
+            "14:23:05.612 [outbound/vless-out] connection reset by peer (server closed stream 4)",
+        ),
+        (
+            LogLevel::Info,
+            "14:23:06.015 [outbound/vless-out] re-established connection to 104.28.19.42:443 (tls reality)",
+        ),
+        (
+            LogLevel::Info,
+            "14:23:40.910 [inbound/tun-in] TCP flow finished: 2.4 MB ingress, 480 KB egress",
+        ),
     ];
 
     s.error_logs = raw_entries

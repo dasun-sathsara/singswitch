@@ -1,0 +1,46 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Gate (fmt, clippy -D warnings, icons, build, tests, lint-baseline guard)
+        run: ./scripts/gate.sh
+
+      # ---------------------------------------------------------------------------
+      # Tamper evidence, not prevention: anyone with push access can still edit
+      # these files in a commit that also touches the gate. The job's job is to
+      # make a silent weakening impossible — every lint downgrade must show up
+      # here as a red build or an explicitly bypassed step.
+      # ---------------------------------------------------------------------------
+      - name: Verify privileged-path changes are declared
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin ${tb_target}
+          if git diff --name-only origin/${{ github.base_ref }}...HEAD \
+              | grep -E '(^scripts/(install|uninstall)|sudoers|elevation)'; then
+            COMMIT_MSG=$(git log --format=%B -1)
+            if ! echo "$COMMIT_MSG" | grep -q 'security:'; then
+              echo "::error::Privileged-path files changed without a 'security:' trailer in the commit message. See AGENTS.md."
+              exit 1
+            fi
+          fi
+        env:
+          tb_target: ${{ github.base_ref }}

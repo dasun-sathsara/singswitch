@@ -7,14 +7,21 @@ use crate::error::{Result, SingSwitchError, first_line};
 use crate::runner::Runner;
 use crate::service::{Health, Manager, RunState};
 
-static STATE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*state\s*=\s*(\S+)").expect("regex"));
-static PID_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*pid\s*=\s*(\d+)").expect("regex"));
-static RUNS_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*runs\s*=\s*(\d+)").expect("regex"));
+// These parse constant literals; failure would be a programming bug caught by
+// the first test run, not a runtime condition a user can hit. Synthesizing a
+// Result carrier for them adds a branch that can never fire.
+fn literal_regex(pattern: &'static str) -> Regex {
+    // Panicking here is deliberate: the patterns above are compile-time
+    // constants, and a bad one must fail loudly and immediately.
+    #[allow(clippy::expect_used, clippy::missing_panics_doc)]
+    Regex::new(pattern).expect("constant regex must compile")
+}
+
+static STATE_RE: LazyLock<Regex> = LazyLock::new(|| literal_regex(r"(?m)^\s*state\s*=\s*(\S+)"));
+static PID_RE: LazyLock<Regex> = LazyLock::new(|| literal_regex(r"(?m)^\s*pid\s*=\s*(\d+)"));
+static RUNS_RE: LazyLock<Regex> = LazyLock::new(|| literal_regex(r"(?m)^\s*runs\s*=\s*(\d+)"));
 static LAST_EXIT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*last exit (?:code|status)\s*=\s*(.+)$").expect("regex"));
+    LazyLock::new(|| literal_regex(r"(?m)^\s*last exit (?:code|status)\s*=\s*(.+)$"));
 
 const NOT_LOADED_MARKERS: &[&str] = &[
     "could not find service",

@@ -1,3 +1,8 @@
+// The CLI's whole job is printing to stdout/stderr; library code stays gated by
+// the workspace lint table. This crate-level allow is the documented exception
+// (AGENTS.md, exception process).
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 mod render;
 
 use std::env;

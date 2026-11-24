@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 rust-version.workspace = true
 description = "Command-line interface and Windows service helper for singswitch"
 
@@ -19,3 +22,9 @@ serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-service.workspace = true
+
+[lints]
+workspace = true
+
+# The CLI's whole job is printing to stdout/stderr; library code stays
+# gated. Overrides go in crate-level attributes where needed.

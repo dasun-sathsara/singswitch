@@ -111,8 +111,12 @@ pub fn join_labels(fields: &[Field]) -> String {
         [one] => (*one).to_string(),
         [a, b] => format!("{a} and {b}"),
         _ => {
-            let (last, rest) = labels.split_last().expect("non-empty");
-            format!("{} and {last}", rest.join(", "))
+            // Unreachable in practice: this arm requires len >= 3, but the
+            // pattern match is kept total rather than panicking on an edge.
+            match labels.split_last() {
+                Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+                None => String::new(),
+            }
         }
     }
 }

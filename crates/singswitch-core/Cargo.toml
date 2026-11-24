@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 rust-version.workspace = true
 description = "Profile validation, service control, and diagnostics for singswitch"
 
@@ -28,3 +31,6 @@ windows-sys = { workspace = true, features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[lints]
+workspace = true
