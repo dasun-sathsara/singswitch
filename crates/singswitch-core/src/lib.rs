@@ -1,5 +1,6 @@
 pub mod activator;
 pub mod checker;
+pub mod clash_groups;
 pub mod controller;
 pub mod doctor;
 pub mod elevation;

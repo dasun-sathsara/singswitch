@@ -1,5 +1,6 @@
 pub mod editor;
 pub mod logs;
+pub mod nodes;
 pub mod profiles;
 pub mod settings;
 
@@ -19,6 +20,7 @@ use crate::shell::set_dock_visible;
 use crate::state::{AppStore, BannerTone, NoticeOrigin};
 use crate::theme::ThemePreference;
 use crate::views::logs::LogsView;
+use crate::views::nodes::NodesStrip;
 use crate::views::profiles::ProfilesView;
 use crate::views::settings::SettingsView;
 
@@ -27,6 +29,7 @@ pub struct WorkspaceShell {
     profiles: Entity<ProfilesView>,
     logs: Entity<LogsView>,
     settings: Entity<SettingsView>,
+    nodes: Entity<NodesStrip>,
     _subs: Vec<Subscription>,
 }
 
@@ -64,6 +67,7 @@ impl WorkspaceShell {
         let profiles = cx.new(|cx| ProfilesView::new(store.clone(), window, cx));
         let logs = cx.new(|cx| LogsView::new(store.clone(), window, cx));
         let settings = cx.new(|_| SettingsView::new(store.clone()));
+        let nodes = cx.new(|cx| NodesStrip::new(store.clone(), window, cx));
 
         let mut subs = vec![cx.observe(&store, |_, _, cx| cx.notify())];
 
@@ -87,6 +91,7 @@ impl WorkspaceShell {
             profiles,
             logs,
             settings,
+            nodes,
             _subs: subs,
         }
     }
@@ -241,6 +246,9 @@ impl Render for WorkspaceShell {
                 notice_strip(&self.store, NoticeOrigin::Toolbar, cx),
                 |el, notice| el.child(div().w_full().px(px(14.0)).py(px(4.0)).child(notice)),
             )
+            // Sits between the toolbar and the active stage, only on Connections:
+            // the node a selector points at is part of that screen's story.
+            .child(self.nodes.clone())
             .child(
                 div()
                     .flex_1()
