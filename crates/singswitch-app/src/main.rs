@@ -203,9 +203,9 @@ mod desktop {
     ///
     /// Keeping it retains the whole shell: the editor rope and both log buffers,
     /// for as long as the app sits in the tray. Unsaved buffers are stashed in
-    /// the store above, so releasing the shell does not drop them. Both close
-    /// paths must call this, or clicking the window's close button leaks what
-    /// Cmd-W releases.
+    /// the store above, so releasing the shell does not drop them. Every path
+    /// that observes the window gone must call this, or the shell outlives the
+    /// window it was built for.
     pub(crate) fn forget_main_window(cx: &mut App) {
         // The shell is about to be dropped, so anything still only in the editor
         // buffer has to be stashed first or it is lost with it.
@@ -250,9 +250,9 @@ mod desktop {
                 return;
             }
             // Stale handle: the window went away without the close path running.
-            let g = cx.global_mut::<AppGlobalState>();
-            g.main_window = None;
-            g.main_view = None;
+            // `forget_main_window` already stashes the editor buffer, so the
+            // draft is not lost when the shell is dropped here.
+            forget_main_window(cx);
         }
 
         let (store, width, height) = {
