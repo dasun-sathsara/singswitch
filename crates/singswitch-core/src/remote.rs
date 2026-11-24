@@ -69,7 +69,7 @@ pub fn fetch_remote_profile(raw_url: &str) -> Result<Vec<u8>> {
     let mut reader = response
         .into_body()
         .into_reader()
-        .take((MAX_REMOTE_PROFILE_BYTES + 1) as u64);
+        .take(u64::try_from(MAX_REMOTE_PROFILE_BYTES + 1).unwrap_or(u64::MAX));
     reader.read_to_end(&mut body).map_err(|err| {
         SingSwitchError::general(format!("could not download {url}: {err}"))
             .with_hint("check the URL and that this machine is online")

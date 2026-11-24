@@ -318,16 +318,6 @@ impl ProfileFormModel {
         Ok((text, skipped))
     }
 
-    /// Apply changes onto an existing JSON string without discarding unrelated fields.
-    pub fn apply_to_json_str(&self, raw: &str) -> Result<String> {
-        let mut root: Value = serde_json::from_str(raw)
-            .map_err(|e| SingSwitchError::validation(format!("invalid JSON: {e}")))?;
-        let _skipped = self.apply_to_value(&mut root);
-        serde_json::to_string_pretty(&root)
-            .map(|s| format!("{s}\n"))
-            .map_err(|e| SingSwitchError::general(format!("could not serialize JSON: {e}")))
-    }
-
     /// Write this model into `root`, returning the sections that could not be
     /// applied because the config has no place to put them.
     ///
@@ -418,7 +408,9 @@ impl ProfileFormModel {
             return;
         }
 
-        let tls = ensure_object(out, "tls");
+        let Some(tls) = ensure_object(out, "tls") else {
+            return;
+        };
         tls.insert("enabled".to_string(), Value::Bool(true));
         if !self.server_name.is_empty() {
             tls.insert(
@@ -430,29 +422,31 @@ impl ProfileFormModel {
         }
 
         if self.utls_enabled {
-            let utls = ensure_object(tls, "utls");
-            utls.insert("enabled".to_string(), Value::Bool(true));
-            if !self.utls_fingerprint.is_empty() {
-                utls.insert(
-                    "fingerprint".to_string(),
-                    Value::String(self.utls_fingerprint.clone()),
-                );
+            if let Some(utls) = ensure_object(tls, "utls") {
+                utls.insert("enabled".to_string(), Value::Bool(true));
+                if !self.utls_fingerprint.is_empty() {
+                    utls.insert(
+                        "fingerprint".to_string(),
+                        Value::String(self.utls_fingerprint.clone()),
+                    );
+                }
             }
         } else if let Some(utls) = tls.get_mut("utls").and_then(Value::as_object_mut) {
             utls.insert("enabled".to_string(), Value::Bool(false));
         }
 
         if self.reality_enabled {
-            let reality = ensure_object(tls, "reality");
-            reality.insert("enabled".to_string(), Value::Bool(true));
-            reality.insert(
-                "public_key".to_string(),
-                Value::String(self.reality_public_key.clone()),
-            );
-            reality.insert(
-                "short_id".to_string(),
-                Value::String(self.reality_short_id.clone()),
-            );
+            if let Some(reality) = ensure_object(tls, "reality") {
+                reality.insert("enabled".to_string(), Value::Bool(true));
+                reality.insert(
+                    "public_key".to_string(),
+                    Value::String(self.reality_public_key.clone()),
+                );
+                reality.insert(
+                    "short_id".to_string(),
+                    Value::String(self.reality_short_id.clone()),
+                );
+            }
         } else if let Some(reality) = tls.get_mut("reality").and_then(Value::as_object_mut) {
             reality.insert("enabled".to_string(), Value::Bool(false));
         }
@@ -490,22 +484,27 @@ fn set_or_remove_if_present(obj: &mut Map<String, Value>, key: &str, value: &str
     }
 }
 
-fn ensure_object<'a>(parent: &'a mut Map<String, Value>, key: &str) -> &'a mut Map<String, Value> {
-    match parent.entry(key.to_string()) {
+/// The `key` entry of `parent`, replaced with a fresh object when it holds
+/// anything else.
+///
+/// Returning `Option` keeps the invariant in the type instead of in an
+/// `unreachable!`: the tree is user input, and a panic on a save aborts the GUI.
+/// `None` cannot follow the replacement below; callers treat it as "nothing to
+/// write".
+fn ensure_object<'a>(
+    parent: &'a mut Map<String, Value>,
+    key: &str,
+) -> Option<&'a mut Map<String, Value>> {
+    let slot = match parent.entry(key.to_string()) {
         Entry::Occupied(mut entry) => {
             if !entry.get().is_object() {
                 entry.insert(Value::Object(Map::new()));
             }
-            match entry.into_mut() {
-                Value::Object(map) => map,
-                _ => unreachable!("replaced non-object value above"),
-            }
+            entry.into_mut()
         }
-        Entry::Vacant(entry) => match entry.insert(Value::Object(Map::new())) {
-            Value::Object(map) => map,
-            _ => unreachable!("inserted object value above"),
-        },
-    }
+        Entry::Vacant(entry) => entry.insert(Value::Object(Map::new())),
+    };
+    slot.as_object_mut()
 }
 
 fn find_tun_inbound(root: &Value) -> Option<&Map<String, Value>> {
@@ -556,4 +555,40 @@ fn str_field(obj: &Map<String, Value>, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_object_tls_is_replaced_instead_of_panicking() {
+        // `tls` is a number here; the save must replace it, not abort.
+        let mut root = json!({
+            "outbounds": [{"type": "vless", "server": "a", "tls": 7}]
+        });
+        let mut model = ProfileFormModel::from_value(&root);
+        assert!(!model.tls_enabled);
+        model.tls_enabled = true;
+        model.server_name = "example.com".to_string();
+
+        model.apply_to_value(&mut root);
+
+        assert_eq!(root["outbounds"][0]["tls"]["enabled"], json!(true));
+        assert_eq!(
+            root["outbounds"][0]["tls"]["server_name"],
+            json!("example.com")
+        );
+    }
+
+    #[test]
+    fn out_of_range_port_and_mtu_keep_the_defaults() {
+        let root = json!({
+            "inbounds": [{"type": "tun", "mtu": 5_000_000_000u64}],
+            "outbounds": [{"type": "vless", "server_port": 70_000u32}]
+        });
+        let model = ProfileFormModel::from_value(&root);
+        assert_eq!(model.tun_mtu, DEFAULT_TUN_MTU);
+        assert_eq!(model.server_port, DEFAULT_SERVER_PORT);
+    }
 }

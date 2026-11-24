@@ -114,7 +114,16 @@ impl LogLevel {
     /// `timestamp: true`) or `LEVEL[0012] msg` (without), optionally after an
     /// ANSI colour code.
     pub fn classify(line: &str) -> Self {
-        let line = &strip_ansi(line);
+        // Only pay for a stripped copy when an escape byte is actually present.
+        // Callers already hand this a stripped line, so the unconditional
+        // `strip_ansi` here copied every log line a second time.
+        if line.as_bytes().contains(&0x1b) {
+            return Self::classify_stripped(&strip_ansi(line));
+        }
+        Self::classify_stripped(line)
+    }
+
+    fn classify_stripped(line: &str) -> Self {
         let Some(token) = level_token(line) else {
             // A crashed service writes Go panic output, not a levelled log
             // line. Without this the last words before a crash carried no
