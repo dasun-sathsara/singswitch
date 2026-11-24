@@ -672,7 +672,9 @@ fn render_log_rows(
 
             Some(
                 h_flex()
-                    .id(SharedString::from(format!("log-row-{rec_idx}")))
+                    // Same element id as `"log-row-{rec_idx}"`, built without
+                    // formatting a String for every visible row every frame.
+                    .id(("log-row", rec_idx))
                     .w_full()
                     .h(px(22.0))
                     .px(px(10.0))

@@ -16,6 +16,7 @@ use gpui_kit::{
     div, prelude::FluentBuilder as _, px, relative,
 };
 use singswitch_core::form_model::{DEFAULT_SERVER_PORT, DEFAULT_TUN_MTU, ProfileFormModel};
+use singswitch_core::readiness::Field;
 use std::rc::Rc;
 
 use crate::fonts;
@@ -50,6 +51,10 @@ pub struct ProfileEditorPanel {
     /// it as JSON on every frame — twice a second while a caret blinked.
     derived_json: SharedString,
     derived_syntax: Option<String>,
+    /// Fields still missing from `derived_json`; `None` when it does not parse.
+    ///
+    /// Readiness re-parsed the whole document on every frame for this answer.
+    derived_missing: Option<Vec<Field>>,
 
     json_editor: Entity<EditorState>,
 
@@ -90,6 +95,7 @@ impl ProfileEditorPanel {
             last_submitted: None,
             derived_json: SharedString::default(),
             derived_syntax: None,
+            derived_missing: None,
             active_tab: if store.read(cx).editor_json_mode {
                 EditorTab::Json
             } else {
@@ -1202,37 +1208,58 @@ impl Render for ProfileEditorPanel {
                 .into_any_element();
         }
 
-        // Materialize once. Todos and syntax are cached against the text, so a
-        // repaint for an unrelated reason reuses them instead of re-scanning.
-        let live_json = self.json_editor.read(cx).value();
-        if live_json != self.derived_json {
-            self.derived_syntax = serde_json::from_str::<serde_json::Value>(&live_json)
-                .err()
-                .map(|err| format!("JSON syntax error: {err}"));
-            self.derived_json = live_json.clone();
+        // Materialize once. Todos, syntax, and readiness are cached against the
+        // text, so a repaint for an unrelated reason reuses them instead of
+        // re-scanning. The buffer is compared in place and only copied out of
+        // the editor when it actually changed.
+        let buffer_changed = {
+            let editor = self.json_editor.read(cx);
+            editor.text() != self.derived_json.as_str()
+        };
+        if buffer_changed {
+            let live_json = self.json_editor.read(cx).value();
+            match serde_json::from_str::<serde_json::Value>(&live_json) {
+                Ok(root) => {
+                    self.derived_syntax = None;
+                    self.derived_missing = Some(ProfileFormModel::from_value(&root).missing());
+                }
+                Err(err) => {
+                    self.derived_syntax = Some(format!("JSON syntax error: {err}"));
+                    self.derived_missing = None;
+                }
+            }
+            self.derived_json = live_json;
         }
         // Readiness comes from whichever document the user is looking at: the
         // guided form on that tab, the JSON buffer otherwise. Deriving it from
         // the buffer alone meant typing the last value into the form left the
         // strip listing it and "Save & Connect" disabled until a save.
-        let readiness = match self.active_tab {
-            EditorTab::Guided => self
-                .build_model_from_inputs(cx)
-                .map(|model| model.missing()),
-            EditorTab::Json => ProfileFormModel::from_json_str(&live_json)
+        //
+        // The JSON side is answered from the parse cached above, so a repaint
+        // no longer re-parses the document to fill in this strip.
+        let guided_readiness = (self.active_tab == EditorTab::Guided).then(|| {
+            self.build_model_from_inputs(cx)
                 .map(|model| model.missing())
-                .map_err(|err| err.to_string()),
-        };
-        let can_activate = readiness.as_ref().is_ok_and(Vec::is_empty);
-        let form_error = (self.active_tab == EditorTab::Guided)
-            .then(|| readiness.as_ref().err().cloned())
-            .flatten();
-        let live_missing = readiness.unwrap_or_default();
+        });
+        let (form_error, live_missing, can_activate): (Option<String>, &[Field], bool) =
+            if let Some(readiness) = &guided_readiness {
+                match readiness {
+                    Ok(missing) => (None, missing, missing.is_empty()),
+                    Err(err) => (Some(err.clone()), &[], false),
+                }
+            } else {
+                // No cached parse means the buffer does not parse, so nothing
+                // about it is ready.
+                match &self.derived_missing {
+                    Some(missing) => (None, missing, missing.is_empty()),
+                    None => (None, &[], false),
+                }
+            };
         let syntax_status = match (&self.derived_syntax, self.active_tab) {
             (Some(err), EditorTab::Json) => Err(err.clone()),
             _ => Ok(()),
         };
-        let dirty = self.is_dirty_against(&live_json, cx);
+        let dirty = self.is_dirty_against(&self.derived_json, cx);
         let validation = self.active_validation_state(&profile_name, cx);
 
         let (is_busy, is_active, is_active_running) = {
@@ -1287,12 +1314,25 @@ impl ProfileEditorPanel {
         if target != profile_name || *state == EditorValidationState::Idle {
             return None;
         }
-        if *state != EditorValidationState::Validating
-            && self.validated_snapshot.as_ref() != Some(&self.current_validation_key(cx))
-        {
+        if *state != EditorValidationState::Validating && !self.validation_snapshot_matches(cx) {
             return None;
         }
         Some(state.clone())
+    }
+
+    /// Whether the document still equals the one the last validation ran on.
+    ///
+    /// The JSON tab compares against `derived_json`, which `render` has already
+    /// refreshed for this frame, instead of copying the whole buffer out of the
+    /// editor on every frame the banner is on screen.
+    fn validation_snapshot_matches(&self, cx: &App) -> bool {
+        let Some(snapshot) = self.validated_snapshot.as_ref() else {
+            return false;
+        };
+        match self.active_tab {
+            EditorTab::Json => snapshot.as_str() == self.derived_json.as_str(),
+            EditorTab::Guided => *snapshot == self.current_validation_key(cx),
+        }
     }
 }
 
@@ -1323,10 +1363,7 @@ fn open_save_draft_dialog(
     });
 }
 
-fn render_missing_strip(
-    missing: Vec<singswitch_core::readiness::Field>,
-    cx: &App,
-) -> impl IntoElement {
+fn render_missing_strip(missing: &[Field], cx: &App) -> impl IntoElement {
     h_flex()
         .w_full()
         .flex_wrap()
@@ -1341,7 +1378,7 @@ fn render_missing_strip(
         )
         .children(
             missing
-                .into_iter()
+                .iter()
                 .map(|f| Tag::warning().xsmall().child(f.label())),
         )
 }
