@@ -163,7 +163,10 @@ enum Commands {
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => std::process::exit(exit_clap_error(&err)),
+    };
     let theme = Theme::new(RenderOptions::resolve(cli.plain, cli.no_color));
 
     if let Some(req_path) = &cli.elevated_op {
@@ -204,13 +207,13 @@ fn main() {
     }
 
     if let Some(Commands::Agent { foreground }) = &cli.command {
-        match run_agent_command(*foreground) {
-            Ok(()) => std::process::exit(0),
-            Err(err) => {
-                eprintln!("{}", theme.render_error(&err));
-                std::process::exit(err.code.as_i32());
-            }
-        }
+        // Routed through the same reporter as every other command so `--json`
+        // still gets an envelope and a failed SCM registration keeps its hints.
+        let code = match run_agent_command(*foreground) {
+            Ok(()) => ExitCode::Ok,
+            Err(err) => report_error(&cli, &theme, &err),
+        };
+        std::process::exit(code.as_i32());
     }
 
     let code = match Controller::from_system(trace) {
@@ -221,6 +224,48 @@ fn main() {
         Err(err) => report_error(&cli, &theme, &err),
     };
     std::process::exit(code.as_i32());
+}
+
+/// Report a clap parse failure and return the exit code for it.
+///
+/// clap exits `2` on a usage error, but this CLI already spent `2` on
+/// "validation" (docs/cli-json.md), so a script reading the status could not
+/// tell a typo from a rejected config. Usage errors are `1`, and `--json` still
+/// produces one document on stdout like every other failure.
+fn exit_clap_error(err: &clap::Error) -> i32 {
+    use clap::error::ErrorKind;
+
+    // Help and version are not failures: clap prints them on stdout and its own
+    // code is already 0.
+    if matches!(
+        err.kind(),
+        ErrorKind::DisplayHelp
+            | ErrorKind::DisplayVersion
+            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    ) {
+        let _ = err.print();
+        return err.exit_code();
+    }
+
+    if wants_json() {
+        let mut payload = serde_json::Map::new();
+        payload.insert("error".into(), json!(err.to_string().trim_end()));
+        payload.insert("code".into(), json!(ExitCode::General.as_i32()));
+        payload.insert(
+            "hints".into(),
+            json!(["run `singswitch --help` to see the accepted arguments"]),
+        );
+        let _ = emit_json(Value::Object(payload));
+        return ExitCode::General.as_i32();
+    }
+
+    let _ = err.print();
+    ExitCode::General.as_i32()
+}
+
+/// Whether argv asked for JSON, for the paths that run before a `Cli` exists.
+fn wants_json() -> bool {
+    env::args_os().any(|arg| arg == "--json")
 }
 
 fn run(cli: &Cli, ctrl: &Controller, theme: &Theme) -> singswitch_core::error::Result<()> {
@@ -291,8 +336,14 @@ fn run_root(cli: &Cli, ctrl: &Controller, theme: &Theme) -> singswitch_core::err
     if choice == 0 {
         return cmd_off(cli, ctrl, theme);
     }
-    let Some(selected) = snap.profiles.get(choice - 1) else {
-        return Err(SingSwitchError::general("selection out of range"));
+    let Some(selected) = choice
+        .checked_sub(1)
+        .and_then(|index| snap.profiles.get(index))
+    else {
+        return Err(SingSwitchError::general(format!(
+            "{choice} is not one of the listed profiles"
+        ))
+        .with_hint("pick a number from the list, or 0 to turn sing-box off"));
     };
     cmd_use(cli, ctrl, theme, &selected.name)
 }
@@ -316,7 +367,7 @@ fn cmd_list(cli: &Cli, ctrl: &Controller, theme: &Theme) -> singswitch_core::err
                 })
             })
             .collect();
-        return emit_json(&json!({ "profiles": entries }));
+        return emit_json(json!({ "profiles": entries }));
     }
     if cli.quiet {
         return Ok(());
@@ -361,7 +412,7 @@ fn print_status_view(
         if let Some(broken) = &view.broken {
             payload.insert("broken".into(), json!(broken));
         }
-        return emit_json(&Value::Object(payload));
+        return emit_json(Value::Object(payload));
     }
     if cli.quiet {
         return Ok(());
@@ -390,7 +441,7 @@ fn cmd_use(
         ctrl.activate(name)?;
     }
     if cli.json {
-        return emit_json(&json!({ "profile": name, "state": "running" }));
+        return emit_json(json!({ "profile": name, "state": "running" }));
     }
     if !cli.quiet {
         println!("{}", theme.ok(&format!("now using {name}")));
@@ -403,12 +454,24 @@ fn cmd_off(cli: &Cli, ctrl: &Controller, theme: &Theme) -> singswitch_core::erro
         ctrl.stop()?;
     }
     if cli.json {
-        return emit_json(&json!({ "state": "stopped" }));
+        return emit_json(json!({ "state": "stopped" }));
     }
     if !cli.quiet {
         println!("{}", theme.ok("sing-box stopped"));
     }
     Ok(())
+}
+
+/// Current byte length of the log, so `-n 0` can start following from the end.
+fn log_len(path: &Path) -> singswitch_core::error::Result<u64> {
+    match std::fs::metadata(path) {
+        Ok(meta) => Ok(meta.len()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(err) => Err(SingSwitchError::general(format!(
+            "could not read the log at {}: {err}",
+            path.display()
+        ))),
+    }
 }
 
 fn cmd_logs(
@@ -429,18 +492,27 @@ fn cmd_logs(
         ]));
     }
 
-    let (initial, mut offset) = read_tail_lines(path, lines)?;
+    // `-n 0` asks for no history. Handing 0 to `read_tail_lines` still reads the
+    // file from byte 0, because `last_lines_offset` treats "0 lines" as "start
+    // at the beginning", so the call would print the whole log for a request of
+    // none. Start at the current length instead: nothing printed, and `--follow`
+    // begins from now.
+    let (initial, mut offset) = if lines == 0 {
+        (Vec::new(), log_len(path)?)
+    } else {
+        read_tail_lines(path, lines)?
+    };
     if cli.json {
         if !follow {
             // One document for a bounded read.
-            emit_json(&json!({ "lines": initial }))?;
+            emit_json(json!({ "lines": initial }))?;
             return Ok(());
         }
         // Following is unbounded, so emit JSON Lines: one object per line, each
         // a complete document. A single header plus raw lines would be
         // unparseable.
         for line in &initial {
-            emit_json_line(&json!({ "line": line }))?;
+            emit_json_line(json!({ "line": line }))?;
         }
     } else {
         for line in &initial {
@@ -453,21 +525,38 @@ fn cmd_logs(
 
     loop {
         std::thread::sleep(Duration::from_millis(350));
-        let (appended, new_offset, jumped) = read_appended_lines(path, offset)?;
+        // A follow stream must survive the log file being rotated away and
+        // recreated (newsyslog, launchd rotation): aborting on one failed poll
+        // killed a stream whose whole purpose is to keep watching. The next
+        // poll retries from the last offset; `jumped` reports the gap once the
+        // file reappears.
+        let (appended, new_offset, jumped) = match read_appended_lines(path, offset) {
+            Ok(read) => read,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(SingSwitchError::general(format!(
+                    "could not read the log at {}: {err}",
+                    path.display()
+                ))
+                .with_hint(
+                    "check that the log directory is readable; singswitch logs will pick up where it left off",
+                ));
+            }
+        };
         offset = new_offset;
         if jumped {
             // The file was rotated or truncated, so lines were skipped between
             // what was already printed and what follows. Say so instead of
             // splicing two unrelated eras of the log silently.
             if cli.json {
-                emit_json_line(&json!({ "gap": "log rotated or truncated" }))?;
+                emit_json_line(json!({ "gap": "log rotated or truncated" }))?;
             } else {
                 eprintln!("-- log rotated or truncated; earlier lines were skipped --");
             }
         }
         for line in appended {
             if cli.json {
-                emit_json_line(&json!({ "line": line }))?;
+                emit_json_line(json!({ "line": line }))?;
             } else {
                 println!("{line}");
             }
@@ -487,7 +576,7 @@ fn cmd_add(
     // editor, however the process was launched.
     if !io::stdout().is_terminal() || !io::stdin().is_terminal() || cli.json {
         if cli.json {
-            return emit_json(&json!({ "profile": name, "path": path }));
+            return emit_json(json!({ "profile": name, "path": path }));
         }
         if !cli.quiet {
             println!("{}", theme.ok(&format!("created {name}")));
@@ -496,13 +585,25 @@ fn cmd_add(
         return Ok(());
     }
 
-    let kept = edit_loop(ctrl, theme, &path, || {
-        let _ = fs::remove_file(&path);
+    let outcome = edit_loop(ctrl, theme, &path, || match fs::remove_file(&path) {
+        // A file that is already gone is discarded; anything else must surface.
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        other => other,
     })?;
-    if !kept {
-        return Err(SingSwitchError::validation(format!(
-            "{name} was not created because it is not valid"
-        )));
+    match outcome {
+        EditOutcome::Valid => {}
+        EditOutcome::Discarded => {
+            return Err(SingSwitchError::validation(format!(
+                "{name} was not created because it is not valid"
+            )));
+        }
+        // The bytes stayed on disk, so saying "was not created" would be false.
+        EditOutcome::KeptInvalid => {
+            return Err(SingSwitchError::validation(format!(
+                "{name} was created but is not a valid configuration"
+            ))
+            .with_hint(format!("fix it with: singswitch edit {name}")));
+        }
     }
     if !cli.quiet {
         println!("{}", theme.ok(&format!("created {name}")));
@@ -559,71 +660,42 @@ fn cmd_edit(
     // Non-interactive path: an agent supplies the whole document, or field
     // values against the existing one. No $EDITOR, no prompt.
     if from.is_some() || !set.is_empty() {
-        let mut content = match from {
-            Some("-") => {
-                use std::io::Read as _;
-                let mut buf = String::new();
-                io::stdin().read_to_string(&mut buf)?;
-                buf
-            }
-            Some(src) => fs::read_to_string(src)?,
-            None => original.clone(),
-        };
-        if !set.is_empty() {
-            let mut model = singswitch_core::form_model::ProfileFormModel::from_json_str(&content)?;
-            for pair in set {
-                let (key, value) = pair.split_once('=').ok_or_else(|| {
-                    SingSwitchError::validation(format!("--set expects key=value, got {pair:?}"))
-                })?;
-                model.set_field(key.trim(), value)?;
-            }
-            let (applied, skipped) = model.apply_to_json_str_reporting(&content)?;
-            content = applied;
-            if !skipped.is_empty() {
-                // Exit non-zero: the caller asked for a change that this config
-                // has nowhere to put, so claiming success would be a lie.
-                return Err(SingSwitchError::validation(format!(
-                    "{name} has no {} section, so those values were not written",
-                    skipped.join(" or ")
-                ))
-                .with_hint("edit the JSON directly with: singswitch edit --from -"));
-            }
-        }
+        let content = edited_content(name, &original, from, set)?;
         let reloaded = ctrl.save_profile(name, &content, false)?;
         if cli.json {
             let p = list_profiles(&ctrl.layout.profiles_dir)?
                 .into_iter()
                 .find(|p| p.name == name);
-            return emit_json(&json!({
+            return emit_json(json!({
                 "profile": name,
                 "reloaded": reloaded,
                 "ready": p.as_ref().is_some_and(|p| p.ready()),
                 "missing": field_keys(&p.map(|p| p.missing).unwrap_or_default()),
             }));
         }
-        if !cli.quiet {
-            println!("{}", theme.ok(&format!("{name} is valid")));
-            if reloaded {
-                println!(
-                    "{}",
-                    theme.ok(&format!("reloaded sing-box with the updated {name}"))
-                );
-            }
-        }
+        report_saved(cli, theme, name, reloaded);
         return Ok(());
     }
 
-    if cli.json {
-        // Interactive editing cannot produce machine output.
-        return Err(SingSwitchError::validation(
-            "edit needs --from or --set when --json is used",
-        ));
+    // Interactive editing needs a terminal to prompt on. Without one the docs
+    // promise no prompt, so name the flags instead of opening an editor the
+    // caller cannot see or drive.
+    if cli.json || !io::stdin().is_terminal() {
+        let why = if cli.json {
+            "--json is used"
+        } else {
+            "stdin is not a terminal"
+        };
+        return Err(
+            SingSwitchError::validation(format!("edit needs --from or --set when {why}"))
+                .with_hint(
+                    "write the whole document with --from -, or fields with --set key=value",
+                ),
+        );
     }
 
-    let kept = edit_loop(ctrl, theme, &path, || {
-        let _ = fs::write(&path, &original);
-    })?;
-    if !kept {
+    let outcome = edit_loop(ctrl, theme, &path, || fs::write(&path, &original))?;
+    if !matches!(outcome, EditOutcome::Valid) {
         return Err(SingSwitchError::validation(format!(
             "{name} is not a valid configuration"
         )));
@@ -631,28 +703,88 @@ fn cmd_edit(
 
     let updated = fs::read_to_string(&path)?;
     let reloaded = ctrl.save_profile(name, &updated, false)?;
-    if !cli.quiet {
-        println!("{}", theme.ok(&format!("{name} is valid")));
-        if reloaded {
-            println!(
-                "{}",
-                theme.ok(&format!("reloaded sing-box with the updated {name}"))
-            );
-        }
-    }
+    report_saved(cli, theme, name, reloaded);
     Ok(())
+}
+
+/// Text of the profile an `edit --from`/`--set` run should write.
+fn edited_content(
+    name: &str,
+    original: &str,
+    from: Option<&str>,
+    set: &[String],
+) -> singswitch_core::error::Result<String> {
+    let content = match from {
+        Some("-") => {
+            use std::io::Read as _;
+            let mut buf = String::new();
+            io::stdin().read_to_string(&mut buf)?;
+            buf
+        }
+        Some(src) => fs::read_to_string(src)?,
+        None => original.to_string(),
+    };
+    if set.is_empty() {
+        return Ok(content);
+    }
+
+    let mut model = singswitch_core::form_model::ProfileFormModel::from_json_str(&content)?;
+    for pair in set {
+        let (key, value) = pair.split_once('=').ok_or_else(|| {
+            SingSwitchError::validation(format!("--set expects key=value, got {pair:?}"))
+        })?;
+        model.set_field(key.trim(), value)?;
+    }
+    let (applied, skipped) = model.apply_to_json_str_reporting(&content)?;
+    if skipped.is_empty() {
+        return Ok(applied);
+    }
+    // Exit non-zero: the caller asked for a change that this config has
+    // nowhere to put, so claiming success would be a lie.
+    Err(SingSwitchError::validation(format!(
+        "{name} has no {} section, so those values were not written",
+        skipped.join(" or ")
+    ))
+    .with_hint("edit the JSON directly with: singswitch edit --from -"))
+}
+
+/// The human "saved" line shared by both of `edit`'s success paths.
+fn report_saved(cli: &Cli, theme: &Theme, name: &str, reloaded: bool) {
+    if cli.quiet {
+        return;
+    }
+    println!("{}", theme.ok(&format!("{name} is valid")));
+    if reloaded {
+        println!(
+            "{}",
+            theme.ok(&format!("reloaded sing-box with the updated {name}"))
+        );
+    }
+}
+
+/// What the editor left behind.
+///
+/// A discarded edit and a kept-but-invalid one both answer "no" to "is this
+/// valid", but they mean opposite things on disk, so the caller cannot report
+/// either one without knowing which happened.
+enum EditOutcome {
+    Valid,
+    /// Checked invalid, then discarded: the previous bytes are back.
+    Discarded,
+    /// Checked invalid, then kept because the user said so.
+    KeptInvalid,
 }
 
 fn edit_loop(
     ctrl: &Controller,
     theme: &Theme,
     path: &Path,
-    discard: impl Fn(),
-) -> singswitch_core::error::Result<bool> {
+    discard: impl Fn() -> io::Result<()>,
+) -> singswitch_core::error::Result<EditOutcome> {
     loop {
         launch_editor(path)?;
         match ctrl.checker.check(path) {
-            Ok(()) => return Ok(true),
+            Ok(()) => return Ok(EditOutcome::Valid),
             Err(err) => {
                 if !io::stdout().is_terminal() || !io::stdin().is_terminal() {
                     return Err(err);
@@ -665,16 +797,23 @@ fn edit_loop(
                 match answer.trim().to_ascii_lowercase().as_str() {
                     "r" | "retry" | "" => continue,
                     "d" | "discard" => {
-                        discard();
+                        // A failed restore must not be reported as discarded:
+                        // it would leave the rejected edit in place.
+                        discard().map_err(|e| {
+                            SingSwitchError::general(format!(
+                                "could not restore {}: {e}",
+                                path.display()
+                            ))
+                        })?;
                         println!("{}", theme.ok("changes discarded"));
-                        return Ok(false);
+                        return Ok(EditOutcome::Discarded);
                     }
                     "k" | "keep" => {
                         eprintln!(
                             "{}",
                             theme.warn("keeping an invalid configuration; it cannot be activated until it validates")
                         );
-                        return Ok(false);
+                        return Ok(EditOutcome::KeptInvalid);
                     }
                     other => {
                         return Err(SingSwitchError::general(format!(
@@ -727,7 +866,7 @@ fn cmd_pull(
 ) -> singswitch_core::error::Result<()> {
     let profile = ctrl.pull_profile(name, url)?;
     if cli.json {
-        return emit_json(&json!({
+        return emit_json(json!({
             "profile": profile.name,
             "url": profile.source_url,
             "missing": field_keys(&profile.missing),
@@ -749,7 +888,7 @@ fn cmd_sync(
     if let Some(target) = name {
         let reloaded = ctrl.sync_one(target)?;
         if cli.json {
-            return emit_json(&json!({ "synced": [target], "reloaded": reloaded }));
+            return emit_json(json!({ "synced": [target], "reloaded": reloaded }));
         }
         if !cli.quiet {
             println!("{}", theme.ok(&format!("synced {target}")));
@@ -764,7 +903,7 @@ fn cmd_sync(
             .iter()
             .map(|(n, err)| json!({ "name": n, "error": err }))
             .collect();
-        emit_json(&json!({ "synced": report.synced, "failed": failed }))?;
+        emit_json(json!({ "synced": report.synced, "failed": failed }))?;
         if !report.failed.is_empty() {
             return Err(
                 SingSwitchError::general("one or more profiles failed to sync").mark_reported(),
@@ -830,7 +969,7 @@ fn cmd_rm(
 
     let was_active = ctrl.delete_profile(name, force)?;
     if cli.json {
-        return emit_json(&json!({ "deleted": name, "was_active": was_active }));
+        return emit_json(json!({ "deleted": name, "was_active": was_active }));
     }
     if !cli.quiet {
         println!("{}", theme.ok(&format!("deleted {name}")));
@@ -859,7 +998,7 @@ fn cmd_check(
     match ctrl.check_profile(name) {
         Ok((checked_name, _)) => {
             if cli.json {
-                return emit_json(&json!({
+                return emit_json(json!({
                     "profile": checked_name,
                     "valid": true,
                     "missing": [],
@@ -875,11 +1014,18 @@ fn cmd_check(
         }
         Err(err) => {
             if cli.json {
-                emit_json(&json!({
-                    "profile": name.unwrap_or(""),
-                    "valid": false,
-                    "error": err.message,
-                }))?;
+                // A failed check is an error document too: the exit status is
+                // the primary signal, but a caller that lost it reads `code`
+                // and `hints` here, in the same shape the other commands use.
+                let mut payload = serde_json::Map::new();
+                payload.insert("profile".into(), json!(name.unwrap_or("")));
+                payload.insert("valid".into(), json!(false));
+                payload.insert("error".into(), json!(err.message));
+                payload.insert("code".into(), json!(err.code.as_i32()));
+                if !err.hints.is_empty() {
+                    payload.insert("hints".into(), json!(err.hints));
+                }
+                emit_json(Value::Object(payload))?;
                 return Err(err.mark_reported());
             }
             Err(err)
@@ -891,7 +1037,7 @@ fn cmd_ip(cli: &Cli, theme: &Theme) -> singswitch_core::error::Result<()> {
     let info = fetch_ip_info(None)?;
     if cli.json {
         return emit_json(
-            &serde_json::to_value(&info).map_err(|e| SingSwitchError::general(e.to_string()))?,
+            serde_json::to_value(&info).map_err(|e| SingSwitchError::general(e.to_string()))?,
         );
     }
     if !cli.quiet {
@@ -915,7 +1061,7 @@ fn emit_version_with_checker(
     let platform = format!("{}/{}", env::consts::OS, env::consts::ARCH);
 
     if cli.json {
-        return emit_json(&json!({
+        return emit_json(json!({
             "version": singswitch_ver,
             "sing_box": sing_box.as_deref().unwrap_or(""),
             "platform": platform,
@@ -1034,27 +1180,34 @@ fn field_keys(fields: &[singswitch_core::readiness::Field]) -> Vec<&'static str>
     fields.iter().map(|f| f.key()).collect()
 }
 
-fn emit_json(val: &Value) -> singswitch_core::error::Result<()> {
+// `emit_json`/`emit_json_line` take the document by value: they build it field
+// by field for the caller to give away, and cloning the map here made every
+// emitted log line in `logs --json --follow` copy itself twice before printing.
+fn emit_json(val: Value) -> singswitch_core::error::Result<()> {
     emit_json_with(val, true)
 }
 
 /// Compact form for streams: one complete object per line, so a reader can parse
 /// each line independently. Pretty-printing a follow stream produced multi-line
 /// objects that no line-oriented parser could read.
-fn emit_json_line(val: &Value) -> singswitch_core::error::Result<()> {
+fn emit_json_line(val: Value) -> singswitch_core::error::Result<()> {
     emit_json_with(val, false)
 }
 
-fn emit_json_with(val: &Value, pretty: bool) -> singswitch_core::error::Result<()> {
-    let mut obj = match val {
-        Value::Object(map) => map.clone(),
-        _ => serde_json::Map::new(),
+fn emit_json_with(val: Value, pretty: bool) -> singswitch_core::error::Result<()> {
+    // Every documented document is an object; a caller passing anything else is
+    // a bug here, not input to swallow into a bare `{"schema": 1}`.
+    let Value::Object(mut obj) = val else {
+        return Err(SingSwitchError::general(
+            "internal error: a JSON document must be an object",
+        ));
     };
     obj.insert("schema".into(), json!(SCHEMA_VERSION));
+    let document = Value::Object(obj);
     let body = if pretty {
-        serde_json::to_string_pretty(&Value::Object(obj))
+        serde_json::to_string_pretty(&document)
     } else {
-        serde_json::to_string(&Value::Object(obj))
+        serde_json::to_string(&document)
     }
     .map_err(|e| SingSwitchError::general(e.to_string()))?;
     println!("{body}");
@@ -1072,7 +1225,7 @@ fn report_error(cli: &Cli, theme: &Theme, err: &SingSwitchError) -> ExitCode {
         if !err.hints.is_empty() {
             payload.insert("hints".into(), json!(err.hints));
         }
-        let _ = emit_json(&Value::Object(payload));
+        let _ = emit_json(Value::Object(payload));
         return err.code;
     }
     eprint!("{}", theme.render_error(err));
