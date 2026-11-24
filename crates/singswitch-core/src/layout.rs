@@ -150,12 +150,11 @@ impl Layout {
     }
 }
 
-/// Resolve an executable on `PATH`, checking explicit fallbacks (crucial for macOS GUI bundles
-/// launched from Finder without shell `PATH` initialization).
 /// Resolve a binary that will be named in a privileged (sudoers) rule.
 ///
 /// Never consults PATH: the caller's PATH is attacker-controlled for this
-/// purpose, and the result is executed as root.
+/// purpose, and the result is executed as root. Only the fixed absolute
+/// candidates are considered, falling back to `default` when none exists.
 pub fn privileged_binary(candidates: &[&str], default: &str) -> PathBuf {
     for candidate in candidates {
         let path = Path::new(candidate);
@@ -166,6 +165,8 @@ pub fn privileged_binary(candidates: &[&str], default: &str) -> PathBuf {
     PathBuf::from(default)
 }
 
+/// Resolve an executable on `PATH`, checking explicit fallbacks (crucial for macOS GUI bundles
+/// launched from Finder without shell `PATH` initialization).
 pub fn lookup_binary(name: &str, fallbacks: &[&str], default: &str) -> PathBuf {
     if let Some(found) = find_in_path(name) {
         return found;

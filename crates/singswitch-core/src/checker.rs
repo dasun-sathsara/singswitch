@@ -136,7 +136,13 @@ fn read_pipe(pipe: Option<impl std::io::Read>) -> String {
     let Some(mut reader) = pipe else {
         return String::new();
     };
-    let mut buf = String::new();
-    let _ = reader.read_to_string(&mut buf);
-    buf
+    let mut buf = Vec::new();
+    // Bytes, then a lossy decode. `read_to_string` fails on any invalid UTF-8 and
+    // leaves the buffer empty, so one stray byte in sing-box's complaint about a
+    // config turned the whole diagnostic into an empty string.
+    let _ = reader.read_to_end(&mut buf);
+    match String::from_utf8(buf) {
+        Ok(text) => text,
+        Err(err) => String::from_utf8_lossy(err.as_bytes()).into_owned(),
+    }
 }

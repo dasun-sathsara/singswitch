@@ -87,7 +87,7 @@ pub fn fetch_ip_info(url: Option<&str>) -> Result<IpInfo> {
     let mut body = Vec::new();
     resp.into_body()
         .into_reader()
-        .take(MAX_IP_INFO_BYTES as u64)
+        .take(u64::try_from(MAX_IP_INFO_BYTES).unwrap_or(u64::MAX))
         .read_to_end(&mut body)?;
 
     serde_json::from_slice(&body).map_err(|err| {
