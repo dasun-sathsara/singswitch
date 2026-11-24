@@ -27,6 +27,7 @@ mod views;
 
 #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod desktop {
+    use gpui_kit::component::TitleBar;
     use gpui_kit::{
         AnyWindowHandle, App, AppContext as _, Entity, Global, KeyBinding, QuitMode, WindowBounds,
         WindowOptions, open_window, px, size,
@@ -267,17 +268,7 @@ mod desktop {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(width), px(height)), cx)),
             window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT))),
-            // Native-feel traffic lights: standard 28px title bar height with
-            // AppKit's default (20, 12) offset, so the buttons sit exactly where
-            // every other macOS app puts them. The custom TitleBar's own height is
-            // set in views/mod.rs to match.
-            titlebar: Some(gpui_kit::TitlebarOptions {
-                title: Some("SingSwitch".into()),
-                appears_transparent: true,
-                traffic_light_position: Some(gpui_kit::point(px(20.0), px(12.0))),
-            }),
-            app_owns_titlebar_drag: true,
-            ..Default::default()
+            ..TitleBar::window_options()
         };
 
         match open_window(options, cx, move |window, cx| {
