@@ -156,7 +156,15 @@ impl ExecChecker {
             )
             .with_hint("give the outbound a tag in the JSON tab"));
         }
-        let temp = temp_profile_copy("singswitch-latency-", config)?;
+        // A measurement must not write anywhere. The temp copy protects the
+        // config file itself, but sing-box still obeys `log.output` and creates
+        // `experimental.cache_file` from inside the copied document: a probe on
+        // a profile whose log points at another profile's JSON appends log
+        // lines to it and corrupts it, and a probe on a config sharing a
+        // cache_file with the running daemon deadlocks on the file lock until
+        // the timeout. Both keys are forced inert in the probe copy.
+        let inert = neutralise_side_effects(config)?;
+        let temp = temp_profile_copy("singswitch-latency-", &inert)?;
         let path = temp.path().to_string_lossy().into_owned();
         let started = Instant::now();
         let (ok, output) = self
@@ -188,6 +196,34 @@ impl ExecChecker {
         ))
         .with_hint("check the outbound's server and that it is reachable from this machine"))
     }
+}
+
+/// Force every writing config key inert, so a probe writes nowhere.
+///
+/// `log.output` is removed (sing-box then logs to stderr only, which the probe
+/// discards) and `experimental.cache_file` is removed (a probe shares nothing
+/// with the running daemon, least of all its cache database). Everything else
+/// in the document passes through untouched, including keys this version of
+/// sing-box does not know.
+fn neutralise_side_effects(config: &[u8]) -> Result<Vec<u8>> {
+    let mut root: serde_json::Value = serde_json::from_slice(config).map_err(|err| {
+        SingSwitchError::validation(format!("the config is not valid JSON: {err}"))
+    })?;
+    if let Some(log) = root
+        .get_mut("log")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        log.remove("output");
+    }
+    if let Some(experimental) = root
+        .get_mut("experimental")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        experimental.remove("cache_file");
+    }
+    serde_json::to_vec(&root).map_err(|err| {
+        SingSwitchError::general(format!("could not re-serialize the config: {err}"))
+    })
 }
 
 impl Checker for ExecChecker {

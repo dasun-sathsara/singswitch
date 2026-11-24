@@ -314,22 +314,61 @@ pub fn select_group_member(
     Ok(())
 }
 
-/// Build the request URL from `external_controller`, which is documented as
-/// `host:port` but is sometimes written with a scheme or a trailing slash.
+/// Build the request URL from `external_controller`.
+///
+/// The controller is untrusted profile input, so the shape is pinned here:
+/// `host:port` or `scheme://host:port`, nothing else. A path of its own would
+/// let `#` swallow the appended `/proxies` and a `..` would rewrite it, both
+/// of which redirect the selector PUT at an arbitrary endpoint; a non-loopback
+/// host would send the profile's own bearer secret to a host the user never
+/// chose. No URL crate is used: the accepted shape is small enough to check
+/// by character class, and rejecting everything else is the point.
 fn api_url(controller: &str, path: &str) -> Result<String> {
     let trimmed = controller.trim().trim_end_matches('/');
-    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
-        return Err(SingSwitchError::general(format!(
-            "{controller:?} is not a usable Clash API address"
-        ))
-        .with_hint("set experimental.clash_api.external_controller to 127.0.0.1:9090"));
-    }
-    let base = if trimmed.contains("://") {
-        trimmed.to_string()
+    let (scheme, rest) = if let Some(rest) = trimmed
+        .strip_prefix("http://")
+        .or_else(|| trimmed.strip_prefix("https://"))
+    {
+        ("http", rest)
     } else {
-        format!("http://{trimmed}")
+        ("http", trimmed)
     };
-    Ok(format!("{base}{path}"))
+    let host_port = rest.trim_start_matches("//");
+    if !is_loopback_authority(host_port) {
+        return Err(unusable(controller));
+    }
+    Ok(format!("{scheme}://{host_port}{path}"))
+}
+
+fn unusable(controller: &str) -> SingSwitchError {
+    SingSwitchError::general(format!("{controller:?} is not a usable Clash API address"))
+        .with_hint("set experimental.clash_api.external_controller to 127.0.0.1:9090")
+}
+
+/// `host:port` for a loopback host, with `host` optionally bracketed for IPv6
+/// and a port that is all digits. Anything with a `/`, `?`, `#`, whitespace, or
+/// `..` fails, which is what keeps the appended request path intact.
+fn is_loopback_authority(host_port: &str) -> bool {
+    if host_port.is_empty()
+        || host_port.contains(['/', '?', '#', '@', ' ', '\t'])
+        || host_port.contains("..")
+        || host_port.starts_with(':')
+    {
+        return false;
+    }
+    let Some((host, port)) = host_port.rsplit_once(':') else {
+        return false;
+    };
+    if host.is_empty()
+        || port.is_empty()
+        || !port.bytes().all(|b| b.is_ascii_digit())
+        || port.len() > 5
+        || port.parse::<u16>().is_err()
+    {
+        return false;
+    }
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    matches!(host, "localhost" | "::1") || host == "127.0.0.1" || host.starts_with("127.")
 }
 
 fn api_error(err: ureq::Error, url: &str, action: &str) -> SingSwitchError {

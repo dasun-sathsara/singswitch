@@ -29,8 +29,17 @@ pub struct ProfileFormModel {
     pub tun_interface_name: String,
     pub tun_stack: String,
     pub tun_mtu: u32,
+    /// Whether `auto_route`/`strict_route` were present in the file.
+    ///
+    /// sing-box defaults both to `false`, not `true`: a tun inbound that omits
+    /// them routes nothing. The model still carries working `true` defaults for
+    /// the template path (the skeleton and the share-link generator both write
+    /// them explicitly), but presence is tracked separately so `from_value` —
+    /// and the advisory built on it — can tell "the file says nothing" from
+    /// "the file says true".
     pub tun_auto_route: bool,
     pub tun_strict_route: bool,
+    pub tun_route_keys_present: bool,
     /// Whether the source document declared a TUN inbound at all.
     ///
     /// The switches above have defaults, so they cannot say whether there is a
@@ -73,6 +82,7 @@ impl Default for ProfileFormModel {
             tun_mtu: DEFAULT_TUN_MTU,
             tun_auto_route: true,
             tun_strict_route: true,
+            tun_route_keys_present: false,
             has_tun_inbound: false,
             reject_ipv6: true,
             log_level: "info".to_string(),
@@ -221,9 +231,19 @@ impl ProfileFormModel {
             }
             if let Some(ar) = tun.get("auto_route").and_then(Value::as_bool) {
                 model.tun_auto_route = ar;
+                model.tun_route_keys_present =
+                    tun.get("strict_route").and_then(Value::as_bool).is_some()
+                        || model.tun_route_keys_present;
             }
             if let Some(sr) = tun.get("strict_route").and_then(Value::as_bool) {
                 model.tun_strict_route = sr;
+                model.tun_route_keys_present = true;
+            }
+            // sing-box defaults both to false, so a tun section without the
+            // keys routes nothing and must not read as "all on".
+            if !model.tun_route_keys_present {
+                model.tun_auto_route = false;
+                model.tun_strict_route = false;
             }
         }
 

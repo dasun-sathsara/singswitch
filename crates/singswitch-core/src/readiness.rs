@@ -112,20 +112,32 @@ pub fn required_tls(tls: bool, reality: bool) -> Vec<Field> {
 /// a different failure from `strict_route` off, where traffic does go through
 /// the tunnel but a stray socket can still find an interface outside it, so the
 /// two get different sentences. Returns `None` when there is no TUN inbound to
-/// be wrong about, or when both switches are on.
-pub fn tun_advisory(model: &ProfileFormModel) -> Option<&'static str> {
+/// be wrong about, or when both switches are on. A file that omits both keys
+/// counts as off: sing-box defaults them to false.
+fn tun_route_advisory(model: &ProfileFormModel) -> Option<&'static str> {
     if !model.has_tun_inbound {
         return None;
     }
     if !model.tun_auto_route {
+        if model.tun_route_keys_present {
+            return Some(
+                "auto_route is off: this profile does not install routes, so traffic bypasses the tunnel",
+            );
+        }
         return Some(
-            "auto_route is off: this profile does not install routes, so traffic bypasses the tunnel",
+            "the tun inbound sets no routes: sing-box defaults auto_route off, so traffic bypasses the tunnel",
         );
     }
     if !model.tun_strict_route {
         return Some("strict_route is off: some traffic can leak around the tunnel while it runs");
     }
     None
+}
+
+/// Public advisory kept as a thin alias so callers do not reach into the
+/// presence-tracking detail.
+pub fn tun_advisory(model: &ProfileFormModel) -> Option<&'static str> {
+    tun_route_advisory(model)
 }
 
 /// Render a list of fields for a sentence: "A, B and C".
