@@ -31,6 +31,13 @@ pub struct ProfileFormModel {
     pub tun_mtu: u32,
     pub tun_auto_route: bool,
     pub tun_strict_route: bool,
+    /// Whether the source document declared a TUN inbound at all.
+    ///
+    /// The switches above have defaults, so they cannot say whether there is a
+    /// tunnel to have an opinion about. A routing advisory that fired on a
+    /// config with no TUN inbound would be telling the user to fix a section
+    /// their file does not have.
+    pub has_tun_inbound: bool,
     pub reject_ipv6: bool,
     pub log_level: String,
     /// Whether the source document contained an outbound this form manages.
@@ -66,6 +73,7 @@ impl Default for ProfileFormModel {
             tun_mtu: DEFAULT_TUN_MTU,
             tun_auto_route: true,
             tun_strict_route: true,
+            has_tun_inbound: false,
             reject_ipv6: true,
             log_level: "info".to_string(),
             has_managed_outbound: false,
@@ -199,6 +207,7 @@ impl ProfileFormModel {
         }
 
         if let Some(tun) = find_tun_inbound(root) {
+            model.has_tun_inbound = true;
             model.tun_interface_name = str_field(tun, "interface_name");
             let stack = str_field(tun, "stack");
             if !stack.is_empty() {

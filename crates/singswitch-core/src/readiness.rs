@@ -14,6 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::form_model::ProfileFormModel;
+
 /// A field the guided form can fill, used to report what is missing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -103,6 +105,29 @@ pub fn required_tls(tls: bool, reality: bool) -> Vec<Field> {
     fields
 }
 
+/// Warn when a declared TUN inbound is never punctured into the system.
+///
+/// `auto_route` off means sing-box creates the interface and installs no OS
+/// routes, so nothing is sent through it: the tunnel is up and unused. That is
+/// a different failure from `strict_route` off, where traffic does go through
+/// the tunnel but a stray socket can still find an interface outside it, so the
+/// two get different sentences. Returns `None` when there is no TUN inbound to
+/// be wrong about, or when both switches are on.
+pub fn tun_advisory(model: &ProfileFormModel) -> Option<&'static str> {
+    if !model.has_tun_inbound {
+        return None;
+    }
+    if !model.tun_auto_route {
+        return Some(
+            "auto_route is off: this profile does not install routes, so traffic bypasses the tunnel",
+        );
+    }
+    if !model.tun_strict_route {
+        return Some("strict_route is off: some traffic can leak around the tunnel while it runs");
+    }
+    None
+}
+
 /// Render a list of fields for a sentence: "A, B and C".
 pub fn join_labels(fields: &[Field]) -> String {
     let labels: Vec<&str> = fields.iter().map(|f| f.label()).collect();
@@ -118,5 +143,80 @@ pub fn join_labels(fields: &[Field]) -> String {
                 None => String::new(),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model(auto_route: bool, strict_route: bool) -> ProfileFormModel {
+        ProfileFormModel {
+            has_tun_inbound: true,
+            tun_auto_route: auto_route,
+            tun_strict_route: strict_route,
+            ..ProfileFormModel::default()
+        }
+    }
+
+    #[test]
+    fn a_tun_profile_routed_all_the_way_through_has_no_advisory() {
+        assert_eq!(tun_advisory(&model(true, true)), None);
+    }
+
+    #[test]
+    fn auto_route_off_is_reported_as_not_proxying_at_all() {
+        let advisory = tun_advisory(&model(false, true)).unwrap_or_default();
+        assert!(advisory.contains("auto_route is off"));
+        assert!(advisory.contains("bypasses"));
+    }
+
+    #[test]
+    fn auto_route_off_wins_over_strict_route_off() {
+        // Both are off: the stronger statement is the true one. Telling the user
+        // about a leak when nothing is routed at all would misdescribe the file.
+        let advisory = tun_advisory(&model(false, false)).unwrap_or_default();
+        assert!(advisory.contains("auto_route is off"));
+    }
+
+    #[test]
+    fn strict_route_off_is_reported_as_a_leak_not_as_no_routing() {
+        let advisory = tun_advisory(&model(true, false)).unwrap_or_default();
+        assert!(advisory.contains("strict_route is off"));
+        assert!(advisory.contains("leak"));
+    }
+
+    #[test]
+    fn a_profile_without_a_tun_inbound_gets_no_advisory() {
+        let mut model = model(false, false);
+        model.has_tun_inbound = false;
+        assert_eq!(tun_advisory(&model), None);
+    }
+
+    fn from_document(inbound: serde_json::Value) -> ProfileFormModel {
+        ProfileFormModel::from_value(&serde_json::json!({"inbounds": [inbound]}))
+    }
+
+    #[test]
+    fn the_form_model_tracks_whether_the_file_has_a_tun_inbound() {
+        // The advisory is only as good as this flag, and it has to come from the
+        // document rather than from the form's defaults.
+        assert!(
+            from_document(serde_json::json!({"type": "tun", "auto_route": false})).has_tun_inbound
+        );
+        assert!(!from_document(serde_json::json!({"type": "mixed"})).has_tun_inbound);
+        assert!(
+            !ProfileFormModel::from_value(&serde_json::json!({"inbounds": "nope"})).has_tun_inbound
+        );
+    }
+
+    #[test]
+    fn a_parsed_document_with_a_leaky_tun_produces_the_advisory() {
+        let parsed = from_document(serde_json::json!({
+            "type": "tun",
+            "auto_route": true,
+            "strict_route": false
+        }));
+        assert!(tun_advisory(&parsed).is_some_and(|a| a.contains("leak")));
     }
 }

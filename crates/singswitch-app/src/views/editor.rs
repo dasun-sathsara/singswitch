@@ -11,13 +11,15 @@ use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
-    div, prelude::FluentBuilder as _, px, relative,
+    App, AppContext as _, AsyncApp, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Task,
+    WeakEntity, Window, div, prelude::FluentBuilder as _, px, relative,
 };
+use singswitch_core::checker::{DEFAULT_LATENCY_PROBE_URL, ExecChecker};
 use singswitch_core::form_model::{DEFAULT_SERVER_PORT, DEFAULT_TUN_MTU, ProfileFormModel};
-use singswitch_core::readiness::Field;
+use singswitch_core::readiness::{Field, tun_advisory};
 use std::rc::Rc;
+use std::time::Duration;
 
 use crate::fonts;
 use crate::state::{AppStore, BannerTone, EditorValidationState, NoticeOrigin};
@@ -27,6 +29,55 @@ enum EditorTab {
     #[default]
     Guided,
     Json,
+}
+
+/// The last latency probe, as the editor shows it.
+///
+/// Remembers what was measured, not only the number: "312 ms" is a property of
+/// one server on one config, and showing it after the address changed would
+/// describe a document that no longer exists. The guided form is compared as a
+/// model (the render already builds one for readiness, so the check is free);
+/// the JSON tab is compared by document revision, because its buffer is what
+/// changes a keystroke at a time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LatencyState {
+    Measuring {
+        profile: String,
+    },
+    Measured {
+        profile: String,
+        /// Boxed: a form model is eight heap fields, and `Measuring` would carry
+        /// that size for a state that holds one string.
+        model: Box<ProfileFormModel>,
+        doc_revision: u64,
+        result: Result<Duration, String>,
+    },
+}
+
+impl LatencyState {
+    fn profile(&self) -> &str {
+        match self {
+            Self::Measuring { profile } | Self::Measured { profile, .. } => profile,
+        }
+    }
+}
+
+/// One reading of a latency probe, ready to draw.
+struct LatencyReadout {
+    busy: bool,
+    text: String,
+    failed: bool,
+}
+
+impl LatencyReadout {
+    /// The placeholder shown while the probe runs.
+    fn measuring() -> Self {
+        Self {
+            busy: true,
+            text: "Testing latency…".to_string(),
+            failed: false,
+        }
+    }
 }
 
 pub struct ProfileEditorPanel {
@@ -55,6 +106,16 @@ pub struct ProfileEditorPanel {
     ///
     /// Readiness re-parsed the whole document on every frame for this answer.
     derived_missing: Option<Vec<Field>>,
+    /// The TUN routing advisory for `derived_json`, cached with it.
+    derived_advisory: Option<&'static str>,
+    /// The probe's last answer, pinned to a generation so a reply for a profile
+    /// the user has left cannot paint the one they are looking at.
+    latency: Option<LatencyState>,
+    latency_generation: u64,
+    latency_task: Option<Task<()>>,
+    /// Bumped whenever the JSON buffer's text changes, so a reading taken
+    /// against the old text can be dropped without comparing whole documents.
+    doc_revision: u64,
 
     json_editor: Entity<EditorState>,
 
@@ -96,6 +157,11 @@ impl ProfileEditorPanel {
             derived_json: SharedString::default(),
             derived_syntax: None,
             derived_missing: None,
+            derived_advisory: None,
+            latency: None,
+            latency_generation: 0,
+            latency_task: None,
+            doc_revision: 0,
             active_tab: if store.read(cx).editor_json_mode {
                 EditorTab::Json
             } else {
@@ -171,6 +237,11 @@ impl ProfileEditorPanel {
             self.disk_read_failed = false;
             self.validated_snapshot = None;
             self.last_submitted = None;
+            // A probe measures one profile's config. Carrying the number across
+            // a switch would label the new server with the old server's time.
+            self.latency_generation = self.latency_generation.wrapping_add(1);
+            self.latency = None;
+            self.doc_revision = self.doc_revision.wrapping_add(1);
 
             if let Some(name) = target {
                 let content = self.store.read(cx).read_profile_content(&name);
@@ -568,6 +639,172 @@ impl ProfileEditorPanel {
         }
     }
 
+    /// Whether a latency test can run for this document.
+    ///
+    /// The probe needs an outbound with a server and a tag to name it by:
+    /// without those, `tools fetch` has nothing to measure, and the failure
+    /// would read as a network problem rather than as an unfinished profile.
+    fn latency_testable(model: &ProfileFormModel) -> bool {
+        model.has_managed_outbound
+            && !model.server.trim().is_empty()
+            && !model.outbound_tag.trim().is_empty()
+    }
+
+    /// The model the document on screen describes, for the probe.
+    ///
+    /// The guided tab is read from the inputs rather than from `self.model`,
+    /// which only catches up when the form is folded into the buffer or the tabs
+    /// are switched. A form that does not parse cannot be tested.
+    fn probe_model(&self, cx: &App) -> Option<ProfileFormModel> {
+        match self.active_tab {
+            EditorTab::Guided => self.build_model_from_inputs(cx).ok(),
+            EditorTab::Json => Some(self.model.clone()),
+        }
+    }
+
+    /// Measure one round trip through this profile's outbound, without
+    /// activating it.
+    ///
+    /// Runs on the background executor like the live validation does: the probe
+    /// spawns a process and waits on the network, neither of which may happen on
+    /// the UI thread.
+    fn test_latency(&mut self, cx: &mut Context<Self>) {
+        let Some(name) = self.loaded_profile.clone() else {
+            return;
+        };
+        let Some(model) = self.probe_model(cx).filter(Self::latency_testable) else {
+            return;
+        };
+        let doc_revision = self.doc_revision;
+        let content = match self.collect_content_for_probe(cx) {
+            Ok(content) => content,
+            Err(err) => {
+                self.latency = Some(LatencyState::Measured {
+                    profile: name,
+                    model: Box::new(model),
+                    doc_revision,
+                    result: Err(err),
+                });
+                cx.notify();
+                return;
+            }
+        };
+        let model = Box::new(model);
+        let tag = model.outbound_tag.clone();
+
+        self.latency_generation = self.latency_generation.wrapping_add(1);
+        let generation = self.latency_generation;
+        self.latency = Some(LatencyState::Measuring {
+            profile: name.clone(),
+        });
+        cx.notify();
+
+        let task = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let (name, result) = cx
+                .background_executor()
+                .spawn(async move {
+                    // Resolved inside the task: resolving stats the filesystem,
+                    // and a missing binary belongs in the readout like any other
+                    // probe failure instead of being swallowed here.
+                    let result = ExecChecker::default()
+                        .probe_latency_bytes(content.as_bytes(), &tag, DEFAULT_LATENCY_PROBE_URL)
+                        .map_err(|err| match err.hints.is_empty() {
+                            true => err.message.clone(),
+                            false => format!("{} — {}", err.message, err.hints.join("; ")),
+                        });
+                    (name, result)
+                })
+                .await;
+
+            let _ = this.update(cx, |panel, cx| {
+                // A reply for a probe the user has since replaced, or for a
+                // profile they have left, must not paint this row.
+                if panel.latency_generation != generation
+                    || panel.loaded_profile.as_deref() != Some(name.as_str())
+                {
+                    return;
+                }
+                panel.latency = Some(LatencyState::Measured {
+                    profile: name,
+                    model,
+                    doc_revision,
+                    result,
+                });
+                cx.notify();
+            });
+        });
+        self.latency_task = Some(task);
+    }
+
+    /// The document the probe would run on, without writing anything.
+    ///
+    /// Deliberately not `collect_effective_content`: that one pushes the guided
+    /// form into the editor buffer to return the merged text, and taking a
+    /// measurement must not edit what the user is typing.
+    fn collect_content_for_probe(&mut self, cx: &App) -> Result<String, String> {
+        let current = self.json_editor.read(cx).value().to_string();
+        if self.active_tab != EditorTab::Guided {
+            return Ok(current);
+        }
+        let next = self.build_model_from_inputs(cx)?;
+        let mut root: serde_json::Value =
+            serde_json::from_str(&current).map_err(|e| format!("invalid JSON: {e}"))?;
+        if !next.apply_to_value(&mut root).is_empty() {
+            return Err("this config has no outbound section to test".to_string());
+        }
+        let merged = serde_json::to_string_pretty(&root)
+            .map(|s| format!("{s}\n"))
+            .map_err(|e| format!("could not serialize JSON: {e}"))?;
+        // The probe names its outbound from the merged form, so the model it
+        // reads that tag from has to be the one that was merged.
+        self.model = next;
+        Ok(merged)
+    }
+
+    /// The reading to draw for this profile, if it still describes the document
+    /// on screen.
+    ///
+    /// `form` is the guided model the caller has already built for readiness, or
+    /// `None` on the JSON tab, where the buffer itself is what was measured.
+    fn latency_readout(
+        &self,
+        profile: &str,
+        form: Option<&ProfileFormModel>,
+    ) -> Option<LatencyReadout> {
+        let state = self.latency.as_ref()?;
+        if state.profile() != profile {
+            return None;
+        }
+        let LatencyState::Measured {
+            model,
+            doc_revision,
+            result,
+            ..
+        } = state
+        else {
+            return Some(LatencyReadout::measuring());
+        };
+        let still_current = match form {
+            Some(live) => live == model.as_ref(),
+            None => *doc_revision == self.doc_revision,
+        };
+        if !still_current {
+            return None;
+        }
+        Some(match result {
+            Ok(elapsed) => LatencyReadout {
+                busy: false,
+                text: format_latency(*elapsed),
+                failed: false,
+            },
+            Err(msg) => LatencyReadout {
+                busy: false,
+                text: msg.clone(),
+                failed: true,
+            },
+        })
+    }
+
     fn format_json(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let raw = self.json_editor.read(cx).value().to_string();
         match serde_json::from_str::<serde_json::Value>(&raw) {
@@ -940,6 +1177,10 @@ impl ProfileEditorPanel {
     }
 
     fn render_guided_form(&self, cx: &Context<Self>) -> gpui_kit::AnyElement {
+        // Built once for the form and the latency row: both ask what the inputs
+        // currently say, and the tunnel row is only ever drawn from this pass.
+        // A parse failure is surfaced by `render`'s own readiness pass, not here.
+        let form = self.build_model_from_inputs(cx);
         v_flex()
             .flex_1()
             .min_h(px(0.0))
@@ -983,9 +1224,69 @@ impl ProfileEditorPanel {
                         labeled_input("MTU", &self.in_tun_mtu, cx),
                         labeled_input("Log level", &self.in_log_level, cx),
                     ))
-                    .child(self.render_tun_switches(cx)),
+                    .child(self.render_tun_switches(cx))
+                    .child(self.render_latency_row(form, cx)),
             )
             .into_any_element()
+    }
+
+    /// The latency test's control and its reading, beside the switches that
+    /// change what the probe would measure.
+    ///
+    /// Lives in the tunnel section rather than the save bar: it reports on the
+    /// outbound's server, and the save bar is about the file. `form` is the
+    /// guide model `render_guided_form` has already built, so the reading can be
+    /// checked against the live form without a second pass over the inputs.
+    fn render_latency_row(
+        &self,
+        form: Result<ProfileFormModel, String>,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let readout = self
+            .loaded_profile
+            .as_deref()
+            .and_then(|name| self.latency_readout(name, form.as_ref().ok()));
+        let busy = readout.as_ref().is_some_and(|r| r.busy);
+        let can_test = form.as_ref().is_ok_and(Self::latency_testable);
+        let message = readout.as_ref().map(|r| r.text.clone()).unwrap_or_default();
+        let failed = readout.as_ref().is_some_and(|r| r.failed);
+        let colour = match failed {
+            true => cx.theme().danger,
+            false => cx.theme().muted_foreground,
+        };
+
+        h_flex()
+            .w_full()
+            .gap_2()
+            .items_center()
+            .child(
+                Button::new("editor-test-latency")
+                    .secondary()
+                    .xsmall()
+                    .icon(IconName::Gauge)
+                    .label("Test latency")
+                    .loading(busy)
+                    .disabled(busy || !can_test)
+                    .tooltip(if can_test {
+                        "Fetch a 204 through this outbound without connecting"
+                    } else {
+                        "Fill in the server address and give the outbound a tag first"
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.test_latency(cx))),
+            )
+            .when(!message.is_empty(), |row| {
+                row.child(
+                    div()
+                        .id("editor-latency-readout")
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .truncate()
+                        .text_xs()
+                        .font_weight(fonts::EMPHASIS)
+                        .text_color(colour)
+                        .child(message),
+                )
+            })
     }
 
     fn render_tls_switches(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -1221,11 +1522,14 @@ impl Render for ProfileEditorPanel {
             match serde_json::from_str::<serde_json::Value>(&live_json) {
                 Ok(root) => {
                     self.derived_syntax = None;
-                    self.derived_missing = Some(ProfileFormModel::from_value(&root).missing());
+                    let model = ProfileFormModel::from_value(&root);
+                    self.derived_missing = Some(model.missing());
+                    self.derived_advisory = tun_advisory(&model);
                 }
                 Err(err) => {
                     self.derived_syntax = Some(format!("JSON syntax error: {err}"));
                     self.derived_missing = None;
+                    self.derived_advisory = None;
                 }
             }
             self.derived_json = live_json;
@@ -1258,6 +1562,17 @@ impl Render for ProfileEditorPanel {
         let syntax_status = match (&self.derived_syntax, self.active_tab) {
             (Some(err), EditorTab::Json) => Err(err.clone()),
             _ => Ok(()),
+        };
+        // The advisory follows the same rule as readiness: whichever document
+        // the user is looking at. The guided form's switches are what the
+        // warning is usually about, so reading the buffer alone would leave it
+        // stale exactly while the user toggles auto_route.
+        let advisory = match self.active_tab {
+            EditorTab::Guided => match self.build_model_from_inputs(cx) {
+                Ok(model) => tun_advisory(&model),
+                Err(_) => self.derived_advisory,
+            },
+            EditorTab::Json => self.derived_advisory,
         };
         let dirty = self.is_dirty_against(&self.derived_json, cx);
         let validation = self.active_validation_state(&profile_name, cx);
@@ -1293,6 +1608,12 @@ impl Render for ProfileEditorPanel {
             })
             .when(!live_missing.is_empty(), |this| {
                 this.child(render_missing_strip(live_missing, cx))
+            })
+            // An advisory, not a blocker: the strip above lists what stops the
+            // profile connecting, this one warns about traffic that would escape
+            // a tunnel that connects fine.
+            .when_some(advisory, |this, warning| {
+                this.child(render_leak_advisory(warning, cx))
             })
             .child(match self.active_tab {
                 EditorTab::Guided => self.render_guided_form(cx),
@@ -1381,6 +1702,39 @@ fn render_missing_strip(missing: &[Field], cx: &App) -> impl IntoElement {
                 .iter()
                 .map(|f| Tag::warning().xsmall().child(f.label())),
         )
+}
+
+fn render_leak_advisory(warning: &'static str, cx: &App) -> impl IntoElement {
+    h_flex()
+        .w_full()
+        .flex_wrap()
+        .gap(px(8.0))
+        .items_center()
+        .child(
+            Icon::new(IconName::TriangleAlert)
+                .small()
+                .flex_none()
+                .text_color(cx.theme().warning),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .text_xs()
+                .font_weight(fonts::EMPHASIS)
+                .text_color(cx.theme().foreground)
+                .child(warning),
+        )
+}
+
+/// Render a probe duration the way a latency figure is read: whole
+/// milliseconds, and seconds only for a delay nobody waits out comfortably.
+pub fn format_latency(elapsed: Duration) -> String {
+    if elapsed >= Duration::from_secs(1) {
+        format!("{:.1} s", elapsed.as_secs_f64())
+    } else {
+        format!("{} ms", elapsed.as_millis())
+    }
 }
 
 fn form_section(title: &'static str, cx: &App) -> gpui_kit::Div {
