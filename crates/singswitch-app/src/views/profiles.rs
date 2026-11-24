@@ -520,8 +520,6 @@ impl ProfilesView {
                 TrayVisualState::Disconnected => cx.theme().muted_foreground,
             }
         };
-        // The dot is a non-text indicator: 3:1 suffices, and the fill green is
-        // the one the tray and theme already agree on.
         let dot = if store.is_probing() {
             tone
         } else {
@@ -531,9 +529,6 @@ impl ProfilesView {
             }
         };
         let active = snap.active.as_ref().filter(|_| snap.running).cloned();
-        // Name the selection when nothing is running: the tray tooltip already
-        // does, and "Disconnected" alone leaves the user guessing what Connect
-        // would use.
         let activity = store.busy_phase.as_ref().cloned().or(active).or_else(|| {
             (!snap.running)
                 .then(|| store.selected_profile.clone())
@@ -576,11 +571,9 @@ impl ProfilesView {
         let refresh = self.store.clone();
         let restart = self.store.clone();
 
-        // Two-zone banner: left is the status on an accent-tinted field, right
-        // is the actions on the card surface. One border, one radius, and the
-        // state color lives in the left zone instead of tinting the whole card.
-        let connected = visual == TrayVisualState::Connected;
+        let connected = snap.running && visual == TrayVisualState::Connected;
         let broken = visual == TrayVisualState::Broken;
+
         v_flex()
             .w_full()
             .flex_none()
@@ -594,105 +587,132 @@ impl ProfilesView {
                 cx.theme().border
             })
             .bg(crate::theme::surface(cx))
+            .p(px(14.0))
+            .gap(px(8.0))
             .child(
                 h_flex()
                     .w_full()
-                    .items_stretch()
-                    .gap(px(12.0))
-                    .p(px(12.0))
-                    // Left zone: status pill + profile name on accent fill.
+                    .items_center()
+                    .justify_between()
+                    .gap(px(16.0))
+                    // LEFT: Status & Profile Identity
                     .child(
                         h_flex()
                             .flex_1()
                             .min_w(px(0.0))
                             .items_center()
-                            .gap(px(10.0))
-                            .px(px(12.0))
-                            .h(px(40.0))
-                            .rounded(px(8.0))
-                            .bg(cx.theme().accent)
+                            .gap(px(12.0))
                             .child(
                                 h_flex()
+                                    .size(px(38.0))
+                                    .flex_none()
                                     .items_center()
-                                    .gap(px(6.0))
-                                    .px(px(8.0))
-                                    .h(px(24.0))
-                                    .rounded_full()
-                                    .bg(tone.opacity(0.12))
-                                    .child(div().size(px(6.5)).flex_none().rounded_full().bg(dot))
+                                    .justify_center()
+                                    .rounded(px(8.0))
+                                    .bg(if connected {
+                                        cx.theme().success.opacity(0.12)
+                                    } else if broken {
+                                        cx.theme().danger.opacity(0.12)
+                                    } else if visual == TrayVisualState::Transitioning {
+                                        cx.theme().warning.opacity(0.12)
+                                    } else {
+                                        cx.theme().muted.opacity(0.6)
+                                    })
+                                    .items_center()
+                                    .justify_center()
                                     .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(fonts::EMPHASIS)
-                                            .text_color(tone)
-                                            .child(label),
+                                        Icon::new(if connected {
+                                            IconName::CircleCheck
+                                        } else if broken {
+                                            IconName::TriangleAlert
+                                        } else if visual == TrayVisualState::Transitioning {
+                                            IconName::RotateCw
+                                        } else {
+                                            IconName::PowerOff
+                                        })
+                                        .size(px(18.0))
+                                        .text_color(tone),
                                     ),
                             )
-                            .when_some(activity, |row, text| {
-                                row.child(
-                                    div()
-                                        .min_w(px(0.0))
-                                        .max_w(px(240.0))
-                                        .text_sm()
-                                        .font_weight(fonts::EMPHASIS)
-                                        .text_color(cx.theme().accent_foreground)
-                                        .truncate()
-                                        .child(text),
-                                )
-                            }),
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .gap(px(2.0))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(fonts::EMPHASIS)
+                                            .text_color(cx.theme().foreground)
+                                            .truncate()
+                                            .child(activity.unwrap_or_else(|| {
+                                                if connected {
+                                                    "Active profile".to_string()
+                                                } else {
+                                                    "No active profile".to_string()
+                                                }
+                                            })),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap(px(6.0))
+                                            .child(
+                                                div()
+                                                    .size(px(6.0))
+                                                    .flex_none()
+                                                    .rounded_full()
+                                                    .bg(dot),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(fonts::EMPHASIS)
+                                                    .text_color(tone)
+                                                    .child(label),
+                                            )
+                                            .when(connected, |row| {
+                                                row.child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .child("· sing-box active"),
+                                                )
+                                            })
+                                            .when(
+                                                !snap.running
+                                                    && visual == TrayVisualState::Disconnected,
+                                                |row| {
+                                                    row.child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(cx.theme().muted_foreground)
+                                                            .child("· stopped"),
+                                                    )
+                                                },
+                                            ),
+                                    ),
+                            ),
                     )
-                    // Right zone: actions + IP readout on the card surface.
+                    // RIGHT: Telemetry & Actions
                     .child(
                         h_flex()
                             .flex_none()
                             .items_center()
                             .gap(px(8.0))
-                            .when(snap.running, |row| {
-                                row.child(
-                                    Button::new("connection-disconnect")
-                                        .primary()
-                                        .h(px(32.0))
-                                        .flex_none()
-                                        .icon(IconName::PowerOff)
-                                        .label("Disconnect")
-                                        .disabled(busy)
-                                        .on_click(move |_, _, cx| {
-                                            disconnect.update(cx, |s, cx| {
-                                                s.disconnect(NoticeOrigin::Stage, cx)
-                                            });
-                                        }),
-                                )
-                            })
-                            .when(broken, |row| {
-                                row.child(
-                                    Button::new("connection-logs")
-                                        .secondary()
-                                        .h(px(32.0))
-                                        .flex_none()
-                                        .icon(IconName::ScrollText)
-                                        .label("View logs")
-                                        .on_click(move |_, _, cx| {
-                                            show_logs.update(cx, |s, cx| {
-                                                s.set_tab(crate::actions::NavTab::Logs, cx)
-                                            });
-                                        }),
-                                )
-                            })
-                            // IP readout sits with the actions, not floating
-                            // between the zones.
                             .child(
                                 h_flex()
                                     .items_center()
                                     .gap(px(6.0))
                                     .px(px(10.0))
-                                    .h(px(26.0))
-                                    .rounded_full()
+                                    .h(px(32.0))
+                                    .rounded(px(6.0))
                                     .bg(cx.theme().muted.opacity(0.5))
                                     .border_1()
                                     .border_color(cx.theme().border)
                                     .child(
                                         Icon::new(IconName::Globe)
-                                            .xsmall()
+                                            .small()
                                             .text_color(cx.theme().muted_foreground),
                                     )
                                     .child(
@@ -701,17 +721,6 @@ impl ProfilesView {
                                             .text_xs()
                                             .text_color(cx.theme().foreground)
                                             .child(ip),
-                                    )
-                                    // A hairline between the read-only value and the
-                                    // buttons keeps copy and refresh reading as
-                                    // controls; without it the whole pill read as one
-                                    // uninteractive label.
-                                    .child(
-                                        div()
-                                            .h(px(14.0))
-                                            .w(px(1.0))
-                                            .bg(cx.theme().border)
-                                            .mx(px(2.0)),
                                     )
                                     .when_some(ip_to_copy, |pill, (ip, _)| {
                                         pill.child(
@@ -743,31 +752,66 @@ impl ProfilesView {
                                                 });
                                             }),
                                     ),
-                            ),
-                    )
-                    .when(snap.running, |row| {
-                        row.child(
-                            Button::new("connection-options")
-                                .ghost()
-                                .small()
-                                .flex_none()
-                                .icon(IconName::Ellipsis)
-                                .accessibility_label("Connection options")
-                                .dropdown_menu(move |menu, _, _| {
-                                    let restart = restart.clone();
-                                    menu.item(
-                                        PopupMenuItem::new("Restart service")
-                                            .icon(IconName::RotateCw)
-                                            .disabled(busy)
-                                            .on_click(move |_, _, cx| {
-                                                restart.update(cx, |s, cx| {
-                                                    s.restart_active(NoticeOrigin::Stage, cx)
-                                                });
-                                            }),
-                                    )
-                                }),
-                        )
-                    }),
+                            )
+                            .when(snap.running, |row| {
+                                row.child(
+                                    Button::new("connection-disconnect")
+                                        .secondary()
+                                        .h(px(32.0))
+                                        .flex_none()
+                                        .icon(IconName::PowerOff)
+                                        .label("Disconnect")
+                                        .disabled(busy)
+                                        .on_click(move |_, _, cx| {
+                                            disconnect.update(cx, |s, cx| {
+                                                s.disconnect(NoticeOrigin::Stage, cx)
+                                            });
+                                        }),
+                                )
+                            })
+                            .when(broken, |row| {
+                                row.child(
+                                    Button::new("connection-logs")
+                                        .secondary()
+                                        .h(px(32.0))
+                                        .flex_none()
+                                        .icon(IconName::ScrollText)
+                                        .label("View logs")
+                                        .on_click(move |_, _, cx| {
+                                            show_logs.update(cx, |s, cx| {
+                                                s.set_tab(crate::actions::NavTab::Logs, cx)
+                                            });
+                                        }),
+                                )
+                            })
+                            .when(snap.running, |row| {
+                                row.child(
+                                    Button::new("connection-options")
+                                        .ghost()
+                                        .h(px(32.0))
+                                        .w(px(32.0))
+                                        .flex_none()
+                                        .icon(IconName::Ellipsis)
+                                        .accessibility_label("Connection options")
+                                        .dropdown_menu(move |menu, _, _| {
+                                            let restart = restart.clone();
+                                            menu.item(
+                                                PopupMenuItem::new("Restart service")
+                                                    .icon(IconName::RotateCw)
+                                                    .disabled(busy)
+                                                    .on_click(move |_, _, cx| {
+                                                        restart.update(cx, |s, cx| {
+                                                            s.restart_active(
+                                                                NoticeOrigin::Stage,
+                                                                cx,
+                                                            )
+                                                        });
+                                                    }),
+                                            )
+                                        }),
+                                )
+                            }),
+                    ),
             )
             .when_some(issue, |strip, reason| {
                 strip.child(connection_error("service-error", reason, cx))

@@ -374,7 +374,6 @@ fn setting_switch_row(
         .child(
             Switch::new(spec.id)
                 .checked(spec.checked)
-                .color(cx.theme().success)
                 .disabled(spec.disabled)
                 .accessibility_label(spec.title)
                 .on_change(move |checked, window, cx| on_change(checked, window, cx)),

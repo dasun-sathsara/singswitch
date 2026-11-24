@@ -135,11 +135,11 @@ impl WorkspaceShell {
                 h_flex()
                     .items_center()
                     .gap(px(2.0))
-                    .p(px(3.0))
-                    .rounded(px(9.0))
-                    .bg(cx.theme().background.opacity(0.55))
+                    .p(px(2.0))
+                    .rounded(px(7.0))
+                    .bg(cx.theme().muted)
                     .border_1()
-                    .border_color(cx.theme().border.opacity(0.6))
+                    .border_color(cx.theme().border)
                     .children(tabs.into_iter().map(|(label, tab, icon)| {
                         let store = self.store.clone();
                         let is_active = selected == tab;
@@ -149,12 +149,12 @@ impl WorkspaceShell {
                             .id(SharedString::from(format!("nav-{tab:?}")))
                             .items_center()
                             .gap(px(6.0))
-                            .px(px(12.0))
-                            .h(px(30.0))
-                            .rounded(px(7.0))
+                            .px(px(10.0))
+                            .h(px(28.0))
+                            .rounded(px(5.0))
                             .cursor_pointer()
                             .bg(if is_active {
-                                cx.theme().title_bar
+                                crate::theme::surface(cx)
                             } else {
                                 gpui_kit::Hsla::transparent_black()
                             })
@@ -227,13 +227,13 @@ impl Render for WorkspaceShell {
                 // instead of sitting on the border.
                 {
                     let mut bar = TitleBar::new();
-                    bar.style().size.height = Some(px(40.0).into());
+                    bar.style().size.height = Some(px(44.0).into());
                     bar.child(self.render_navigation(cx))
                 }
             } else {
                 {
                     let mut bar = TitleBar::new();
-                    bar.style().size.height = Some(px(40.0).into());
+                    bar.style().size.height = Some(px(44.0).into());
                     bar.child(
                         h_flex()
                             .size_full()

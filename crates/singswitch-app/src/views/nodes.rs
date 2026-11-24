@@ -242,7 +242,7 @@ impl NodesStrip {
                     .text_size(px(12.0))
                     .text_color(cx.theme().muted_foreground)
                     .label(label)
-                    .icon(IconName::ChevronDown)
+                    .dropdown_caret(true)
                     .dropdown_menu(move |menu, _, _| {
                         let mut menu = menu.scrollable(true).max_h(px(320.0));
                         for member in &members {

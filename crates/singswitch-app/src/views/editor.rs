@@ -1342,7 +1342,6 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-tls")
                     .checked(self.model.tls_enabled)
-                    .color(cx.theme().success)
                     .label("TLS")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.tls_enabled = *v;
@@ -1352,7 +1351,6 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-utls")
                     .checked(self.model.utls_enabled)
-                    .color(cx.theme().success)
                     .label("uTLS")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.utls_enabled = *v;
@@ -1362,7 +1360,6 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-reality")
                     .checked(self.model.reality_enabled)
-                    .color(cx.theme().success)
                     .label("Reality")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.reality_enabled = *v;
@@ -1379,7 +1376,6 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-auto-route")
                     .checked(self.model.tun_auto_route)
-                    .color(cx.theme().success)
                     .label("Auto route")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.tun_auto_route = *v;
@@ -1389,7 +1385,6 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-strict-route")
                     .checked(self.model.tun_strict_route)
-                    .color(cx.theme().success)
                     .label("Strict route")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.tun_strict_route = *v;
@@ -1399,7 +1394,6 @@ impl ProfileEditorPanel {
             .child(
                 Switch::new("ed-reject-ipv6")
                     .checked(self.model.reject_ipv6)
-                    .color(cx.theme().success)
                     .label("Block IPv6")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.reject_ipv6 = *v;

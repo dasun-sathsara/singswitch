@@ -403,7 +403,7 @@ impl Render for LogsView {
                         h_flex()
                             .items_center()
                             .gap(px(6.0))
-                            .child(Switch::new("logs-follow").checked(follow).color(cx.theme().success).small().on_click({
+                            .child(Switch::new("logs-follow").checked(follow).small().on_click({
                                 let store_follow = self.store.clone();
                                 move |checked, _, cx| {
                                     let next = *checked;

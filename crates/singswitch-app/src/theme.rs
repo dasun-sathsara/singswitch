@@ -153,83 +153,75 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
         theme.font_family = crate::fonts::ui_family();
         theme.mono_font_family = crate::fonts::mono_family();
         if theme.mode.is_dark() {
-            // Violet-tinted darks: surfaces walk up the violet scale instead
-            // of neutral gray, so the accent reads as the system, not a coat
-            // of paint on slate.
-            theme.background = rgb(0x0D0B14).into();
-            theme.foreground = rgb(0xF3F0FF).into();
-            theme.muted = rgb(0x1E1929).into();
-            theme.muted_foreground = rgb(0xA49FC0).into();
-            theme.border = rgb(0x352B4D).into();
-            theme.input = rgb(0x3A3050).into();
-            theme.secondary = rgb(0x221C31).into();
-            theme.secondary_foreground = rgb(0xEDE9FE).into();
-            theme.secondary_hover = rgb(0x2A2340).into();
-            theme.secondary_active = rgb(0x352B4D).into();
-            theme.warning_foreground = rgb(0x0D0B14).into();
-            theme.popover = rgb(0x1A1526).into();
-            theme.popover_foreground = rgb(0xF3F0FF).into();
-            theme.title_bar = rgb(0x1E1929).into();
-            theme.title_bar_border = rgb(0x2E2740).into();
-            theme.accent = rgb(0x2A2340).into();
+            // Dark violet: deep midnight canvas with rich violet-slate surfaces
+            // and electric violet-600 primary actions.
+            theme.background = rgb(0x0C0B12).into();
+            theme.foreground = rgb(0xF5F3FF).into();
+            theme.muted = rgb(0x1B192A).into();
+            theme.muted_foreground = rgb(0x9894AC).into();
+            theme.border = rgb(0x2B273E).into();
+            theme.input = rgb(0x35304C).into();
+            theme.secondary = rgb(0x1F1D2E).into();
+            theme.secondary_foreground = rgb(0xF5F3FF).into();
+            theme.secondary_hover = rgb(0x2A273E).into();
+            theme.secondary_active = rgb(0x35324F).into();
+            theme.warning_foreground = rgb(0x0C0B12).into();
+            theme.popover = rgb(0x171524).into();
+            theme.popover_foreground = rgb(0xF5F3FF).into();
+            theme.title_bar = rgb(0x111019).into();
+            theme.title_bar_border = rgb(0x232034).into();
+            theme.accent = rgb(0x242038).into();
             theme.accent_foreground = rgb(0xDDD6FE).into();
-            // violet-600 with a white label: 5.70:1, and 3.43:1 against the
-            // page background so the button edge reads on its own.
             theme.primary = rgb(0x7C3AED).into();
             theme.primary_hover = rgb(0x8B5CF6).into();
-            theme.primary_active = rgb(0xA78BFA).into();
+            theme.primary_active = rgb(0x9333EA).into();
             theme.primary_foreground = rgb(0xFFFFFF).into();
-            theme.success = rgb(0x34D399).into();
-            theme.warning = rgb(0xFBBF24).into();
-            theme.danger = rgb(0xFB7185).into();
-            theme.button_danger = rgb(0x4A1430).into();
-            theme.button_danger_hover = rgb(0x5C1A3D).into();
-            theme.button_danger_active = rgb(0x6E2049).into();
-            theme.button_danger_foreground = rgb(0xFBCFE8).into();
-            theme.ring = rgb(0xA78BFA).into();
-            theme.selection = rgb(0x332A52).into();
-            theme.caret = rgb(0xA78BFA).into();
-            // Same as the light theme's override, for the same reason: a
-            // faint track on a card is the part a user must find to turn it on.
-            theme.switch = rgb(0x8B5CF6).into();
+            theme.success = rgb(0x10B981).into();
+            theme.warning = rgb(0xF59E0B).into();
+            theme.danger = rgb(0xF43F5E).into();
+            theme.button_danger = rgb(0x4C121E).into();
+            theme.button_danger_hover = rgb(0x601828).into();
+            theme.button_danger_active = rgb(0x731E31).into();
+            theme.button_danger_foreground = rgb(0xFECDD3).into();
+            theme.ring = rgb(0x8B5CF6).into();
+            theme.selection = rgb(0x312750).into();
+            theme.caret = rgb(0x8B5CF6).into();
+            theme.switch = rgb(0x524E60).into();
         } else {
-            // Light violet: the page is violet-50, panels violet-100, and
-            // the primary action is violet-700, so the accent is the scheme.
-            theme.background = rgb(0xF5F3FF).into();
-            theme.foreground = rgb(0x211D35).into();
-            theme.muted = rgb(0xEDE9FE).into();
-            theme.muted_foreground = rgb(0x6B6684).into();
-            theme.border = rgb(0xD9D2F5).into();
-            theme.input = rgb(0xC9C0EE).into();
-            theme.secondary = rgb(0xEDE9FE).into();
-            theme.secondary_foreground = rgb(0x211D35).into();
-            theme.secondary_hover = rgb(0xDDD6FE).into();
-            theme.secondary_active = rgb(0xC4B5FD).into();
+            // Light: clean off-white canvas, crisp white cards, strong
+            // violet-slate borders, and rich royal violet-700 primary actions.
+            theme.background = rgb(0xF7F8FA).into();
+            theme.foreground = rgb(0x13111C).into();
+            theme.muted = rgb(0xEEEFF5).into();
+            theme.muted_foreground = rgb(0x5A5D72).into();
+            theme.border = rgb(0xD4D7E2).into();
+            theme.input = rgb(0xC4C8D6).into();
+            theme.secondary = rgb(0xEEEFF5).into();
+            theme.secondary_foreground = rgb(0x13111C).into();
+            theme.secondary_hover = rgb(0xE2E4EC).into();
+            theme.secondary_active = rgb(0xD4D7E2).into();
             theme.warning_foreground = rgb(0xFFFFFF).into();
             theme.popover = rgb(0xFFFFFF).into();
-            theme.popover_foreground = rgb(0x211D35).into();
-            theme.title_bar = rgb(0xEDE9FE).into();
-            theme.title_bar_border = rgb(0xD9D2F5).into();
-            theme.accent = rgb(0xEDE9FE).into();
-            theme.accent_foreground = rgb(0x4C1D95).into();
+            theme.popover_foreground = rgb(0x13111C).into();
+            theme.title_bar = rgb(0xF0F1F6).into();
+            theme.title_bar_border = rgb(0xD4D7E2).into();
+            theme.accent = rgb(0xF3F0FF).into();
+            theme.accent_foreground = rgb(0x5B21B6).into();
             theme.primary = rgb(0x6D28D9).into();
             theme.primary_hover = rgb(0x5B21B6).into();
             theme.primary_active = rgb(0x4C1D95).into();
             theme.primary_foreground = rgb(0xFFFFFF).into();
-            theme.success = rgb(0x0D9488).into();
+            theme.success = rgb(0x059669).into();
             theme.warning = rgb(0xB45309).into();
             theme.danger = rgb(0xBE123C).into();
-            theme.button_danger = rgb(0xFDE8EF).into();
-            theme.button_danger_hover = rgb(0xFBD0E0).into();
-            theme.button_danger_active = rgb(0xF8B4CD).into();
+            theme.button_danger = rgb(0xFFE4E6).into();
+            theme.button_danger_hover = rgb(0xFECDD3).into();
+            theme.button_danger_active = rgb(0xFDA4AF).into();
             theme.button_danger_foreground = rgb(0xBE123C).into();
             theme.ring = rgb(0x7C3AED).into();
             theme.selection = rgb(0xDDD6FE).into();
             theme.caret = rgb(0x7C3AED).into();
-            // The switch's off track defaulted to #D4D4D4, 1.48:1 on a card:
-            // the one part of a row a user must find to turn it on was its
-            // faintest element. Non-text UI needs 3:1; violet-500 gives 4.23:1.
-            theme.switch = rgb(0x8B5CF6).into();
+            theme.switch = rgb(0x71717A).into();
         }
     });
 }
@@ -237,7 +229,7 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
 /// Fill for cards and panels.
 pub fn surface(cx: &App) -> gpui_kit::Hsla {
     if cx.theme().is_dark() {
-        rgb(0x161221).into()
+        rgb(0x151421).into()
     } else {
         rgb(0xFFFFFF).into()
     }
@@ -251,9 +243,9 @@ pub fn surface(cx: &App) -> gpui_kit::Hsla {
 /// dark 1.55:1 against the strip) while staying quiet.
 pub fn subtle_pill_bg(cx: &App) -> gpui_kit::Hsla {
     if cx.theme().is_dark() {
-        rgb(0x262038).into()
+        rgb(0x221E33).into()
     } else {
-        rgb(0xC4B5FD).into()
+        rgb(0xEDE9FE).into()
     }
 }
 
@@ -268,7 +260,7 @@ pub fn subtle_pill_bg(cx: &App) -> gpui_kit::Hsla {
 /// hover, so a selected log row cannot masquerade as a hovered one.
 pub fn selection_tint(cx: &App) -> gpui_kit::Hsla {
     if cx.theme().is_dark() {
-        rgb(0x332A52).into()
+        rgb(0x312750).into()
     } else {
         rgb(0xDDD6FE).into()
     }
@@ -278,6 +270,6 @@ pub fn success_text(cx: &App) -> gpui_kit::Hsla {
     if cx.theme().is_dark() {
         cx.theme().success
     } else {
-        rgb(0x0B5E57).into()
+        rgb(0x047857).into()
     }
 }
