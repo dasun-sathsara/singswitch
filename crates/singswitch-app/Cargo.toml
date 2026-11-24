@@ -44,6 +44,10 @@ objc2-user-notifications = { version = "0.3.2", features = [
     "UNUserNotificationCenter",
 ] }
 
+[features]
+default = []
+feixen = []
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",

@@ -20,18 +20,36 @@ use gpui_kit::{FontWeight, SharedString};
 
 /// Weight for emphasis: titles, headings, profile names, log levels.
 ///
-/// Medium rather than Bold. Geist at 700 is heavier than Feixen at 510 and read
-/// as shouting at 13-15px, which is the size most of this interface uses.
+/// Medium for Geist (Geist at 700 is heavy), Bold for Feixen Standard (which
+/// carries only Regular and Bold).
+#[cfg(feature = "feixen")]
+pub const EMPHASIS: FontWeight = FontWeight::BOLD;
+
+#[cfg(not(feature = "feixen"))]
 pub const EMPHASIS: FontWeight = FontWeight::MEDIUM;
 
 /// Proportional face for the interface.
+#[cfg(feature = "feixen")]
+pub const UI_FAMILY: &str = "Feixen Standard";
+
+#[cfg(not(feature = "feixen"))]
 pub const UI_FAMILY: &str = "Geist";
+
 /// Fixed-width face for values, identifiers, logs and paths.
 pub const MONO_FAMILY: &str = "Geist Mono";
 
+#[cfg(feature = "feixen")]
+const UI_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/FeixenStandard-Regular.ttf");
+#[cfg(feature = "feixen")]
+const UI_BOLD: &[u8] = include_bytes!("../../../assets/fonts/FeixenStandard-Bold.ttf");
+
+#[cfg(not(feature = "feixen"))]
 const UI_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Geist-Regular.ttf");
+#[cfg(not(feature = "feixen"))]
 const UI_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/Geist-Medium.ttf");
+#[cfg(not(feature = "feixen"))]
 const UI_BOLD: &[u8] = include_bytes!("../../../assets/fonts/Geist-Bold.ttf");
+
 const MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/GeistMono-Regular.ttf");
 const MONO_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/GeistMono-Medium.ttf");
 const MONO_BOLD: &[u8] = include_bytes!("../../../assets/fonts/GeistMono-Bold.ttf");
@@ -41,6 +59,16 @@ const MONO_BOLD: &[u8] = include_bytes!("../../../assets/fonts/GeistMono-Bold.tt
 /// Must run before any window opens. A failure is logged, not fatal: the theme
 /// still names the families, and gpui falls back to the platform face.
 pub fn install(cx: &mut App) {
+    #[cfg(feature = "feixen")]
+    let faces: Vec<std::borrow::Cow<'static, [u8]>> = vec![
+        std::borrow::Cow::Borrowed(UI_REGULAR),
+        std::borrow::Cow::Borrowed(UI_BOLD),
+        std::borrow::Cow::Borrowed(MONO_REGULAR),
+        std::borrow::Cow::Borrowed(MONO_MEDIUM),
+        std::borrow::Cow::Borrowed(MONO_BOLD),
+    ];
+
+    #[cfg(not(feature = "feixen"))]
     let faces: Vec<std::borrow::Cow<'static, [u8]>> = vec![
         std::borrow::Cow::Borrowed(UI_REGULAR),
         std::borrow::Cow::Borrowed(UI_MEDIUM),

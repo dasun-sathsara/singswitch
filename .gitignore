@@ -12,3 +12,6 @@ Thumbs.db
 # Python bytecode from scripts/*.py
 __pycache__/
 *.pyc
+
+# Local proprietary fonts
+assets/fonts/FeixenStandard*.ttf
