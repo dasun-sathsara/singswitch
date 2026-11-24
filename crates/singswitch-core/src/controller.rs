@@ -226,7 +226,15 @@ impl Controller {
     }
 
     fn is_active_and_running(&self, name: &str) -> (bool, bool) {
-        let active = self.activator.active_name().ok().flatten();
+        let active = match self.activator.active_name() {
+            Ok(active) => active,
+            Err(err) => {
+                // Callers treat a profile they cannot prove is live as inactive, but
+                // say so: an unreadable marker used to look exactly like "none active".
+                self.debug(format!("could not read the active profile: {err}"));
+                None
+            }
+        };
         let is_active = active.as_deref() == Some(name);
         let running = is_active
             && self
@@ -440,10 +448,13 @@ impl Controller {
         let after = match self.manager.probe() {
             Ok(h) => h,
             Err(err) => {
+                // Same rule as `await_running`: an unreadable state is unknown, not
+                // healthy. Returning None here reported a switch to a config sing-box
+                // may never have loaded.
                 self.debug(format!(
                     "could not confirm post-settle service health: {err}"
                 ));
-                return None;
+                return Some("could not be checked after starting".to_string());
             }
         };
         self.debug(format!(
@@ -515,12 +526,22 @@ impl Controller {
         }
 
         if !rollback.known() {
-            let _ = self.manager.stop();
-            return failure.with_hints([
-                "there was no previous profile to fall back to; stopped sing-box",
-                "inspect the service output with: singswitch logs",
-                "fix the profile and re-run: singswitch use <name>",
-            ]);
+            return match self.manager.stop() {
+                Ok(()) => failure.with_hints([
+                    "there was no previous profile to fall back to; stopped sing-box",
+                    "inspect the service output with: singswitch logs",
+                    "fix the profile and re-run: singswitch use <name>",
+                ]),
+                // Claiming "stopped sing-box" after a failed stop is how a user ends
+                // up with a daemon running a config nobody chose.
+                Err(stop_err) => failure.with_hints([
+                    format!(
+                        "there was no previous profile to fall back to, and sing-box could not be stopped: {stop_err}"
+                    ),
+                    "inspect the service output with: singswitch logs".to_string(),
+                    "stop it manually with: singswitch off".to_string(),
+                ]),
+            };
         }
 
         let previous = rollback.description();
@@ -543,8 +564,12 @@ impl Controller {
             }
             failure.message = format!("{summary}; reverted to {previous}");
         } else {
-            let _ = self.manager.stop();
-            failure.message = format!("{summary}; reverted to {previous} (service kept stopped)");
+            failure.message = match self.manager.stop() {
+                Ok(()) => format!("{summary}; reverted to {previous} (service kept stopped)"),
+                Err(stop_err) => format!(
+                    "{summary}; reverted to {previous}, but the service did not stop: {stop_err}"
+                ),
+            };
         }
         failure.with_hint("inspect the service output with: singswitch logs")
     }
@@ -750,15 +775,29 @@ impl Controller {
             return Ok(false);
         }
         if !running {
-            if self.layout.active_name_path.is_some() {
-                let _ = self
-                    .activator
-                    .activate(&path_for(&self.layout.profiles_dir, name));
-            }
+            self.repoint_if_marker_platform(&path_for(&self.layout.profiles_dir, name));
             return Ok(false);
         }
         self.activate_locked(name, |_| {})?;
         Ok(true)
+    }
+
+    /// Re-point the active config at `target` without restarting, on the copy-based
+    /// platform where the marker file has to follow the bytes.
+    ///
+    /// Best effort on purpose: the service is stopped, so nothing is loading the old
+    /// config, and failing the refresh would report a sync that already happened as
+    /// failed. It is not silent - the failure is traced for `--verbose` runs.
+    fn repoint_if_marker_platform(&self, target: &std::path::Path) {
+        if self.layout.active_name_path.is_none() {
+            return;
+        }
+        if let Err(err) = self.activator.activate(target) {
+            self.debug(format!(
+                "could not re-point the active config at {}: {err}",
+                target.display()
+            ));
+        }
     }
 
     /// Re-fetch every profile with a `.url` sidecar. Inactive profiles update first;
@@ -768,7 +807,13 @@ impl Controller {
         let names = sourced_profiles(&self.layout.profiles_dir)
             .map_err(|e| store_error(e, &self.layout.profiles_dir, "read"))?;
 
-        let active = self.activator.active_name().ok().flatten();
+        let active = match self.activator.active_name() {
+            Ok(active) => active,
+            Err(err) => {
+                self.debug(format!("could not read the active profile: {err}"));
+                None
+            }
+        };
         let mut report = SyncReport {
             synced: Vec::new(),
             failed: Vec::new(),
@@ -778,7 +823,14 @@ impl Controller {
             if active.as_deref() == Some(name.as_str()) {
                 continue;
             }
-            let Ok(Some(url)) = read_source(&self.layout.profiles_dir, name) else {
+            let Ok(url) = read_source(&self.layout.profiles_dir, name) else {
+                report.failed.push((
+                    name.clone(),
+                    "could not read the recorded source URL".to_string(),
+                ));
+                continue;
+            };
+            let Some(url) = url else {
                 report
                     .failed
                     .push((name.clone(), "missing source URL".to_string()));
@@ -795,7 +847,17 @@ impl Controller {
         {
             let path = path_for(&self.layout.profiles_dir, &active_name);
             let old_bytes = fs::read(&path).ok();
-            if let Ok(Some(url)) = read_source(&self.layout.profiles_dir, &active_name) {
+            let source = match read_source(&self.layout.profiles_dir, &active_name) {
+                Ok(source) => source,
+                Err(err) => {
+                    report.failed.push((
+                        active_name,
+                        format!("could not read the recorded source URL: {err}"),
+                    ));
+                    return Ok(report);
+                }
+            };
+            if let Some(url) = source {
                 match self.refresh_profile_locked(&active_name, &url) {
                     Err(err) => report.failed.push((active_name, err.to_string())),
                     Ok(()) => {
@@ -818,8 +880,8 @@ impl Controller {
                                 report.failed.push((active_name, detail));
                                 return Ok(report);
                             }
-                        } else if self.layout.active_name_path.is_some() {
-                            let _ = self.activator.activate(&path);
+                        } else {
+                            self.repoint_if_marker_platform(&path);
                         }
                         report.synced.push(active_name);
                     }
@@ -1006,8 +1068,19 @@ impl Controller {
                 allow_invalid,
             } => match self.save_profile(&name, &content, allow_invalid) {
                 Ok(reloaded) => {
-                    if let Some(url) = source_url {
-                        let _ = write_source(&self.layout.profiles_dir, &name, &url);
+                    if let Some(url) = source_url
+                        && let Err(err) = write_source(&self.layout.profiles_dir, &name, &url)
+                    {
+                        // The profile bytes are already saved. Reporting success here
+                        // left the GUI's "source" field claiming a URL nothing stored.
+                        return PipeResponse::from_error(
+                            &store_error(
+                                err,
+                                &self.layout.profiles_dir,
+                                "record the source URL for",
+                            )
+                            .with_hint(format!("save {name} again to retry recording its source")),
+                        );
                     }
                     PipeResponse::with_reloaded(reloaded)
                 }

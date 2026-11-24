@@ -76,6 +76,9 @@ impl SymlinkActivator {
                 "{}.singswitch-staging",
                 self.active_config_path.display()
             ));
+            // The staging name is fixed, so a leftover from a killed switch is
+            // normally a stale symlink. `remove_file` removes the link itself and
+            // never follows it, so it cannot delete the profile it points at.
             let _ = fs::remove_file(&staging);
             std::os::unix::fs::symlink(target, &staging)?;
             if let Err(err) = fs::rename(&staging, &self.active_config_path) {
@@ -256,12 +259,18 @@ impl Activator for CopyActivator {
             format!("{name}\n").as_bytes(),
             0o644,
         ) {
-            if let Some(prev_cfg) = &old_config {
-                let _ = write_file_atomic(&self.active_config_path, prev_cfg, 0o600);
-            } else {
-                let _ = fs::remove_file(&self.active_config_path);
-            }
-            return Err(err);
+            // The config is already swapped, so a silent failure to put it back
+            // leaves sing-box running a config that disagrees with the marker.
+            let restored = match &old_config {
+                Some(prev_cfg) => write_file_atomic(&self.active_config_path, prev_cfg, 0o600),
+                None => fs::remove_file(&self.active_config_path).map_err(Into::into),
+            };
+            return Err(match restored {
+                Ok(()) => err,
+                Err(restore_err) => err.with_cause(format!(
+                    "could not put the previous config back after this failure: {restore_err}"
+                )),
+            });
         }
 
         Ok(Box::new(CopyRollback {
