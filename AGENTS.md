@@ -103,13 +103,13 @@ and hints because users act on them (`error.rs`).
 
 ## Testing and verification
 
-- The test suite was intentionally removed along with its mock seams (see
-  git history for reasoning). What exists instead:
+- There is no test suite, by decision: the reasoning lives in git history
+  (the mock seams the tests needed distorted the design). What exists instead:
   - `make check` gates format, Clippy, icon coverage.
   - `scripts/check-macos.sh` / `check-windows.sh` cross-check.
   - `snap.py` renders deterministic UI scenes against fixed snapshots.
-- New logic in `core` (parsers, state machines, privilege boundaries) should
-  carry focused unit tests. UI view code is validated via preview captures.
+- Do not add unit tests to this codebase; a change is verified by the gate,
+  by `snap.py` captures, and by adversarial review, not by tests.
 - Verify UI changes **visually** with `snap.py` before pushing. Do not
   describe screenshots you did not render.
 

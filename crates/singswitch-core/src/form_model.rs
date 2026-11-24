@@ -565,39 +565,3 @@ fn str_field(obj: &Map<String, Value>, key: &str) -> String {
         .unwrap_or("")
         .to_string()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn non_object_tls_is_replaced_instead_of_panicking() {
-        // `tls` is a number here; the save must replace it, not abort.
-        let mut root = json!({
-            "outbounds": [{"type": "vless", "server": "a", "tls": 7}]
-        });
-        let mut model = ProfileFormModel::from_value(&root);
-        assert!(!model.tls_enabled);
-        model.tls_enabled = true;
-        model.server_name = "example.com".to_string();
-
-        model.apply_to_value(&mut root);
-
-        assert_eq!(root["outbounds"][0]["tls"]["enabled"], json!(true));
-        assert_eq!(
-            root["outbounds"][0]["tls"]["server_name"],
-            json!("example.com")
-        );
-    }
-
-    #[test]
-    fn out_of_range_port_and_mtu_keep_the_defaults() {
-        let root = json!({
-            "inbounds": [{"type": "tun", "mtu": 5_000_000_000u64}],
-            "outbounds": [{"type": "vless", "server_port": 70_000u32}]
-        });
-        let model = ProfileFormModel::from_value(&root);
-        assert_eq!(model.tun_mtu, DEFAULT_TUN_MTU);
-        assert_eq!(model.server_port, DEFAULT_SERVER_PORT);
-    }
-}

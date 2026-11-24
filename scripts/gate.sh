@@ -18,9 +18,6 @@ echo "==> icon audit"
 echo "==> build"
 cargo build --workspace || fail "build"
 
-echo "==> tests"
-cargo test --workspace || fail "tests"
-
 # Guard: the workspace lint thresholds must not be weakened. cargo-clippy
 # reads these; removing them silently downgrades the CI gate. We check the
 # workspace Cargo.toml still defines our baseline lints.

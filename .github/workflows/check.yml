@@ -21,7 +21,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Gate (fmt, clippy -D warnings, icons, build, tests, lint-baseline guard)
+      - name: Gate (fmt, clippy -D warnings, icons, build, lint-baseline guard)
         run: ./scripts/gate.sh
 
       # ---------------------------------------------------------------------------

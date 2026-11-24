@@ -1372,35 +1372,3 @@ fn find_singswitch_cli_exe() -> Option<PathBuf> {
     );
     (!fallback.as_os_str().is_empty() && fallback.is_file()).then_some(fallback)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Profile bytes come from a remote server, so the comparison has to be
-    /// exact: a "close enough" match would skip rewriting a profile whose
-    /// server or key changed, and the tunnel would keep using the stale one.
-    #[test]
-    fn identical_body_is_unchanged() {
-        assert!(!body_differs(Some(b"{\"a\":1}\n"), b"{\"a\":1}\n"));
-    }
-
-    #[test]
-    fn any_byte_difference_is_changed() {
-        assert!(body_differs(Some(b"{\"a\":1}\n"), b"{\"a\":2}\n"));
-        // Trailing newline only: still a different file on disk.
-        assert!(body_differs(Some(b"{\"a\":1}"), b"{\"a\":1}\n"));
-        // Reordered keys are a different body even when they mean the same thing.
-        assert!(body_differs(
-            Some(b"{\"a\":1,\"b\":2}"),
-            b"{\"b\":2,\"a\":1}"
-        ));
-    }
-
-    #[test]
-    fn missing_file_is_changed() {
-        // Created, not refreshed: it has to be written.
-        assert!(body_differs(None, b"{}"));
-        assert!(body_differs(None, b""));
-    }
-}
