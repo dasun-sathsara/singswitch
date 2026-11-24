@@ -267,41 +267,46 @@ impl Render for NodesStrip {
             !self.groups.is_empty() && store.selected_tab == NavTab::Profiles && !store.editing;
         let running = store.snapshot.running;
 
-        v_flex().w_full().when(visible, |strip| {
-            strip.child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap(px(6.0))
-                    .px(px(14.0))
-                    .pb(px(6.0))
-                    .child(
+        // `v_flex()` alone still lays out as a block, pushing the stage down a
+        // few pixels on every profile screen even when no group exists. A
+        // hidden strip must occupy exactly nothing.
+        if !visible {
+            return div().h_0().w_full();
+        }
+
+        v_flex().w_full().child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap(px(6.0))
+                .px(px(14.0))
+                .pb(px(6.0))
+                .child(
+                    div()
+                        .flex_none()
+                        .pr(px(2.0))
+                        .text_size(px(11.0))
+                        .font_weight(fonts::EMPHASIS)
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Nodes"),
+                )
+                .children(
+                    self.groups
+                        .iter()
+                        .map(|group| self.render_group(group, running, cx)),
+                )
+                .when_some(self.live_error.clone(), |row, reason| {
+                    row.child(
                         div()
-                            .flex_none()
-                            .pr(px(2.0))
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .truncate()
                             .text_size(px(11.0))
-                            .font_weight(fonts::EMPHASIS)
                             .text_color(cx.theme().muted_foreground)
-                            .child("Nodes"),
+                            .child(reason),
                     )
-                    .children(
-                        self.groups
-                            .iter()
-                            .map(|group| self.render_group(group, running, cx)),
-                    )
-                    .when_some(self.live_error.clone(), |row, reason| {
-                        row.child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .truncate()
-                                .text_size(px(11.0))
-                                .text_color(cx.theme().muted_foreground)
-                                .child(reason),
-                        )
-                    }),
-            )
-        })
+                }),
+        )
     }
 }
 
