@@ -14,10 +14,11 @@ use gpui_kit::{
 };
 
 use crate::icons::TrayVisualState;
-use crate::state::{AppStore, NoticeOrigin};
+use crate::state::{AppStore, BannerTone, NoticeOrigin};
 use crate::views::editor::ProfileEditorPanel;
 use singswitch_core::logs::contains_ignore_ascii_case;
 use singswitch_core::profile::Profile;
+use singswitch_core::profile_link;
 
 pub struct ProfilesView {
     store: Entity<AppStore>,
@@ -225,6 +226,182 @@ impl ProfilesView {
         });
     }
 
+    /// Import a profile from a `vless://`-style share link.
+    ///
+    /// The link is parsed into a config and validated with `sing-box check` on a
+    /// background executor, then written with an exclusive create, so the window
+    /// never blocks on a subprocess and an existing profile is never replaced.
+    pub fn open_import_link_dialog(store: Entity<AppStore>, window: &mut Window, cx: &mut App) {
+        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Profile name"));
+        let link_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("vless://uuid@host:443?security=tls#name")
+        });
+        let initial_focus = Cell::new(true);
+        let error = Rc::new(RefCell::new(None::<String>));
+        let busy = Rc::new(Cell::new(false));
+
+        window.open_dialog(cx, move |dialog, window, cx| {
+            if initial_focus.replace(false) {
+                name_input.focus_handle(cx).focus(window, cx);
+            }
+            let n_ok = name_input.clone();
+            let l_ok = link_input.clone();
+            let s_ok = store.clone();
+            let error_for_ok = error.clone();
+            let busy_for_ok = busy.clone();
+
+            dialog
+                .title("Import from share link")
+                .width(px(520.0))
+                .child(
+                    v_flex()
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(
+                                    "Paste a vless, trojan, hysteria2, ss or vmess link. It is converted to a sing-box config and validated before it is saved.",
+                                ),
+                        )
+                        .child(Input::new(&name_input).cleanable(true))
+                        .child(Input::new(&link_input).cleanable(true)),
+                )
+                .when_some(error.borrow().clone(), |dialog, message| {
+                    dialog.child(div().text_sm().text_color(cx.theme().danger).child(message))
+                })
+                .footer(
+                    h_flex()
+                        .w_full()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("import-link-cancel")
+                                .secondary()
+                                .label("Cancel")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            Button::new("import-link-submit")
+                                .primary()
+                                .label("Import")
+                                .on_click(move |_, window, cx| {
+                                    let name = n_ok.read(cx).value().trim().to_string();
+                                    let link = l_ok.read(cx).value().trim().to_string();
+                                    let error = if busy_for_ok.get()
+                                        || s_ok.read(cx).busy_phase.is_some()
+                                    {
+                                        Some("Wait for the current operation to finish.".into())
+                                    } else if link.is_empty() {
+                                        Some("Paste the share link.".into())
+                                    } else {
+                                        singswitch_core::profile::validate_name(&name)
+                                            .err()
+                                            .map(|err| err.to_string())
+                                    };
+                                    if let Some(error) = error {
+                                        *error_for_ok.borrow_mut() = Some(error);
+                                        window.refresh();
+                                        return;
+                                    }
+                                    *error_for_ok.borrow_mut() = None;
+                                    Self::start_import_from_link(
+                                        s_ok.clone(),
+                                        name,
+                                        link,
+                                        busy_for_ok.clone(),
+                                        cx,
+                                    );
+                                    window.close_dialog(cx);
+                                }),
+                        ),
+                )
+        });
+    }
+
+    /// Run the import off the UI thread, then refresh the store's snapshot.
+    ///
+    /// Everything here goes through fields and methods the store already
+    /// exposes (`ctrl`, `busy_phase`, `refresh_snapshot`, `set_notice`), because
+    /// the stage's own actions live in `state.rs`.
+    fn start_import_from_link(
+        store: Entity<AppStore>,
+        name: String,
+        link: String,
+        busy: Rc<Cell<bool>>,
+        cx: &mut App,
+    ) {
+        let Some((ctrl, profiles_dir)) = store.read(cx).ctrl.clone().map(|ctrl| {
+            let dir = ctrl.layout.profiles_dir.clone();
+            (ctrl, dir)
+        }) else {
+            store.update(cx, |s, cx| {
+                let message = s
+                    .init_error
+                    .clone()
+                    .unwrap_or_else(|| "This platform is not supported".to_string());
+                s.set_notice(NoticeOrigin::Stage, BannerTone::Warning, message, cx);
+            });
+            return;
+        };
+
+        busy.set(true);
+        store.update(cx, |s, cx| {
+            s.busy_phase = Some(format!("Importing {name}..."));
+            cx.notify();
+        });
+
+        cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
+            let checker = ctrl.checker.clone();
+            let (name_for_work, link_for_work) = (name.clone(), link);
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    profile_link::import_profile(
+                        &profiles_dir,
+                        checker.as_ref(),
+                        &name_for_work,
+                        &link_for_work,
+                    )
+                })
+                .await;
+
+            busy.set(false);
+            store.update(cx, |s, cx| {
+                s.busy_phase = None;
+                match result {
+                    Ok(_) => {
+                        s.selected_profile = Some(name.clone());
+                        s.selected_tab = crate::actions::NavTab::Profiles;
+                        s.editing = false;
+                        s.set_notice(
+                            NoticeOrigin::Stage,
+                            BannerTone::Success,
+                            format!("Imported {name}"),
+                            cx,
+                        );
+                    }
+                    Err(err) => {
+                        // The store's shared error printer (error_text) is
+                        // private to state.rs, so this mirrors it. Reuse it the
+                        // next time state.rs is open: same shape, one place.
+                        let message = if err.hints.is_empty() {
+                            err.message.clone()
+                        } else {
+                            format!("{}: {}", err.message, err.hints.join("; "))
+                        };
+                        s.set_notice(NoticeOrigin::Stage, BannerTone::Error, message, cx);
+                    }
+                }
+                // The stage re-reads profiles from disk and the status from the
+                // service; it is cheap and already the path every other action
+                // uses to make a new file visible.
+                s.refresh_snapshot(true, cx);
+            });
+        })
+        .detach();
+    }
+
     fn render_connections(&self, cx: &Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
         let busy = store.is_busy();
@@ -242,6 +419,7 @@ impl ProfilesView {
         if store.snapshot.profiles.is_empty() && !store.is_probing() {
             let create = self.store.clone();
             let import = self.store.clone();
+            let import_link = self.store.clone();
             return content.child(
                 v_flex()
                     .flex_1()
@@ -304,6 +482,21 @@ impl ProfilesView {
                                     .disabled(busy)
                                     .on_click(move |_, window, cx| {
                                         Self::open_import_url_dialog(import.clone(), window, cx);
+                                    }),
+                            )
+                            .child(
+                                Button::new("first-profile-import-link")
+                                    .secondary()
+                                    .h(px(28.0))
+                                    .icon(IconName::ExternalLink)
+                                    .label("Import from share link")
+                                    .disabled(busy)
+                                    .on_click(move |_, window, cx| {
+                                        Self::open_import_link_dialog(
+                                            import_link.clone(),
+                                            window,
+                                            cx,
+                                        );
                                     }),
                             ),
                     ),
@@ -543,6 +736,7 @@ impl ProfilesView {
         use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
         let create = self.store.clone();
         let import = self.store.clone();
+        let import_link = self.store.clone();
         let sync = self.store.clone();
         let busy = store.is_busy();
         let has_remote = store
@@ -577,6 +771,7 @@ impl ProfilesView {
                     .dropdown_menu(move |menu, _, _| {
                         let create = create.clone();
                         let import = import.clone();
+                        let import_link = import_link.clone();
                         menu.item(
                             PopupMenuItem::new("New profile…")
                                 .icon(IconName::FilePlus)
@@ -589,6 +784,13 @@ impl ProfilesView {
                                 .icon(IconName::Link)
                                 .on_click(move |_, window, cx| {
                                     Self::open_import_url_dialog(import.clone(), window, cx);
+                                }),
+                        )
+                        .item(
+                            PopupMenuItem::new("Import from share link…")
+                                .icon(IconName::ExternalLink)
+                                .on_click(move |_, window, cx| {
+                                    Self::open_import_link_dialog(import_link.clone(), window, cx);
                                 }),
                         )
                     }),
