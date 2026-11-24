@@ -576,147 +576,173 @@ impl ProfilesView {
         let refresh = self.store.clone();
         let restart = self.store.clone();
 
+        // Two-zone banner: left is the status on an accent-tinted field, right
+        // is the actions on the card surface. One border, one radius, and the
+        // state color lives in the left zone instead of tinting the whole card.
+        let connected = visual == TrayVisualState::Connected;
+        let broken = visual == TrayVisualState::Broken;
         v_flex()
             .w_full()
             .flex_none()
             .rounded(px(10.0))
             .border_1()
-            .border_color(if visual == TrayVisualState::Connected {
+            .border_color(if connected {
                 cx.theme().success.opacity(0.35)
-            } else if visual == TrayVisualState::Broken {
+            } else if broken {
                 cx.theme().danger.opacity(0.35)
             } else {
                 cx.theme().border
             })
             .bg(crate::theme::surface(cx))
-            .p(px(12.0))
             .child(
                 h_flex()
                     .w_full()
-                    .min_h(px(36.0))
-                    .px(px(4.0))
-                    .gap(px(10.0))
-                    .items_center()
+                    .items_stretch()
+                    .gap(px(12.0))
+                    .p(px(12.0))
+                    // Left zone: status pill + profile name on accent fill.
                     .child(
                         h_flex()
+                            .flex_1()
+                            .min_w(px(0.0))
                             .items_center()
-                            .gap(px(6.0))
-                            .px(px(8.0))
-                            .py(px(3.0))
-                            .rounded_full()
-                            .bg(tone.opacity(0.12))
-                            .child(div().size(px(6.5)).flex_none().rounded_full().bg(dot))
+                            .gap(px(10.0))
+                            .px(px(12.0))
+                            .h(px(40.0))
+                            .rounded(px(8.0))
+                            .bg(cx.theme().accent)
                             .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(fonts::EMPHASIS)
-                                    .text_color(tone)
-                                    .child(label),
-                            ),
+                                h_flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .px(px(8.0))
+                                    .h(px(24.0))
+                                    .rounded_full()
+                                    .bg(tone.opacity(0.12))
+                                    .child(div().size(px(6.5)).flex_none().rounded_full().bg(dot))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_weight(fonts::EMPHASIS)
+                                            .text_color(tone)
+                                            .child(label),
+                                    ),
+                            )
+                            .when_some(activity, |row, text| {
+                                row.child(
+                                    div()
+                                        .min_w(px(0.0))
+                                        .max_w(px(240.0))
+                                        .text_sm()
+                                        .font_weight(fonts::EMPHASIS)
+                                        .text_color(cx.theme().accent_foreground)
+                                        .truncate()
+                                        .child(text),
+                                )
+                            }),
                     )
-                    .when_some(activity, |row, text| {
-                        row.child(
-                            div()
-                                .min_w(px(0.0))
-                                .max_w(px(240.0))
-                                .text_sm()
-                                .font_weight(fonts::EMPHASIS)
-                                .text_color(cx.theme().foreground)
-                                .truncate()
-                                .child(text),
-                        )
-                    })
-                    .when(snap.running, |row| {
-                        row.child(
-                            Button::new("connection-disconnect")
-                                .ghost()
-                                .h(px(32.0))
-                                .flex_none()
-                                .icon(IconName::PowerOff)
-                                .label("Disconnect")
-                                .disabled(busy)
-                                .on_click(move |_, _, cx| {
-                                    disconnect
-                                        .update(cx, |s, cx| s.disconnect(NoticeOrigin::Stage, cx));
-                                }),
-                        )
-                    })
-                    .when(visual == TrayVisualState::Broken, |row| {
-                        row.child(
-                            Button::new("connection-logs")
-                                .ghost()
-                                .h(px(32.0))
-                                .flex_none()
-                                .icon(IconName::ScrollText)
-                                .label("View logs")
-                                .on_click(move |_, _, cx| {
-                                    show_logs.update(cx, |s, cx| {
-                                        s.set_tab(crate::actions::NavTab::Logs, cx)
-                                    });
-                                }),
-                        )
-                    })
-                    .child(div().flex_1())
+                    // Right zone: actions + IP readout on the card surface.
                     .child(
                         h_flex()
+                            .flex_none()
                             .items_center()
-                            .gap(px(6.0))
-                            .px(px(10.0))
-                            .h(px(26.0))
-                            .rounded_full()
-                            .bg(cx.theme().muted.opacity(0.5))
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .child(
-                                Icon::new(IconName::Globe)
-                                    .xsmall()
-                                    .text_color(cx.theme().muted_foreground),
-                            )
-                            .child(
-                                div()
-                                    .font_family(fonts::mono_family())
-                                    .text_xs()
-                                    .text_color(cx.theme().foreground)
-                                    .child(ip),
-                            )
-                            // A hairline between the read-only value and the
-                            // buttons keeps copy and refresh reading as
-                            // controls; without it the whole pill read as one
-                            // uninteractive label.
-                            .child(
-                                div()
-                                    .h(px(14.0))
-                                    .w(px(1.0))
-                                    .bg(cx.theme().border)
-                                    .mx(px(2.0)),
-                            )
-                            .when_some(ip_to_copy, |pill, (ip, _)| {
-                                pill.child(
-                                    Button::new("copy-ip")
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::Copy)
-                                        .accessibility_label("Copy public IP")
+                            .gap(px(8.0))
+                            .when(snap.running, |row| {
+                                row.child(
+                                    Button::new("connection-disconnect")
+                                        .primary()
+                                        .h(px(32.0))
+                                        .flex_none()
+                                        .icon(IconName::PowerOff)
+                                        .label("Disconnect")
+                                        .disabled(busy)
                                         .on_click(move |_, _, cx| {
-                                            cx.write_to_clipboard(
-                                                gpui_kit::ClipboardItem::new_string(ip.clone()),
-                                            );
+                                            disconnect.update(cx, |s, cx| {
+                                                s.disconnect(NoticeOrigin::Stage, cx)
+                                            });
                                         }),
                                 )
                             })
+                            .when(broken, |row| {
+                                row.child(
+                                    Button::new("connection-logs")
+                                        .secondary()
+                                        .h(px(32.0))
+                                        .flex_none()
+                                        .icon(IconName::ScrollText)
+                                        .label("View logs")
+                                        .on_click(move |_, _, cx| {
+                                            show_logs.update(cx, |s, cx| {
+                                                s.set_tab(crate::actions::NavTab::Logs, cx)
+                                            });
+                                        }),
+                                )
+                            })
+                            // IP readout sits with the actions, not floating
+                            // between the zones.
                             .child(
-                                Button::new("refresh-network")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::RefreshCw)
-                                    .accessibility_label("Refresh connection and public IP")
-                                    .disabled(store.ip_loading)
-                                    .on_click(move |_, _, cx| {
-                                        refresh.update(cx, |s, cx| {
-                                            s.refresh_snapshot(true, cx);
-                                            s.refresh_ip(cx);
-                                        });
-                                    }),
+                                h_flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .px(px(10.0))
+                                    .h(px(26.0))
+                                    .rounded_full()
+                                    .bg(cx.theme().muted.opacity(0.5))
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .child(
+                                        Icon::new(IconName::Globe)
+                                            .xsmall()
+                                            .text_color(cx.theme().muted_foreground),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_family(fonts::mono_family())
+                                            .text_xs()
+                                            .text_color(cx.theme().foreground)
+                                            .child(ip),
+                                    )
+                                    // A hairline between the read-only value and the
+                                    // buttons keeps copy and refresh reading as
+                                    // controls; without it the whole pill read as one
+                                    // uninteractive label.
+                                    .child(
+                                        div()
+                                            .h(px(14.0))
+                                            .w(px(1.0))
+                                            .bg(cx.theme().border)
+                                            .mx(px(2.0)),
+                                    )
+                                    .when_some(ip_to_copy, |pill, (ip, _)| {
+                                        pill.child(
+                                            Button::new("copy-ip")
+                                                .ghost()
+                                                .xsmall()
+                                                .icon(IconName::Copy)
+                                                .accessibility_label("Copy public IP")
+                                                .on_click(move |_, _, cx| {
+                                                    cx.write_to_clipboard(
+                                                        gpui_kit::ClipboardItem::new_string(
+                                                            ip.clone(),
+                                                        ),
+                                                    );
+                                                }),
+                                        )
+                                    })
+                                    .child(
+                                        Button::new("refresh-network")
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(IconName::RefreshCw)
+                                            .accessibility_label("Refresh connection and public IP")
+                                            .disabled(store.ip_loading)
+                                            .on_click(move |_, _, cx| {
+                                                refresh.update(cx, |s, cx| {
+                                                    s.refresh_snapshot(true, cx);
+                                                    s.refresh_ip(cx);
+                                                });
+                                            }),
+                                    ),
                             ),
                     )
                     .when(snap.running, |row| {
