@@ -88,10 +88,11 @@ fn outbound_from_link(link: &str) -> Result<Map<String, Value>> {
         ));
     }
     let Some((scheme, rest)) = trimmed.split_once("://") else {
-        return Err(share_link_error(format!(
-            "{} is not a share link",
-            first_token(trimmed)
-        )));
+        // Never echo the link: what was pasted may be userinfo or a URL, and
+        // the error lands in a banner people screenshot.
+        return Err(share_link_error(
+            "this does not look like a share link (no scheme:// prefix)",
+        ));
     };
     match scheme.to_ascii_lowercase().as_str() {
         "vless" => vless_outbound(rest),
@@ -113,10 +114,7 @@ fn share_link_error(message: impl Into<String>) -> SingSwitchError {
     ])
 }
 
-/// A leading word of the link, safe to show: the scheme, never the credentials.
-fn first_token(link: &str) -> &str {
-    link.split_whitespace().next().unwrap_or("")
-}
+// `first_token` echoed pasted credentials in errors; only the scheme is user-safe.
 
 /// How a link describes its TLS layer.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -130,8 +128,8 @@ impl Security {
     fn parse(raw: &str, default: Self) -> Result<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "" => Ok(default),
-            "none" => Ok(Self::None),
-            "tls" => Ok(Self::Tls),
+            "none" | "false" => Ok(Self::None),
+            "tls" | "true" => Ok(Self::Tls),
             "reality" => Ok(Self::Reality),
             other => Err(share_link_error(format!("unknown security {other:?}"))),
         }
@@ -158,6 +156,14 @@ impl<'a> ShareLink<'a> {
             Some((authority, query)) => (authority, query),
             None => (body, ""),
         };
+        // The official hysteria2 and ss URI schemes put a path before the
+        // query (`hysteria2://auth@host:443/?insecure=1`, Outline keys end
+        // `@host:8388/?outline=1`). These links carry no meaningful path — the
+        // forms in the wild use it as a separator or mount noise markers in
+        // the query — so everything from the first `/` on is dropped from the
+        // authority; `example.com:443/` must not become a port `443/` or a
+        // host `example.com/`.
+        let authority = authority.split('/').next().unwrap_or(authority);
         let query = raw_query
             .split('&')
             .filter(|pair| !pair.is_empty())
@@ -205,7 +211,20 @@ fn split_host_port(hostport: &str) -> Result<(String, u16)> {
                         .with_hint("write an IPv6 address as [2001:db8::1]:443"),
                 );
             };
-            (host.to_string(), tail.strip_prefix(':').unwrap_or(""))
+            // `]` may be followed only by `:port`; anything else (`]junk:8443`)
+            // is malformed authority, and swallowing it would connect
+            // somewhere other than what the link says.
+            let port = match tail.strip_prefix(':') {
+                Some(port) => port,
+                None if tail.is_empty() => "",
+                None => {
+                    return Err(share_link_error(
+                        "the share link has extra text after the IPv6 address",
+                    )
+                    .with_hint("write an IPv6 address as [2001:db8::1]:443"));
+                }
+            };
+            (host.to_string(), port)
         }
         None => {
             // A bare IPv6 address without brackets has no unambiguous port
@@ -226,6 +245,15 @@ fn split_host_port(hostport: &str) -> Result<(String, u16)> {
     if host.is_empty() || host.chars().any(|ch| ch.is_whitespace() || ch.is_control()) {
         return Err(share_link_error("the share link has no server address"));
     }
+    // A percent sign in the authority stays percent-encoded in the host
+    // (`ex%61mple.com`), which DNS then fails on — and the query half of the
+    // same link decodes its values, so the two halves would disagree. URLs
+    // in the wild do not percent-encode reg-names; decode here for parity.
+    let host = if host.contains('%') {
+        percent_decode(&host)
+    } else {
+        host
+    };
     let port = if port.is_empty() {
         DEFAULT_PORT
     } else {
@@ -274,6 +302,15 @@ fn apply_tls(out: &mut Map<String, Value>, opts: TlsOptions<'_>) -> Result<()> {
     } else {
         opts.sni.trim()
     };
+    // server_name travels into the TLS handshake; a CR/LF in it is header
+    // injection, not a hostname. Reject rather than trying to strip: a value
+    // with control bytes is not something the user meant to paste.
+    if server_name.as_bytes().iter().any(|b| b.is_ascii_control()) {
+        return Err(
+            share_link_error("the link's server name contains control characters")
+                .with_hint("copy the sni= value unchanged from your provider's link"),
+        );
+    }
     tls.insert(
         "server_name".to_string(),
         Value::String(server_name.to_string()),
@@ -300,12 +337,28 @@ fn apply_tls(out: &mut Map<String, Value>, opts: TlsOptions<'_>) -> Result<()> {
                 ),
             );
         }
+        // Reality's short ID is up to 8 bytes, hex. A longer one panics deep
+        // inside sing-box (index out of range decoding hex), surfacing a Go
+        // stack trace in the import banner; reject it here with a readable
+        // reason. Empty is legal (servers may be configured without one).
+        let short_id = opts.short_id.trim();
+        if !short_id.is_empty() {
+            let valid = short_id.len() <= 16
+                && short_id.len().is_multiple_of(2)
+                && short_id.bytes().all(|b| b.is_ascii_hexdigit());
+            if !valid {
+                return Err(share_link_error(
+                    "the Reality short ID (sid=) must be up to 16 hex characters",
+                )
+                .with_hint("copy the sid value unchanged from your provider's link"));
+            }
+        }
         tls.insert(
             "reality".to_string(),
             json!({
                 "enabled": true,
                 "public_key": opts.public_key.trim(),
-                "short_id": opts.short_id.trim(),
+                "short_id": short_id,
             }),
         );
     }
@@ -326,6 +379,19 @@ fn apply_transport(out: &mut Map<String, Value>, opts: TransportOptions<'_>) -> 
     let host = opts.host.trim();
     let path = opts.path.trim();
     let service = opts.service.trim();
+    // These values ride in handshake headers (Host, path, gRPC service name).
+    // A CR/LF in any of them is an injected header line, which the link's
+    // author controls verbatim; refuse instead of allowing the outbound to
+    // speak with extra headers nobody asked for.
+    if [host, path, service]
+        .iter()
+        .any(|value| value.as_bytes().iter().any(|b| b.is_ascii_control()))
+    {
+        return Err(
+            share_link_error("the link's transport parameters contain control characters")
+                .with_hint("copy the type/path/host values unchanged from your provider's link"),
+        );
+    }
 
     let mut transport = Map::new();
     match kind.as_str() {
@@ -403,19 +469,38 @@ fn vless_outbound(rest: &str) -> Result<Map<String, Value>> {
     let mut out = base_outbound("vless", &server, port);
     out.insert("uuid".to_string(), Value::String(uuid));
     let flow = link.get("flow");
+    let security = Security::parse(link.get("security"), Security::None)?;
+    // Vision flow rides only inside raw TLS; on ws/grpc/http transports the
+    // connection is not a TLS record at all, and sing-box passes `check` and
+    // then fails at connect (`not a valid supported TLS connection:` etc.).
+    // Providers do ship flow= on such links, so drop it with a reason rather
+    // than emitting a config that cannot connect.
+    let transport = link.get("type");
     if !flow.is_empty() {
-        out.insert("flow".to_string(), Value::String(flow.to_string()));
+        let plain_tcp = transport.is_empty() || transport.eq_ignore_ascii_case("tcp");
+        let vision_ok = plain_tcp && matches!(security, Security::Tls | Security::Reality);
+        if vision_ok {
+            out.insert("flow".to_string(), Value::String(flow.to_string()));
+        } else {
+            return Err(share_link_error(format!(
+                "flow={flow:?} needs raw TCP with TLS or REALITY; this link's transport ({transport:?}/security) cannot carry it"
+            ))
+            .with_hint("remove flow, or change type= to tcp with security=tls"));
+        }
     }
     apply_tls(
         &mut out,
         TlsOptions {
-            security: Security::parse(link.get("security"), Security::None)?,
+            security,
             server: &server,
             sni: link.get("sni"),
             fingerprint: link.get("fp"),
             public_key: link.get("pbk"),
             short_id: link.get("sid"),
-            insecure: link.flag("insecure"),
+            // `allowInsecure` is the spelling some providers export (Shadowrocket
+            // among others); a parameter that changes whether a link connects
+            // cannot be silently dropped.
+            insecure: link.flag("insecure") || link.flag("allowInsecure"),
         },
     )?;
     apply_query_transport(&mut out, &link)?;
@@ -444,7 +529,7 @@ fn trojan_outbound(rest: &str) -> Result<Map<String, Value>> {
             fingerprint: link.get("fp"),
             public_key: link.get("pbk"),
             short_id: link.get("sid"),
-            insecure: link.flag("insecure"),
+            insecure: link.flag("insecure") || link.flag("allowInsecure"),
         },
     )?;
     apply_query_transport(&mut out, &link)?;
@@ -462,17 +547,26 @@ fn hysteria2_outbound(rest: &str) -> Result<Map<String, Value>> {
 
     let mut out = base_outbound("hysteria2", &server, port);
     out.insert("password".to_string(), Value::String(password));
-    // QUIC is always TLS here: sing-box rejects a hysteria2 outbound without it.
+    // QUIC is always TLS here: sing-box rejects a hysteria2 outbound without
+    // it. REALITY is not a thing over hysteria2, so say that instead of
+    // failing with "the Reality link has no public key" on a complete link.
+    let security = Security::parse(link.get("security"), Security::Tls)?;
+    if security == Security::Reality {
+        return Err(
+            share_link_error("REALITY is not supported on hysteria2 links")
+                .with_hint("remove security=reality, or use the vless:// link instead"),
+        );
+    }
     apply_tls(
         &mut out,
         TlsOptions {
-            security: Security::parse(link.get("security"), Security::Tls)?,
+            security,
             server: &server,
             sni: link.get("sni"),
             fingerprint: link.get("fp"),
             public_key: "",
             short_id: "",
-            insecure: link.flag("insecure"),
+            insecure: link.flag("insecure") || link.flag("allowInsecure"),
         },
     )?;
 
@@ -526,6 +620,16 @@ fn shadowsocks_outbound(rest: &str) -> Result<Map<String, Value>> {
 
 /// The pre-SIP002 form: one base64 blob holding `method:password@host:port`.
 fn legacy_shadowsocks_outbound(link: &ShareLink<'_>) -> Result<Map<String, Value>> {
+    // The legacy form is chosen because the link has no @ in its authority;
+    // its query is still real (Outline keys carry ?outline=1 and SIP003
+    // plugins ride the query), and dropping a plugin silently imports a plain
+    // outbound that cannot connect to a server that requires obfs.
+    if !link.get("plugin").is_empty() {
+        return Err(share_link_error(
+            "this ss link needs a SIP003 plugin, which singswitch cannot import",
+        )
+        .with_hint("ask your provider for a link without a plugin"));
+    }
     let decoded = decode_base64(link.authority.trim())
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .ok_or_else(|| {
@@ -575,25 +679,41 @@ fn vmess_outbound(rest: &str) -> Result<Map<String, Value>> {
     let tree: Value = serde_json::from_slice(&decoded)
         .map_err(|err| share_link_error(format!("the vmess link decodes to no JSON: {err}")))?;
 
-    let field = |key: &str| match tree.get(key) {
-        Some(Value::String(text)) => text.clone(),
-        Some(other) => other.to_string(),
-        None => String::new(),
+    // vmess base64 holds JSON whose types vary by generator (port as number
+    // or string is both common). Coerce only the types that carry the same
+    // value (a number to its digits), reject the rest: `null` does not mean
+    // the string "null", and an array host connects nowhere while passing
+    // `check`.
+    let field = |key: &str| -> Result<String> {
+        match tree.get(key) {
+            Some(Value::String(text)) => Ok(text.clone()),
+            Some(Value::Number(number)) => Ok(number.to_string()),
+            Some(Value::Bool(true)) => Ok("true".to_string()),
+            Some(Value::Bool(false)) => Ok("false".to_string()),
+            Some(Value::Null) | None => Ok(String::new()),
+            Some(other) => {
+                let _ = other;
+                Err(share_link_error(format!(
+                    "the vmess link's {key:?} field is not a string or number"
+                ))
+                .with_hint("re-export the subscription from your provider"))
+            }
+        }
     };
 
-    let server = field("add");
+    let server = field("add")?;
     if server.trim().is_empty() {
         return Err(share_link_error("the vmess link has no server address"));
     }
-    let port = parse_port(&field("port"))?;
-    let uuid = field("id");
+    let port = parse_port(&field("port")?)?;
+    let uuid = field("id")?;
     if uuid.trim().is_empty() {
         return Err(share_link_error("the vmess link has no UUID"));
     }
 
     let mut out = base_outbound("vmess", server.trim(), port);
     out.insert("uuid".to_string(), Value::String(uuid.trim().to_string()));
-    let cipher = field("scy");
+    let cipher = field("scy")?;
     out.insert(
         "security".to_string(),
         json!(if cipher.trim().is_empty() {
@@ -602,33 +722,33 @@ fn vmess_outbound(rest: &str) -> Result<Map<String, Value>> {
             cipher.trim()
         }),
     );
-    let alter_id = field("aid").trim().parse::<u32>().unwrap_or(0);
+    let alter_id = field("aid")?.trim().parse::<u32>().unwrap_or(0);
     out.insert("alter_id".to_string(), json!(alter_id));
 
-    let host = first_host(&field("host"));
-    let sni = field("sni");
+    let host = first_host(&field("host")?);
+    let sni = field("sni")?;
     apply_tls(
         &mut out,
         TlsOptions {
-            security: Security::parse(&field("tls"), Security::None)?,
+            security: Security::parse(&field("tls")?, Security::None)?,
             server: server.trim(),
             sni: if sni.trim().is_empty() { &host } else { &sni },
-            fingerprint: &field("fp"),
+            fingerprint: &field("fp")?,
             public_key: "",
             short_id: "",
             insecure: false,
         },
     )?;
 
-    let path = field("path");
-    let service = match field("serviceName") {
+    let path = field("path")?;
+    let service = match field("serviceName")? {
         named if !named.is_empty() => named,
         _ => path.clone(),
     };
     apply_transport(
         &mut out,
         TransportOptions {
-            kind: &field("net"),
+            kind: &field("net")?,
             host: &host,
             path: &path,
             service: &service,

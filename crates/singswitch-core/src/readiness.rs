@@ -100,7 +100,10 @@ pub fn required_tls(tls: bool, reality: bool) -> Vec<Field> {
     }
     if reality {
         fields.push(Field::RealityPublicKey);
-        fields.push(Field::RealityShortId);
+        // Not RealityShortId: an empty short id is a legal Reality server
+        // configuration, and demanding it made every such link import into a
+        // permanently un-ready profile. `sing-box check` is the authority on
+        // whether the pair works.
     }
     fields
 }
