@@ -5,8 +5,8 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
-    ClipboardItem, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
-    Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, ClipboardItem, Context, Entity, IntoElement, ParentElement as _, Render,
+    SharedString, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 use singswitch_core::layout::Layout;
 
@@ -228,6 +228,80 @@ fn render_behavior_card(
             },
             cx,
         ))
+        .child(render_auto_sync_row(settings, store, cx))
+}
+
+/// One row presenting the auto-sync interval as a labeled value with a menu
+/// of the supported choices. An interval's natural representation is a
+/// duration, not a toggle, so it is not a `SwitchRowSpec`.
+fn render_auto_sync_row(
+    settings: &crate::theme::UiSettings,
+    store: &Entity<AppStore>,
+    cx: &gpui_kit::App,
+) -> AnyElement {
+    use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+    const CHOICES: [(u32, &str); 5] = [
+        (0, "Off"),
+        (15, "Every 15 minutes"),
+        (60, "Every hour"),
+        (360, "Every 6 hours"),
+        (1440, "Daily"),
+    ];
+    let store_for_menu = store.clone();
+    let minutes = settings.auto_sync_interval_minutes;
+    let label = CHOICES
+        .iter()
+        .find(|(value, _)| *value == minutes)
+        .map(|(_, label)| label.to_string())
+        .unwrap_or_else(|| format!("Custom ({minutes} min)"));
+
+    h_flex()
+        .w_full()
+        .pt(px(10.0))
+        .mt(px(2.0))
+        .border_t_1()
+        .border_color(cx.theme().border)
+        .justify_between()
+        .items_center()
+        .child(
+            v_flex()
+                .flex_1()
+                .pr(px(12.0))
+                .child(div().text_sm().child("Sync remote profiles"))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Re-fetch subscriptions in the background. The service only restarts when a profile actually changes."),
+                ),
+        )
+        .child(
+            Button::new("set-auto-sync")
+                .secondary()
+                .small()
+                .min_w(px(130.0))
+                .justify_between()
+                .label(label)
+                .disabled(false)
+                .dropdown_menu(move |menu, _, _| {
+                    let mut menu = menu;
+                    for (value, label) in CHOICES {
+                        let checked = value == minutes;
+                        let store = store_for_menu.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(label.to_string())
+                                .checked(checked)
+                                .on_click(move |_, _, cx| {
+                                    store.update(cx, |s, cx| {
+                                        s.set_auto_sync_interval_minutes(value, cx)
+                                    });
+                                }),
+                        );
+                    }
+                    menu
+                }),
+        )
+        .into_any_element()
 }
 
 /// A single settings toggle row: title, description, and a bound switch.

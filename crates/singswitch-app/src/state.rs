@@ -170,11 +170,13 @@ pub struct AppStore {
     /// a schedule nobody asked for, while still keeping the next tick from
     /// starting a second sync on top of the first.
     auto_sync_in_flight: bool,
-    /// When this process last ran an automatic sync, on the monotonic clock.
+    /// A scheduled sync is running (see `auto_sync_in_flight`).
     ///
-    /// Mirrors `settings.last_auto_sync_at`, which is wall-clock; the ticker
-    /// compares against this one and the stored value only seeds it at launch.
-    last_auto_sync: Option<Instant>,
+    /// The interval is measured on the wall clock, not `Instant`: a closed
+    /// laptop lid freezes the monotonic clock, which would stretch "every
+    /// hour" by the length of every nap. Wall clock keeps the cadence honest
+    /// across suspend and relaunch alike.
+    last_auto_sync_at_wall: Option<u64>,
     /// Feedback scoped to the control or screen that produced it. The Toolbar
     /// origin is the one strip that spans the window.
     pub notice: Option<Notice>,
@@ -312,7 +314,7 @@ impl AppStore {
             validation_generation: 0,
             busy_phase: None,
             auto_sync_in_flight: false,
-            last_auto_sync: None,
+            last_auto_sync_at_wall: None,
             notice: init_error.map(|m| Notice {
                 origin: NoticeOrigin::Toolbar,
                 tone: BannerTone::Warning,
@@ -709,6 +711,23 @@ impl AppStore {
         if let Some(ctrl) = &self.ctrl {
             ctrl.set_notifications_enabled(enabled);
         }
+        self.persist_settings(cx);
+        cx.notify();
+    }
+
+    /// Set the automatic sync interval, clamped to the supported range.
+    ///
+    /// `minutes` arrives from a menu of fixed choices, but it is clamped here
+    /// as well: the settings file is hand-editable, and the setter is the one
+    /// place every path converges.
+    pub fn set_auto_sync_interval_minutes(&mut self, minutes: u32, cx: &mut Context<Self>) {
+        self.settings.auto_sync_interval_minutes = minutes.clamp(
+            crate::theme::MIN_AUTO_SYNC_INTERVAL_MINUTES,
+            crate::theme::MAX_AUTO_SYNC_INTERVAL_MINUTES,
+        );
+        // A new schedule starts counting now, not from whenever the last
+        // cycle ran under the old interval.
+        self.last_auto_sync_at_wall = unix_now();
         self.persist_settings(cx);
         cx.notify();
     }
@@ -1312,7 +1331,7 @@ impl AppStore {
     /// Returns whether a sync should start now; on `true` it also records the
     /// attempt, so a sync that fails still waits a full interval before the
     /// next one rather than retrying every second.
-    fn auto_sync_due(&mut self, now: Instant) -> bool {
+    fn auto_sync_due(&mut self, now_unix: Option<u64>) -> bool {
         let minutes = self.settings.auto_sync_interval_minutes;
         if minutes == 0 {
             return false;
@@ -1324,36 +1343,29 @@ impl AppStore {
         if self.busy_phase.is_some() || self.auto_sync_in_flight || self.ctrl.is_none() {
             return false;
         }
-        let interval = Duration::from_secs(u64::from(minutes) * 60);
-        // The clock the interval is measured against is persisted, so a
-        // relaunch inside the window does not sync again.
-        let due = self
-            .last_auto_sync(now)
-            .is_none_or(|last| now.saturating_duration_since(last) >= interval);
+        let Some(now) = now_unix else {
+            // No wall clock this instant: decide again next tick rather than
+            // guessing.
+            return false;
+        };
+        let interval = u64::from(minutes) * 60;
+        // `last` is the wall-clock seconds of the last sync — the persisted
+        // stamp while it is young, this process's own memory once it is the
+        // fresher of the two. Never having run is due immediately; a stamp in
+        // the future (clock moved back, or the file edited) counts as "just
+        // ran" so a regression never stampedes.
+        let last = self
+            .last_auto_sync_at_wall
+            .or(self.settings.last_auto_sync_at);
+        let elapsed = last.and_then(|l| now.checked_sub(l)).unwrap_or(u64::MAX);
+        let due = elapsed >= interval;
         if due {
-            self.last_auto_sync = Some(now);
+            self.last_auto_sync_at_wall = Some(now);
+            // The persisted stamp is updated only on success below; this
+            // in-memory copy keeps the next tick from re-firing while the
+            // background half runs.
         }
         due
-    }
-
-    /// When auto-sync last ran, as an `Instant` on this process's clock.
-    ///
-    /// `None` means it has never run, which is due immediately. The persisted
-    /// value is wall-clock (unix seconds) because it outlives the process;
-    /// `Instant` is what the ticker compares against. A stored time in the
-    /// future (clock moved back, or the file edited) counts as "just ran"
-    /// rather than as "overdue forever".
-    fn last_auto_sync(&self, now: Instant) -> Option<Instant> {
-        if let Some(local) = self.last_auto_sync {
-            return Some(local);
-        }
-        let elapsed_since_stamp = self
-            .settings
-            .last_auto_sync_at
-            .and_then(|secs| unix_now().and_then(|now| now.checked_sub(secs)))
-            .map(Duration::from_secs)
-            .unwrap_or(Duration::ZERO);
-        Some(now.checked_sub(elapsed_since_stamp).unwrap_or(now))
     }
 
     /// Run one automatic sync when its interval has come around.
@@ -1362,13 +1374,13 @@ impl AppStore {
     /// "Sync remote profiles" button does, on the same background task shape,
     /// so an automatic sync and a manual one cannot behave differently.
     pub fn maybe_auto_sync(&mut self, cx: &mut Context<Self>) {
-        if !self.auto_sync_due(Instant::now()) {
+        if !self.auto_sync_due(unix_now()) {
             return;
         }
-        self.settings.last_auto_sync_at = unix_now();
-        // The notice and the timer are separate failures: a settings file that
-        // cannot be written must not stop the sync, and the sync reports itself.
-        self.persist_settings(cx);
+        // The persisted stamp is written only after the sync succeeds, so a
+        // settings file that cannot be written cannot silently resurrect the
+        // old stamp; and persist_settings' own error notice is not overwritten
+        // by this cycle's completion notice a second later.
         self.run_auto_sync(cx);
     }
 
@@ -1397,34 +1409,50 @@ impl AppStore {
                 if let Some(s) = snap {
                     store.apply_snapshot(s, true);
                 }
-                store.notice = Some(match res {
-                    Ok(report) if !report.failed.is_empty() => Notice {
-                        origin: NoticeOrigin::Toolbar,
-                        tone: BannerTone::Warning,
-                        message: format!(
-                            "Automatic sync failed for {}",
-                            count_noun(report.failed.len(), "profile", "profiles")
-                        ),
-                    },
-                    Ok(report) if report.synced.is_empty() => Notice {
-                        origin: NoticeOrigin::Toolbar,
-                        tone: BannerTone::Info,
-                        message: "No remote profiles to sync".to_string(),
-                    },
-                    Ok(report) => Notice {
-                        origin: NoticeOrigin::Toolbar,
-                        tone: BannerTone::Success,
-                        message: format!(
-                            "Profiles synced automatically ({})",
-                            count_noun(report.synced.len(), "profile", "profiles")
-                        ),
-                    },
-                    Err(err) => Notice {
-                        origin: NoticeOrigin::Toolbar,
-                        tone: BannerTone::Error,
-                        message: error_text(&err),
-                    },
-                });
+                // Only disturb the notice when the outcome deserves one: a
+                // clean cycle reports nothing (the user asked for freshness,
+                // not for commentary), and an error notice the user has not
+                // read yet survives a scheduled cycle landing behind it.
+                match &res {
+                    Ok(report) if !report.failed.is_empty() => {
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Toolbar,
+                            tone: BannerTone::Warning,
+                            message: format!(
+                                "Automatic sync failed for {}",
+                                count_noun(report.failed.len(), "profile", "profiles")
+                            ),
+                        });
+                    }
+                    Ok(report) if report.synced.is_empty() => {
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Toolbar,
+                            tone: BannerTone::Info,
+                            message: "No remote profiles to sync".to_string(),
+                        });
+                    }
+                    Ok(_) => {
+                        // Persist the stamp on success only: this is the value
+                        // a relaunch seeds its own timer from. Writing it with
+                        // the result lets a failure keep its age, so the next
+                        // cycle is still a full interval away.
+                        if let Some(stamp) = store.last_auto_sync_at_wall {
+                            store.settings.last_auto_sync_at = Some(stamp);
+                            store.persist_settings(cx);
+                        }
+                        // Profiles were fetched and stored without error. Not
+                        // every one of those changed the running profile, and a
+                        // cycle that fetched-and-verified but stored nothing
+                        // new deserves no banner at all.
+                    }
+                    Err(err) => {
+                        store.notice = Some(Notice {
+                            origin: NoticeOrigin::Toolbar,
+                            tone: BannerTone::Error,
+                            message: error_text(err),
+                        });
+                    }
+                }
                 cx.notify();
             });
         })
