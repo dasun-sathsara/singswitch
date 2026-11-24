@@ -33,14 +33,14 @@ jobs:
       - name: Verify privileged-path changes are declared
         if: github.event_name == 'pull_request'
         run: |
-          git fetch --no-tags origin ${tb_target}
-          if git diff --name-only origin/${{ github.base_ref }}...HEAD \
+          BASE="${{ github.base_ref }}"
+          git fetch --no-tags origin "$BASE"
+          if git diff --name-only "origin/$BASE...HEAD" \
               | grep -E '(^scripts/(install|uninstall)|sudoers|elevation)'; then
-            COMMIT_MSG=$(git log --format=%B -1)
-            if ! echo "$COMMIT_MSG" | grep -q 'security:'; then
+            # Any commit in the PR touching a privileged file must carry the
+            # trailer — the merge commit's message alone is not enough.
+            if ! git log --format=%B "origin/$BASE..HEAD" | grep -q 'security:'; then
               echo "::error::Privileged-path files changed without a 'security:' trailer in the commit message. See AGENTS.md."
               exit 1
             fi
           fi
-        env:
-          tb_target: ${{ github.base_ref }}
