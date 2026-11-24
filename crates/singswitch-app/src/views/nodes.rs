@@ -231,10 +231,18 @@ impl NodesStrip {
                 let members = group.members.clone();
                 let selected = group.selected.clone();
                 Button::new(SharedString::from(format!("node-group-{tag}")))
-                    .secondary()
-                    .small()
+                    .ghost()
                     .h(px(24.0))
+                    .px(px(8.0))
+                    .gap(px(4.0))
+                    .rounded_full()
+                    .bg(crate::theme::subtle_pill_bg(cx))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .text_size(px(12.0))
+                    .text_color(cx.theme().muted_foreground)
                     .label(label)
+                    .icon(IconName::ChevronDown)
                     .dropdown_menu(move |menu, _, _| {
                         let mut menu = menu.scrollable(true).max_h(px(320.0));
                         for member in &members {

@@ -404,8 +404,8 @@ impl ProfilesView {
         let content = v_flex()
             .size_full()
             .px(px(14.0))
-            .py(px(10.0))
-            .gap(px(8.0))
+            .py(px(12.0))
+            .gap(px(10.0))
             .child(self.render_connection(cx))
             .when_some(
                 super::notice_strip(&self.store, NoticeOrigin::Stage, cx),
@@ -458,12 +458,12 @@ impl ProfilesView {
                     )
                     .child(
                         h_flex()
-                            .mt(px(8.0))
-                            .gap(px(10.0))
+                            .mt(px(12.0))
+                            .gap(px(8.0))
                             .child(
                                 Button::new("first-profile-new")
                                     .primary()
-                                    .h(px(28.0))
+                                    .h(px(32.0))
                                     .icon(IconName::FilePlus)
                                     .label("Add profile")
                                     .disabled(busy)
@@ -474,7 +474,7 @@ impl ProfilesView {
                             .child(
                                 Button::new("first-profile-import")
                                     .secondary()
-                                    .h(px(28.0))
+                                    .h(px(32.0))
                                     .icon(IconName::Link)
                                     .label("Import from URL")
                                     .disabled(busy)
@@ -485,7 +485,7 @@ impl ProfilesView {
                             .child(
                                 Button::new("first-profile-import-link")
                                     .secondary()
-                                    .h(px(28.0))
+                                    .h(px(32.0))
                                     .icon(IconName::ExternalLink)
                                     .label("Import from share link")
                                     .disabled(busy)
@@ -589,11 +589,11 @@ impl ProfilesView {
                 cx.theme().border
             })
             .bg(crate::theme::surface(cx))
-            .p(px(10.0))
+            .p(px(12.0))
             .child(
                 h_flex()
                     .w_full()
-                    .min_h(px(32.0))
+                    .min_h(px(36.0))
                     .px(px(4.0))
                     .gap(px(10.0))
                     .items_center()
@@ -630,7 +630,7 @@ impl ProfilesView {
                         row.child(
                             Button::new("connection-disconnect")
                                 .ghost()
-                                .h(px(28.0))
+                                .h(px(32.0))
                                 .flex_none()
                                 .icon(IconName::PowerOff)
                                 .label("Disconnect")
@@ -645,7 +645,7 @@ impl ProfilesView {
                         row.child(
                             Button::new("connection-logs")
                                 .ghost()
-                                .h(px(28.0))
+                                .h(px(32.0))
                                 .flex_none()
                                 .icon(IconName::ScrollText)
                                 .label("View logs")
@@ -771,7 +771,7 @@ impl ProfilesView {
                 row.child(
                     Button::new("library-sync-all")
                         .ghost()
-                        .h(px(28.0))
+                        .h(px(32.0))
                         .icon(IconName::CloudDownload)
                         .label("Sync remote profiles")
                         .disabled(busy)
@@ -783,7 +783,7 @@ impl ProfilesView {
             .child(
                 Button::new("library-add")
                     .secondary()
-                    .h(px(28.0))
+                    .h(px(32.0))
                     .icon(IconName::CirclePlus)
                     .label("Add profile")
                     .disabled(busy)
@@ -845,9 +845,9 @@ impl ProfilesView {
                     .justify_between()
                     .items_center()
                     .child(
-                        div().w(px(240.0)).child(
+                        div().w(px(260.0)).child(
                             Input::new(&self.search_input)
-                                .h(px(28.0))
+                                .h(px(32.0))
                                 .cleanable(true)
                                 .prefix(Icon::new(IconName::Search).small()),
                         ),

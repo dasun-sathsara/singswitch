@@ -157,7 +157,7 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.foreground = rgb(0xF8FAFC).into();
             theme.muted = rgb(0x171922).into();
             theme.muted_foreground = rgb(0x94A3B8).into();
-            theme.border = rgb(0x272B38).into();
+            theme.border = rgb(0x2E3342).into();
             theme.input = rgb(0x2E3344).into();
             theme.secondary = rgb(0x1A1C24).into();
             theme.secondary_foreground = rgb(0xF1F5F9).into();
@@ -166,7 +166,7 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.warning_foreground = rgb(0x0B0C10).into();
             theme.popover = rgb(0x13151B).into();
             theme.popover_foreground = rgb(0xF8FAFC).into();
-            theme.title_bar = rgb(0x0E0F14).into();
+            theme.title_bar = rgb(0x171922).into();
             theme.title_bar_border = rgb(0x222530).into();
             theme.accent = rgb(0x1E222D).into();
             theme.accent_foreground = rgb(0xF8FAFC).into();
@@ -192,7 +192,7 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.foreground = rgb(0x0F172A).into();
             theme.muted = rgb(0xF1F5F9).into();
             theme.muted_foreground = rgb(0x64748B).into();
-            theme.border = rgb(0xE2E8F0).into();
+            theme.border = rgb(0xD8DFE9).into();
             theme.input = rgb(0xCBD5E1).into();
             theme.secondary = rgb(0xF1F5F9).into();
             theme.secondary_foreground = rgb(0x0F172A).into();
@@ -201,7 +201,7 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
             theme.warning_foreground = rgb(0xFFFFFF).into();
             theme.popover = rgb(0xFFFFFF).into();
             theme.popover_foreground = rgb(0x0F172A).into();
-            theme.title_bar = rgb(0xFFFFFF).into();
+            theme.title_bar = rgb(0xF1F5F9).into();
             theme.title_bar_border = rgb(0xE2E8F0).into();
             theme.accent = rgb(0xF1F5F9).into();
             theme.accent_foreground = rgb(0x0F172A).into();
@@ -246,7 +246,7 @@ pub fn subtle_pill_bg(cx: &App) -> gpui_kit::Hsla {
     if cx.theme().is_dark() {
         rgb(0x1A1C24).into()
     } else {
-        rgb(0xE8EDF3).into()
+        rgb(0xE4EAF2).into()
     }
 }
 

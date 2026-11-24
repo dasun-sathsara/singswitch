@@ -159,7 +159,7 @@ impl LogsView {
 
         Button::new("logs-severity")
             .secondary()
-            .h(px(28.0))
+            .h(px(32.0))
             // The caret separates this control from the static count pill two
             // slots right, which uses the same fill.
             .dropdown_caret(true)
@@ -359,7 +359,7 @@ impl Render for LogsView {
                             .border_color(cx.theme().border.opacity(0.5))
                             .child(
                                 Button::new("tab-service")
-                                    .h(px(26.0))
+                                    .h(px(30.0))
                                     .when(stream == LogStreamKind::Error, Button::secondary)
                                     .when(stream != LogStreamKind::Error, Button::ghost)
                                     .label("Service")
@@ -370,7 +370,7 @@ impl Render for LogsView {
                             )
                             .child(
                                 Button::new("tab-access")
-                                    .h(px(26.0))
+                                    .h(px(30.0))
                                     .when(stream == LogStreamKind::Access, Button::secondary)
                                     .when(stream != LogStreamKind::Access, Button::ghost)
                                     .label("Access")
@@ -392,7 +392,7 @@ impl Render for LogsView {
                             .w(px(220.0))
                             .child(
                                 Input::new(&self.search_input)
-                                    .h(px(28.0))
+                                    .h(px(32.0))
                                     .cleanable(true)
                                     .prefix(Icon::new(IconName::Search).small()),
                             ),
@@ -421,7 +421,7 @@ impl Render for LogsView {
                     .child(
                         div()
                             .px(px(8.0))
-                            .h(px(26.0))
+                            .h(px(32.0))
                             .flex()
                             .items_center()
                             .rounded_full()
@@ -443,7 +443,7 @@ impl Render for LogsView {
                     .child(
                         Button::new("logs-clear")
                             .ghost()
-                            .h(px(28.0))
+                            .h(px(32.0))
                             .label("Clear")
                             .accessibility_label("Clear view")
                             .disabled(total_count == 0)
@@ -458,7 +458,7 @@ impl Render for LogsView {
                     .child(
                         Button::new("logs-reload")
                             .ghost()
-                            .h(px(28.0))
+                            .h(px(32.0))
                             .icon(IconName::RefreshCw)
                             .accessibility_label("Reload from disk")
                             .on_click({
@@ -475,7 +475,7 @@ impl Render for LogsView {
                     .child(
                         Button::new("logs-copy")
                             .ghost()
-                            .h(px(28.0))
+                            .h(px(32.0))
                             .icon(IconName::Copy)
                             .accessibility_label("Copy filtered lines")
                             .disabled(count == 0)

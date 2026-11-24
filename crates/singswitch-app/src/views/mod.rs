@@ -135,11 +135,11 @@ impl WorkspaceShell {
                 h_flex()
                     .items_center()
                     .gap(px(2.0))
-                    .p(px(2.5))
-                    .rounded(px(8.0))
-                    .bg(cx.theme().muted.opacity(0.6))
+                    .p(px(3.0))
+                    .rounded(px(9.0))
+                    .bg(cx.theme().background.opacity(0.55))
                     .border_1()
-                    .border_color(cx.theme().border.opacity(0.5))
+                    .border_color(cx.theme().border.opacity(0.6))
                     .children(tabs.into_iter().map(|(label, tab, icon)| {
                         let store = self.store.clone();
                         let is_active = selected == tab;
@@ -149,12 +149,12 @@ impl WorkspaceShell {
                             .id(SharedString::from(format!("nav-{tab:?}")))
                             .items_center()
                             .gap(px(6.0))
-                            .px(px(10.0))
-                            .h(px(26.0))
-                            .rounded(px(6.0))
+                            .px(px(12.0))
+                            .h(px(30.0))
+                            .rounded(px(7.0))
                             .cursor_pointer()
                             .bg(if is_active {
-                                cx.theme().background
+                                cx.theme().title_bar
                             } else {
                                 gpui_kit::Hsla::transparent_black()
                             })
@@ -223,24 +223,34 @@ impl Render for WorkspaceShell {
             .font_family(fonts::ui_family())
             .text_size(px(14.0))
             .child(if cfg!(target_os = "macos") {
-                TitleBar::new().child(self.render_navigation(cx))
+                // The stock bar is 34px; 40px gives the nav row real air
+                // instead of sitting on the border.
+                {
+                    let mut bar = TitleBar::new();
+                    bar.style().size.height = Some(px(40.0).into());
+                    bar.child(self.render_navigation(cx))
+                }
             } else {
-                TitleBar::new().child(
-                    h_flex()
-                        .size_full()
-                        .items_center()
-                        .gap(px(12.0))
-                        .pl(px(14.0))
-                        .child(
-                            div()
-                                .font_weight(fonts::EMPHASIS)
-                                .text_sm()
-                                .text_color(cx.theme().foreground)
-                                .child("SingSwitch"),
-                        )
-                        .child(div().h(px(16.0)).w(px(1.0)).bg(cx.theme().border))
-                        .child(self.render_navigation(cx)),
-                )
+                {
+                    let mut bar = TitleBar::new();
+                    bar.style().size.height = Some(px(40.0).into());
+                    bar.child(
+                        h_flex()
+                            .size_full()
+                            .items_center()
+                            .gap(px(12.0))
+                            .pl(px(14.0))
+                            .child(
+                                div()
+                                    .font_weight(fonts::EMPHASIS)
+                                    .text_sm()
+                                    .text_color(cx.theme().foreground)
+                                    .child("SingSwitch"),
+                            )
+                            .child(div().h(px(16.0)).w(px(1.0)).bg(cx.theme().border))
+                            .child(self.render_navigation(cx)),
+                    )
+                }
             })
             .when_some(
                 notice_strip(&self.store, NoticeOrigin::Toolbar, cx),

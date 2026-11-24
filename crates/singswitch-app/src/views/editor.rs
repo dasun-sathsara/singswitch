@@ -988,7 +988,7 @@ impl ProfileEditorPanel {
                     .child(
                         Button::new("editor-back")
                             .ghost()
-                            .h(px(26.0))
+                            .h(px(30.0))
                             .icon(IconName::ChevronLeft)
                             .label("Profiles")
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1106,7 +1106,7 @@ impl ProfileEditorPanel {
                 row.child(
                     Button::new("editor-save")
                         .primary()
-                        .h(px(28.0))
+                        .h(px(32.0))
                         .label("Save")
                         .loading(is_busy)
                         .disabled(is_busy || !dirty)
@@ -1120,7 +1120,7 @@ impl ProfileEditorPanel {
                     Button::new("editor-save-live")
                         .when(is_active_running, Button::primary)
                         .when(!is_active_running, Button::secondary)
-                        .h(px(28.0))
+                        .h(px(32.0))
                         .label(activation_label)
                         .loading(is_busy)
                         .disabled(is_busy || !can_activate || (is_active_running && !dirty))
@@ -1159,8 +1159,8 @@ impl ProfileEditorPanel {
 
         Button::new("editor-overflow")
             .ghost()
-            .h(px(28.0))
-            .w(px(28.0))
+            .h(px(32.0))
+            .w(px(32.0))
             .icon(IconName::Ellipsis)
             .accessibility_label("Editor options")
             .dropdown_menu(move |menu, _, _| {
@@ -1790,8 +1790,8 @@ fn form_section(title: &'static str, cx: &App) -> gpui_kit::Div {
     v_flex()
         .w_full()
         .flex_none()
-        .p(px(12.0))
-        .gap_2()
+        .p(px(14.0))
+        .gap(px(10.0))
         .rounded(px(10.0))
         .border_1()
         .border_color(cx.theme().border)
@@ -1845,12 +1845,12 @@ fn labeled_input_opt(
         .child(label_style.child(label))
         .child(
             gpui_kit::component::input::Input::new(state)
-                .h(px(28.0))
+                .h(px(32.0))
                 .cleanable(true)
                 .disabled(unavailable),
         )
 }
 
 fn form_row_2(left: impl IntoElement, right: impl IntoElement) -> impl IntoElement {
-    h_flex().w_full().gap(px(20.0)).child(left).child(right)
+    h_flex().w_full().gap(px(12.0)).child(left).child(right)
 }
