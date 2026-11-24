@@ -151,7 +151,7 @@ fn setup_populated_snapshot(s: &mut AppStore) {
   "log": { "level": "info", "timestamp": true },
   "dns": {
     "servers": [
-      { "type": "https", "tag": "cloudflare-doh", "server": "1.1.1.1", "detour": "proxy" },
+      { "type": "https", "tag": "cloudflare-doh", "server": "192.0.2.1", "detour": "proxy" },
       { "type": "local", "tag": "local-dns", "detour": "direct" }
     ],
     "strategy": "ipv4_only",
@@ -173,7 +173,7 @@ fn setup_populated_snapshot(s: &mut AppStore) {
     {
       "type": "vless",
       "tag": "proxy",
-      "server": "104.28.19.42",
+      "server": "192.0.2.10",
       "server_port": 443,
       "uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       "flow": "xtls-rprx-vision",
@@ -221,7 +221,7 @@ fn setup_populated_snapshot(s: &mut AppStore) {
         config_parsed: true,
         facts: ConfigFacts {
             outbound_type: Some("vless".into()),
-            endpoint: Some("104.28.19.42:443".into()),
+            endpoint: Some("192.0.2.10:443".into()),
             tun_interface: Some("utun123".into()),
             has_tun_inbound: true,
         },
@@ -235,7 +235,7 @@ fn setup_populated_snapshot(s: &mut AppStore) {
         config_parsed: true,
         facts: ConfigFacts {
             outbound_type: Some("hysteria2".into()),
-            endpoint: Some("162.159.192.1:8443".into()),
+            endpoint: Some("198.51.100.23:8443".into()),
             tun_interface: Some("utun123".into()),
             has_tun_inbound: true,
         },
@@ -249,7 +249,7 @@ fn setup_populated_snapshot(s: &mut AppStore) {
         config_parsed: true,
         facts: ConfigFacts {
             outbound_type: Some("vless".into()),
-            endpoint: Some("198.41.200.5:443".into()),
+            endpoint: Some("203.0.113.7:443".into()),
             tun_interface: Some("utun123".into()),
             has_tun_inbound: true,
         },
@@ -263,7 +263,7 @@ fn setup_populated_snapshot(s: &mut AppStore) {
         config_parsed: true,
         facts: ConfigFacts {
             outbound_type: Some("shadowsocks".into()),
-            endpoint: Some("45.76.12.89:8388".into()),
+            endpoint: Some("192.0.2.44:8388".into()),
             tun_interface: None,
             has_tun_inbound: true,
         },
@@ -288,7 +288,7 @@ fn setup_populated_snapshot(s: &mut AppStore) {
             profile: Some("home-vless".to_string()),
             running: true,
             tun: Some("utun123".to_string()),
-            server: Some("104.28.19.42:443".to_string()),
+            server: Some("192.0.2.10:443".to_string()),
             pid: Some(18420),
             missing: Vec::new(),
             broken: None,
@@ -313,7 +313,7 @@ fn setup_populated_snapshot(s: &mut AppStore) {
         },
     );
     s.ip_info = Some(IpInfo {
-        ip: "103.219.171.115".to_string(),
+        ip: "198.51.100.99".to_string(),
         city: "Singapore".to_string(),
         region: "Central".to_string(),
         country: "SG".to_string(),
@@ -342,15 +342,15 @@ fn setup_sample_logs(s: &mut AppStore) {
         ),
         (
             LogLevel::Info,
-            "14:22:01.140 [outbound/vless-out] TLS Reality handshake completed with 104.28.19.42:443",
+            "14:22:01.140 [outbound/vless-out] TLS Reality handshake completed with 192.0.2.10:443",
         ),
         (
             LogLevel::Info,
-            "14:22:02.320 [inbound/tun-in] connection from 198.18.0.1:52194 to tcp:1.1.1.1:443 routed to [outbound/vless-out]",
+            "14:22:02.320 [inbound/tun-in] connection from 203.0.113.55:52194 to tcp:192.0.2.1:443 routed to [outbound/vless-out]",
         ),
         (
             LogLevel::Info,
-            "14:22:05.811 [dns] query response: resolved api.github.com to 140.82.121.4 (via remote DNS)",
+            "14:22:05.811 [dns] query response: resolved api.github.com to 198.51.100.4 (via remote DNS)",
         ),
         (
             LogLevel::Warn,
@@ -366,7 +366,7 @@ fn setup_sample_logs(s: &mut AppStore) {
         ),
         (
             LogLevel::Info,
-            "14:23:06.015 [outbound/vless-out] re-established connection to 104.28.19.42:443 (tls reality)",
+            "14:23:06.015 [outbound/vless-out] re-established connection to 192.0.2.10:443 (tls reality)",
         ),
         (
             LogLevel::Info,

@@ -130,6 +130,10 @@ impl WorkspaceShell {
             .flex_1()
             .h_full()
             .items_center()
+            // macOS reserves the left ~78px of a 28px title bar for the
+            // traffic lights; start the nav after that so nothing sits under
+            // the buttons.
+            .when(cfg!(target_os = "macos"), |nav| nav.pl(px(78.0)))
             .pr(px(12.0))
             .child(
                 h_flex()
@@ -150,7 +154,7 @@ impl WorkspaceShell {
                             .items_center()
                             .gap(px(6.0))
                             .px(px(10.0))
-                            .h(px(28.0))
+                            .h(px(24.0))
                             .rounded(px(5.0))
                             .cursor_pointer()
                             .bg(if is_active {
@@ -223,17 +227,18 @@ impl Render for WorkspaceShell {
             .font_family(fonts::ui_family())
             .text_size(px(14.0))
             .child(if cfg!(target_os = "macos") {
-                // The stock bar is 34px; 40px gives the nav row real air
-                // instead of sitting on the border.
+                // 28px is AppKit's native title bar height; with the traffic
+                // lights at (20, 12) the 28px nav tabs sit centered on the same
+                // midline as the buttons.
                 {
                     let mut bar = TitleBar::new();
-                    bar.style().size.height = Some(px(44.0).into());
+                    bar.style().size.height = Some(px(28.0).into());
                     bar.child(self.render_navigation(cx))
                 }
             } else {
                 {
                     let mut bar = TitleBar::new();
-                    bar.style().size.height = Some(px(44.0).into());
+                    bar.style().size.height = Some(px(28.0).into());
                     bar.child(
                         h_flex()
                             .size_full()
