@@ -136,11 +136,9 @@ impl WorkspaceShell {
         ];
 
         h_flex()
+            .flex_1()
             .h_full()
             .items_center()
-            // macOS: sit right after the traffic lights (at 9,9, ~52px wide)
-            // with a small gap. Other platforms keep the bar's own padding.
-            .when(cfg!(target_os = "macos"), |nav| nav.pl(px(64.0)))
             .pr(px(12.0))
             .child(
                 h_flex()
