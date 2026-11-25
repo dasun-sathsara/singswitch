@@ -71,7 +71,7 @@ impl ExecChecker {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let mut child = cmd
+        let child = cmd
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -83,36 +83,10 @@ impl ExecChecker {
                 }
             })?;
 
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let out_handle = std::thread::spawn(move || read_pipe(stdout));
-        let err_handle = std::thread::spawn(move || read_pipe(stderr));
-
-        let deadline = Instant::now() + timeout;
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break status;
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(SingSwitchError::general(format!(
-                    "sing-box timed out after {}s",
-                    timeout.as_secs()
-                ))
-                .with_hint("check that the profile's server is reachable"));
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        };
-
-        let out_str = out_handle.join().unwrap_or_default();
-        let err_str = err_handle.join().unwrap_or_default();
-        let combined = match (out_str.trim().is_empty(), err_str.trim().is_empty()) {
-            (false, false) => format!("{}\n{}", out_str.trim(), err_str.trim()),
-            (false, true) => out_str,
-            (true, false) => err_str,
-            (true, true) => String::new(),
-        };
+        let (status, combined) = crate::runner::wait_with_output(child, timeout, || {
+            SingSwitchError::general(format!("sing-box timed out after {}s", timeout.as_secs()))
+                .with_hint("check that the profile's server is reachable")
+        })?;
         Ok((status.success(), combined))
     }
 
@@ -206,6 +180,18 @@ impl ExecChecker {
 /// in the document passes through untouched, including keys this version of
 /// sing-box does not know.
 fn neutralise_side_effects(config: &[u8]) -> Result<Vec<u8>> {
+    // Fast path: the parse below exists only to remove `log.output` and
+    // `experimental.cache_file`. Unless both quoted key names appear in the
+    // document the copy is already inert, and the parse plus re-serialize of
+    // the whole config (run on every latency probe) can be skipped outright.
+    // If the key does appear the full path still runs, so odd spellings or
+    // escapes never bypass the removal.
+    let may_touch_log = contains_subslice(config, b"\"output\"");
+    let may_touch_cache = contains_subslice(config, b"\"cache_file\"");
+    if !may_touch_log && !may_touch_cache {
+        return Ok(config.to_vec());
+    }
+
     let mut root: serde_json::Value = serde_json::from_slice(config).map_err(|err| {
         SingSwitchError::validation(format!("the config is not valid JSON: {err}"))
     })?;
@@ -224,6 +210,11 @@ fn neutralise_side_effects(config: &[u8]) -> Result<Vec<u8>> {
     serde_json::to_vec(&root).map_err(|err| {
         SingSwitchError::general(format!("could not re-serialize the config: {err}"))
     })
+}
+
+/// Byte-slice substring test, used only as a cheap pre-check.
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
 }
 
 impl Checker for ExecChecker {
@@ -275,19 +266,4 @@ fn temp_profile_copy(prefix: &str, bytes: &[u8]) -> Result<tempfile::NamedTempFi
     tmp.write_all(bytes)?;
     tmp.flush()?;
     Ok(tmp)
-}
-
-fn read_pipe(pipe: Option<impl std::io::Read>) -> String {
-    let Some(mut reader) = pipe else {
-        return String::new();
-    };
-    let mut buf = Vec::new();
-    // Bytes, then a lossy decode. `read_to_string` fails on any invalid UTF-8 and
-    // leaves the buffer empty, so one stray byte in sing-box's complaint about a
-    // config turned the whole diagnostic into an empty string.
-    let _ = reader.read_to_end(&mut buf);
-    match String::from_utf8(buf) {
-        Ok(text) => text,
-        Err(err) => String::from_utf8_lossy(err.as_bytes()).into_owned(),
-    }
 }

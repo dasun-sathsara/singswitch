@@ -48,12 +48,6 @@ pub struct EditProfile {
 
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = singswitch_app, no_json)]
-pub struct TestLatency {
-    pub name: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Action)]
-#[action(namespace = singswitch_app, no_json)]
 pub struct SelectTab {
     pub tab: NavTab,
 }

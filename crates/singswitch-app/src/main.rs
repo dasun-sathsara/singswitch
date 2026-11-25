@@ -35,7 +35,7 @@ mod desktop {
     use crate::actions::{
         CloseWindow, ConnectActive, DisconnectService, ImportUrlDialog, NavTab, NewProfileDialog,
         Noop, OpenLogsView, OpenMainWindow, OpenSettingsView, QuitApp, RefreshIp,
-        SaveAndActivateProfile, SaveCurrentProfile, SelectTab, SwitchProfile, SyncAll,
+        SaveAndActivateProfile, SaveCurrentProfile, SelectTab, SwitchGroup, SwitchProfile, SyncAll,
         ToggleService,
     };
     use crate::shell::{install_app_menus, set_dock_visible};
@@ -104,13 +104,30 @@ mod desktop {
             bind_global_shortcuts(cx);
             install_app_menus(cx);
 
-            let tray = TrayController::install(&store, cx).ok();
+            let tray = match TrayController::install(&store, cx) {
+                Ok(tray) => {
+                    crate::diag::log("tray installed");
+                    Some(tray)
+                }
+                Err(err) => {
+                    // With no tray the close button quits the app (the dock
+                    // policy below hides it), so the reason a user sees for
+                    // "closing the window ends SingSwitch" is this line.
+                    crate::diag::log(&format!("tray unavailable: {err}"));
+                    None
+                }
+            };
             let has_tray = tray.is_some();
             store.update(cx, |s, _| s.tray_available = has_tray);
-            if has_tray {
-                crate::diag::log("tray installed");
-            } else {
-                crate::diag::log("tray unavailable; app runs as a plain window");
+            if !has_tray {
+                store.update(cx, |s, cx| {
+                    s.set_notice(
+                        crate::state::NoticeOrigin::Stage,
+                        crate::state::BannerTone::Warning,
+                        "The tray icon is unavailable, so closing the window will quit SingSwitch.",
+                        cx,
+                    );
+                });
             }
 
             cx.set_global(AppGlobalState {
@@ -296,14 +313,21 @@ mod desktop {
 
     fn with_main_window_and_store(
         cx: &mut App,
+        action: &str,
         f: impl FnOnce(Entity<AppStore>, &mut gpui_kit::Window, &mut App) + 'static,
     ) {
         open_or_focus_main_window(cx);
         if let Some(handle) = cx.global::<AppGlobalState>().main_window {
             let store = cx.global::<AppGlobalState>().store.clone();
-            let _ = handle.update(cx, move |_, window, cx| {
+            // A stale handle means the shortcut silently did nothing and the
+            // user has no way to know why; the log names the source action.
+            if let Err(err) = handle.update(cx, move |_, window, cx| {
                 f(store, window, cx);
-            });
+            }) {
+                crate::diag::log(&format!(
+                    "{action}: main window no longer updateable: {err}"
+                ));
+            }
         }
     }
 
@@ -314,11 +338,15 @@ mod desktop {
             (g.main_window, g.main_view.clone())
         };
         if let (Some(handle), Some(view)) = (handle_opt, view_opt) {
-            let _ = handle.update(cx, move |_, window, cx| {
+            // Same rule as `with_main_window_and_store`: a stale handle must
+            // be audible somewhere, not a silently dropped Cmd-S.
+            if let Err(err) = handle.update(cx, move |_, window, cx| {
                 view.update(cx, |shell, cx| {
                     shell.trigger_save_profile(and_activate, window, cx);
                 });
-            });
+            }) {
+                crate::diag::log(&format!("save: main window no longer updateable: {err}"));
+            }
         }
     }
 
@@ -352,6 +380,21 @@ mod desktop {
             store.update(cx, |s, cx| s.set_tab(action.tab, cx));
             open_or_focus_main_window(cx);
         });
+
+        // A group-switch popup menu draws outside the shell's element tree,
+        // so this needs an app-global handler. Exactly one, registered here
+        // at startup: a per-window registration (the old site) leaked one
+        // permanent listener per window open/close cycle. It resolves the
+        // live shell through the global state each dispatch, so a closed
+        // window's stale closure never accumulates and never answers.
+        cx.on_action(|action: &SwitchGroup, cx: &mut App| {
+            let Some(view) = cx.global::<AppGlobalState>().main_view.clone() else {
+                return;
+            };
+            view.update(cx, |shell, cx| {
+                shell.switch_group(action.group.clone(), action.member.clone(), cx);
+            });
+        });
     }
 
     fn register_service_actions(cx: &mut App) {
@@ -379,12 +422,6 @@ mod desktop {
             store.update(cx, |s, cx| {
                 s.activate_profile(name, NoticeOrigin::Toolbar, cx)
             });
-        });
-
-        cx.on_action(|action: &crate::actions::TestLatency, cx: &mut App| {
-            let store = cx.global::<AppGlobalState>().store.clone();
-            let name = action.name.clone();
-            store.update(cx, |s, cx| s.test_profile_latency(name, cx));
         });
 
         cx.on_action(|_: &SyncAll, cx: &mut App| {
@@ -436,20 +473,20 @@ mod desktop {
         });
 
         cx.on_action(|_: &crate::actions::DeleteSelectedProfile, cx: &mut App| {
-            with_main_window_and_store(cx, |store, window, cx| {
+            with_main_window_and_store(cx, "delete profile", |store, window, cx| {
                 crate::views::profiles::confirm_delete_selected(store, window, cx);
             });
         });
 
         cx.on_action(|_: &NewProfileDialog, cx: &mut App| {
-            with_main_window_and_store(cx, |store, window, cx| {
+            with_main_window_and_store(cx, "new profile", |store, window, cx| {
                 store.update(cx, |s, cx| s.set_tab(NavTab::Profiles, cx));
                 ProfilesView::open_new_profile_dialog(store, window, cx);
             });
         });
 
         cx.on_action(|_: &ImportUrlDialog, cx: &mut App| {
-            with_main_window_and_store(cx, |store, window, cx| {
+            with_main_window_and_store(cx, "import url", |store, window, cx| {
                 store.update(cx, |s, cx| s.set_tab(NavTab::Profiles, cx));
                 ProfilesView::open_import_url_dialog(store, window, cx);
             });

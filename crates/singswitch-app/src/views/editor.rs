@@ -88,7 +88,7 @@ pub struct ProfileEditorPanel {
     disk_model: Option<ProfileFormModel>,
     external_change_pending: bool,
     disk_read_failed: bool,
-    validated_snapshot: Option<String>,
+    validated_snapshot: Option<ValidationSnapshot>,
     active_tab: EditorTab,
     /// The exact text the last save submitted.
     ///
@@ -135,6 +135,13 @@ pub struct ProfileEditorPanel {
     in_tun_stack: Entity<InputState>,
     in_tun_mtu: Entity<InputState>,
     in_log_level: Entity<InputState>,
+}
+
+/// What the last validation ran on: the guided form's model (compared by
+/// value) or its parse failure, or the JSON tab's buffer text.
+enum ValidationSnapshot {
+    Model(Box<ProfileFormModel>),
+    Malformed(String),
 }
 
 impl ProfileEditorPanel {
@@ -236,7 +243,9 @@ impl ProfileEditorPanel {
                     }
                 }
                 let current = self.json_editor.read(cx).value().to_string();
-                let dirty = self.is_dirty_against(&current, cx);
+                let guided = (self.active_tab == EditorTab::Guided)
+                    .then(|| self.build_model_from_inputs(cx));
+                let dirty = self.is_dirty_against(&current, guided.as_ref(), cx);
                 let failed = self.disk_read_failed;
                 self.store.update(cx, |s, _| {
                     if dirty {
@@ -469,29 +478,79 @@ impl ProfileEditorPanel {
     }
 
     fn is_dirty(&self, cx: &App) -> bool {
-        self.is_dirty_against(&self.json_editor.read(cx).value(), cx)
+        // `&App` cannot build the guided model without input access the
+        // caller already has; render passes its frame's build instead.
+        self.is_dirty_against(&self.json_editor.read(cx).value(), None, cx)
     }
 
     /// As [`is_dirty`], for callers that already hold the materialized text.
-    fn is_dirty_against(&self, text: &str, cx: &App) -> bool {
+    ///
+    /// `guided` is the form model the caller built for this frame when the
+    /// Guided tab is active (`&mut` runs are rare and build their own).
+    fn is_dirty_against(
+        &self,
+        text: &str,
+        guided: Option<&Result<ProfileFormModel, String>>,
+        _cx: &App,
+    ) -> bool {
         if text != self.disk_json {
             return true;
         }
         if self.active_tab == EditorTab::Guided
             && let Some(disk_model) = &self.disk_model
         {
-            return match self.build_model_from_inputs(cx) {
-                Ok(cur) => &cur != disk_model,
-                Err(_) => true,
+            return match guided {
+                Some(Ok(cur)) => cur != disk_model,
+                _ => true,
             };
         }
         false
     }
 
-    fn current_validation_key(&self, cx: &App) -> String {
+    /// The validation identity of the document as it stands right now.
+    ///
+    /// Save and validate capture this *before* dispatch so a later frame can
+    /// tell "the banner is stale" from "the document is what was checked".
+    fn current_validation_snapshot(&self, cx: &App) -> ValidationSnapshot {
         match self.active_tab {
-            EditorTab::Json => self.json_editor.read(cx).value().to_string(),
-            EditorTab::Guided => format!("{:?}", self.build_model_from_inputs(cx)),
+            // The buffer on the JSON tab is what was checked; text compare
+            // below is against `derived_json`, refreshed by `render`.
+            EditorTab::Json => {
+                ValidationSnapshot::Malformed(self.json_editor.read(cx).value().to_string())
+            }
+            EditorTab::Guided => match self.build_model_from_inputs(cx) {
+                Ok(model) => ValidationSnapshot::Model(Box::new(model)),
+                Err(err) => ValidationSnapshot::Malformed(err),
+            },
+        }
+    }
+
+    /// Identity of the document the last validation ran on, compared by value
+    /// where the model allows (guided) and by text otherwise. `guided` is the
+    /// frame's single build; `None` on the JSON tab.
+    fn validation_snapshot_matches(
+        &self,
+        guided: Option<&Result<ProfileFormModel, String>>,
+        _cx: &App,
+    ) -> bool {
+        let Some(snapshot) = self.validated_snapshot.as_ref() else {
+            return false;
+        };
+        match (self.active_tab, snapshot) {
+            (EditorTab::Json, ValidationSnapshot::Malformed(text)) => {
+                text.as_str() == self.derived_json.as_str()
+            }
+            (EditorTab::Json, ValidationSnapshot::Model(_)) => false,
+            // The snapshot was captured on the other tab, so it describes a
+            // document this banner is not about.
+            (EditorTab::Guided, _) => match (snapshot, guided) {
+                // Compared by value: a `Debug`-string key relied on the derive
+                // staying injective and paid a format on every frame a
+                // banner was on screen.
+                (ValidationSnapshot::Model(prev), Some(Ok(cur))) => prev.as_ref() == cur,
+                (ValidationSnapshot::Malformed(prev), Some(Err(cur))) => prev == cur,
+                _ => false,
+            },
         }
     }
 
@@ -551,7 +610,9 @@ impl ProfileEditorPanel {
         // A form-only edit never touches the JSON buffer, so fold it in first or
         // the stash holds unchanged text and the edit is lost on unmount.
         let content = self.collect_stash_content(cx);
-        let dirty = self.is_dirty_against(&content, cx);
+        let guided =
+            (self.active_tab == EditorTab::Guided).then(|| self.build_model_from_inputs(cx));
+        let dirty = self.is_dirty_against(&content, guided.as_ref(), cx);
         if dirty {
             self.store.update(cx, |s, _| {
                 s.drafts.insert(name, content);
@@ -572,15 +633,10 @@ impl ProfileEditorPanel {
         let Ok(next) = self.build_model_from_inputs(cx) else {
             return current;
         };
-        let Ok(mut root) = serde_json::from_str::<serde_json::Value>(&current) else {
-            return current;
-        };
-        if !next.apply_to_value(&mut root).is_empty() {
-            return current;
+        match next.apply_to_json_str_reporting(&current) {
+            Ok((merged, skipped)) if skipped.is_empty() => merged,
+            _ => current,
         }
-        serde_json::to_string_pretty(&root)
-            .map(|s| format!("{s}\n"))
-            .unwrap_or(current)
     }
 
     pub fn trigger_save(
@@ -602,7 +658,7 @@ impl ProfileEditorPanel {
         let content = match self.collect_effective_content(window, cx) {
             Ok(c) => c,
             Err(err) => {
-                self.validated_snapshot = Some(self.current_validation_key(cx));
+                self.validated_snapshot = Some(self.current_validation_snapshot(cx));
                 self.store.update(cx, |s, cx| {
                     s.editor_validation = Some((name, EditorValidationState::Invalid(err.clone())));
                     s.set_notice(NoticeOrigin::Editor, BannerTone::Error, err, cx);
@@ -611,7 +667,7 @@ impl ProfileEditorPanel {
             }
         };
 
-        self.validated_snapshot = Some(self.current_validation_key(cx));
+        self.validated_snapshot = Some(self.current_validation_snapshot(cx));
         if and_activate {
             self.store
                 .update(cx, |s, cx| s.save_and_activate(name, content, cx));
@@ -641,12 +697,12 @@ impl ProfileEditorPanel {
         };
         match self.collect_effective_content(window, cx) {
             Ok(content) => {
-                self.validated_snapshot = Some(self.current_validation_key(cx));
+                self.validated_snapshot = Some(self.current_validation_snapshot(cx));
                 self.store
                     .update(cx, |s, cx| s.validate_live_content(name, content, cx));
             }
             Err(err) => {
-                self.validated_snapshot = Some(self.current_validation_key(cx));
+                self.validated_snapshot = Some(self.current_validation_snapshot(cx));
                 self.store.update(cx, |s, cx| {
                     s.editor_validation = Some((name, EditorValidationState::Invalid(err.clone())));
                     s.set_notice(NoticeOrigin::Editor, BannerTone::Error, err, cx);
@@ -724,10 +780,7 @@ impl ProfileEditorPanel {
                     // probe failure instead of being swallowed here.
                     let result = ExecChecker::default()
                         .probe_latency_bytes(content.as_bytes(), &tag, DEFAULT_LATENCY_PROBE_URL)
-                        .map_err(|err| match err.hints.is_empty() {
-                            true => err.message.clone(),
-                            false => format!("{} — {}", err.message, err.hints.join("; ")),
-                        });
+                        .map_err(|err| crate::state::error_text(&err));
                     (name, result)
                 })
                 .await;
@@ -894,12 +947,6 @@ impl ProfileEditorPanel {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let (border, text_col, icon, label) = match validation {
-            EditorValidationState::Idle => (
-                cx.theme().border,
-                cx.theme().foreground,
-                IconName::Info,
-                String::new(),
-            ),
             EditorValidationState::Validating => (
                 cx.theme().border,
                 cx.theme().muted_foreground,
@@ -1192,11 +1239,14 @@ impl ProfileEditorPanel {
             })
     }
 
-    fn render_guided_form(&self, cx: &Context<Self>) -> gpui_kit::AnyElement {
-        // Built once for the form and the latency row: both ask what the inputs
-        // currently say, and the tunnel row is only ever drawn from this pass.
-        // A parse failure is surfaced by `render`'s own readiness pass, not here.
-        let form = self.build_model_from_inputs(cx);
+    fn render_guided_form(
+        &self,
+        form: Result<ProfileFormModel, String>,
+        cx: &Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        // `render` built this from the inputs once for the whole frame; the
+        // latency row below and the readiness strip above share it. A parse
+        // failure is surfaced by `render`'s own readiness pass, not here.
         // Field rows whose section switch is off render inert and dimmed: the
         // writer honestly serialises only enabled sections, so a live-looking
         // input there would invite edits the saved file cannot carry.
@@ -1210,7 +1260,7 @@ impl ProfileEditorPanel {
             .pb(px(8.0))
             .gap_3()
             .child(
-                form_section("Server", cx)
+                form_section("SERVER", cx)
                     .child(form_row_2(
                         labeled_input("Server address", &self.in_server, cx),
                         labeled_input("Port", &self.in_server_port, cx),
@@ -1225,7 +1275,7 @@ impl ProfileEditorPanel {
                     )),
             )
             .child(
-                form_section("TLS and Reality", cx)
+                form_section("TLS AND REALITY", cx)
                     .child(self.render_tls_switches(cx))
                     .child(form_row_2(
                         labeled_input_opt(
@@ -1257,7 +1307,7 @@ impl ProfileEditorPanel {
                     )),
             )
             .child(
-                form_section("Tunnel and routing", cx)
+                form_section("TUNNEL AND ROUTING", cx)
                     .child(form_row_2(
                         labeled_input("Interface", &self.in_tun_iface, cx),
                         labeled_input("Stack", &self.in_tun_stack, cx),
@@ -1374,6 +1424,10 @@ impl ProfileEditorPanel {
                     .label("Auto route")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.tun_auto_route = *v;
+                        // A toggle makes the keys real: `apply_tun_section`
+                        // writes them only when the file had them or the
+                        // user expressed an opinion.
+                        this.model.tun_route_keys_present = true;
                         cx.notify();
                     })),
             )
@@ -1383,6 +1437,7 @@ impl ProfileEditorPanel {
                     .label("Strict route")
                     .on_change(cx.listener(|this, v, _, cx| {
                         this.model.tun_strict_route = *v;
+                        this.model.tun_route_keys_present = true;
                         cx.notify();
                     })),
             )
@@ -1575,10 +1630,16 @@ impl Render for ProfileEditorPanel {
         //
         // The JSON side is answered from the parse cached above, so a repaint
         // no longer re-parses the document to fill in this strip.
-        let guided_readiness = (self.active_tab == EditorTab::Guided).then(|| {
-            self.build_model_from_inputs(cx)
-                .map(|model| model.missing())
-        });
+        // One guided build per repaint, shared by readiness, the advisory,
+        // the dirty check, the latency row and the validation snapshot. The
+        // JSON side got this caching first (see the comment above); the guided
+        // side used to rebuild 4-5 times per frame, each build reading all
+        // fifteen inputs and cloning the model.
+        let guided_form: Option<Result<ProfileFormModel, String>> =
+            (self.active_tab == EditorTab::Guided).then(|| self.build_model_from_inputs(cx));
+        let guided_readiness = guided_form
+            .as_ref()
+            .map(|form| form.as_ref().map(|m| m.missing()).map_err(|e| e.clone()));
         let (form_error, live_missing, can_activate): (Option<String>, &[Field], bool) =
             if let Some(readiness) = &guided_readiness {
                 match readiness {
@@ -1601,15 +1662,12 @@ impl Render for ProfileEditorPanel {
         // the user is looking at. The guided form's switches are what the
         // warning is usually about, so reading the buffer alone would leave it
         // stale exactly while the user toggles auto_route.
-        let advisory = match self.active_tab {
-            EditorTab::Guided => match self.build_model_from_inputs(cx) {
-                Ok(model) => tun_advisory(&model),
-                Err(_) => self.derived_advisory,
-            },
-            EditorTab::Json => self.derived_advisory,
+        let advisory = match (&guided_form, self.active_tab) {
+            (Some(Ok(model)), EditorTab::Guided) => tun_advisory(model),
+            _ => self.derived_advisory,
         };
-        let dirty = self.is_dirty_against(&self.derived_json, cx);
-        let validation = self.active_validation_state(&profile_name, cx);
+        let dirty = self.is_dirty_against(&self.derived_json, guided_form.as_ref(), cx);
+        let validation = self.active_validation_state(&profile_name, guided_form.as_ref(), cx);
 
         let (is_busy, is_active, is_active_running) = {
             let s = self.store.read(cx);
@@ -1650,7 +1708,14 @@ impl Render for ProfileEditorPanel {
                 this.child(render_leak_advisory(warning, cx))
             })
             .child(match self.active_tab {
-                EditorTab::Guided => self.render_guided_form(cx),
+                EditorTab::Guided => {
+                    // `guided_form` is built exactly when this arm runs; the
+                    // fallback is unreachable but stays total rather than
+                    // panicking on a future tab-logic edit.
+                    let form = guided_form
+                        .unwrap_or_else(|| Err("form inputs are unreadable".to_string()));
+                    self.render_guided_form(form, cx)
+                }
                 EditorTab::Json => self.render_json_pane(syntax_status, cx),
             })
             .child(self.render_save_bar(dirty, is_busy, is_active_running, can_activate, cx))
@@ -1662,32 +1727,20 @@ impl ProfileEditorPanel {
     fn active_validation_state(
         &self,
         profile_name: &str,
+        guided: Option<&Result<ProfileFormModel, String>>,
         cx: &Context<Self>,
     ) -> Option<EditorValidationState> {
         let s = self.store.read(cx);
         let (target, state) = s.editor_validation.as_ref()?;
-        if target != profile_name || *state == EditorValidationState::Idle {
+        if target != profile_name {
             return None;
         }
-        if *state != EditorValidationState::Validating && !self.validation_snapshot_matches(cx) {
+        if *state != EditorValidationState::Validating
+            && !self.validation_snapshot_matches(guided, cx)
+        {
             return None;
         }
         Some(state.clone())
-    }
-
-    /// Whether the document still equals the one the last validation ran on.
-    ///
-    /// The JSON tab compares against `derived_json`, which `render` has already
-    /// refreshed for this frame, instead of copying the whole buffer out of the
-    /// editor on every frame the banner is on screen.
-    fn validation_snapshot_matches(&self, cx: &App) -> bool {
-        let Some(snapshot) = self.validated_snapshot.as_ref() else {
-            return false;
-        };
-        match self.active_tab {
-            EditorTab::Json => snapshot.as_str() == self.derived_json.as_str(),
-            EditorTab::Guided => *snapshot == self.current_validation_key(cx),
-        }
     }
 }
 
@@ -1795,7 +1848,9 @@ fn form_section(title: &'static str, cx: &App) -> gpui_kit::Div {
                 .font_weight(fonts::EMPHASIS)
                 .text_color(cx.theme().muted_foreground.opacity(0.85))
                 .pb(px(2.0))
-                .child(title.to_uppercase()),
+                // Uppercased at the call sites, not here per frame: three
+                // String allocations per repaint for compile-time constants.
+                .child(title),
         )
 }
 

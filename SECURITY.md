@@ -18,8 +18,9 @@ call `sudo -n` for exactly four commands, listed in `/etc/sudoers.d/singswitch`:
 
 `Layout::sudo_commands` builds both the `print-sudoers` output and the arguments used at runtime
 from that one table, so the two cannot drift. The installer validates the staged file with
-`visudo -cf` and installs it `0440 root:wheel`. Before relying on a rule, activation confirms it
-with `sudo -n -l`.
+`visudo -cf` and installs it `0440 root:wheel`. A missing grant is not probed at request time:
+`sudo -n` either runs or refuses, and a refusal is mapped to the "sudo rules not configured"
+error with its repair hint.
 
 ## Windows
 

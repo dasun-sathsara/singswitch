@@ -60,10 +60,7 @@ impl LogsView {
         let sub = cx.subscribe_in(&search_input, window, move |_, state, event, _, cx| {
             if matches!(event, InputEvent::Change) {
                 let query = state.read(cx).value().to_string();
-                store_sub.update(cx, |s, cx| {
-                    s.log_search_query = query;
-                    cx.notify();
-                });
+                store_sub.update(cx, |s, cx| s.set_log_search(query, cx));
             }
         });
 
@@ -183,8 +180,7 @@ impl LogsView {
                             .checked(severity == filter)
                             .on_click(move |_, _, cx| {
                                 st.update(cx, |s, cx| {
-                                    s.log_severity = filter;
-                                    cx.notify();
+                                    s.set_log_severity(filter, cx);
                                 });
                             }),
                     );
@@ -292,9 +288,15 @@ impl Render for LogsView {
         let selected_detail = {
             let s = self.store.read(cx);
             let records = s.active_log_records();
-            self.selected_id
-                .and_then(|id| records.iter().find(|r| r.id == id))
-                .map(|r| r.line.clone())
+            // Ids are monotonic, so the buffer is sorted by id: a binary search
+            // instead of a linear scan over up to MAX_LOG_ENTRIES records on
+            // every frame that keeps a row selected.
+            self.selected_id.and_then(|id| {
+                records
+                    .binary_search_by_key(&id, |r| r.id)
+                    .ok()
+                    .map(|idx| records[idx].line.clone())
+            })
         };
         let count = self.filtered_indices.len();
         // Rows present but hidden by the query or the level filter.

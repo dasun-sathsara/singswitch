@@ -1,3 +1,4 @@
+#[cfg(windows)]
 use std::ffi::OsStr;
 
 use crate::error::{Result, SingSwitchError};
@@ -166,7 +167,6 @@ pub fn run_elevated_executable(
     _args: &[String],
     _hidden: bool,
 ) -> Result<i32> {
-    let _ = OsStr::new("");
     Err(SingSwitchError::general(
         "Windows elevation is unavailable on this platform",
     ))

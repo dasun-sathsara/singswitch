@@ -128,6 +128,14 @@ impl SingSwitchError {
         self
     }
 
+    /// Replace the message, keeping code, hints, cause, and kind. Used where a
+    /// message must grow (a timeout appending the child's captured output)
+    /// but the surrounding kind and hint are still right.
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.0.message = message.into();
+        self
+    }
+
     pub fn with_kind(mut self, kind: CoreErrorKind) -> Self {
         self.0.kind = Some(kind);
         self
@@ -232,7 +240,22 @@ impl std::error::Error for SingSwitchError {}
 
 impl From<std::io::Error> for SingSwitchError {
     fn from(err: std::io::Error) -> Self {
-        Self::general(err.to_string()).with_cause(err)
+        // Kind-dependent hint: a bare OS message names neither the file nor a
+        // next step, and the CLI's direct `fs::read_to_string(path)?` sites all
+        // land here. "What to do next" is what the failure surfaces print.
+        let kind = err.kind();
+        let base = Self::general(err.to_string()).with_cause(&err);
+        // `io::Error` is not `Clone`; the kind is captured first so the message
+        // and hint can both be built from it after the error moves into the cause.
+        match kind {
+            std::io::ErrorKind::NotFound => {
+                base.with_hint("check that the path is correct and the file exists")
+            }
+            std::io::ErrorKind::PermissionDenied => base.with_hint(
+                "check the file's permissions, or rerun from an account that can read it",
+            ),
+            _ => base,
+        }
     }
 }
 

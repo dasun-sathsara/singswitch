@@ -27,6 +27,11 @@ pub fn set_dock_visible(visible: bool) {
             };
             app.setActivationPolicy(policy);
             if visible {
+                // The non-deprecated `activate()` is macOS 14+ only, and this
+                // app runs on older macOS too, so the deprecated call is the
+                // only form available everywhere; the replacement would need
+                // a runtime version guard that adds nothing (the deprecated
+                // API is not slated for removal).
                 #[allow(deprecated)]
                 app.activateIgnoringOtherApps(true);
             }

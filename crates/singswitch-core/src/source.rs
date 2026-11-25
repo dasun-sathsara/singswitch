@@ -47,14 +47,22 @@ pub fn remove_source(profiles_dir: &Path, name: &str) -> std::io::Result<()> {
 }
 
 /// Return sorted names of all profiles in `profiles_dir` that have a non-empty `.url` sidecar.
-pub fn sourced_profiles(profiles_dir: &Path) -> std::io::Result<Vec<String>> {
+///
+/// A sidecar that exists but cannot be read (permissions, I/O error) is not
+/// silently dropped: its name is reported in `unreadable` so the caller can
+/// surface it — a profile that vanishes from `sync_all` for an unreadable
+/// sidecar otherwise reports a sync that never ran as a success.
+pub fn sourced_profiles(profiles_dir: &Path) -> std::io::Result<(Vec<String>, Vec<String>)> {
     let entries = match fs::read_dir(profiles_dir) {
         Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((Vec::new(), Vec::new()));
+        }
         Err(err) => return Err(err),
     };
 
     let mut names = Vec::new();
+    let mut unreadable = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -73,10 +81,14 @@ pub fn sourced_profiles(profiles_dir: &Path) -> std::io::Result<Vec<String>> {
         if validate_name(stem).is_err() {
             continue;
         }
-        if let Ok(Some(_)) = read_source(profiles_dir, stem) {
-            names.push(stem.to_string());
+        match read_source(profiles_dir, stem) {
+            Ok(Some(_)) => names.push(stem.to_string()),
+            Ok(None) => {}
+            // The sidecar exists but its bytes cannot be read. Report it: the
+            // caller (sync_all) has a `failed` list the user reads.
+            Err(_) => unreadable.push(stem.to_string()),
         }
     }
     names.sort();
-    Ok(names)
+    Ok((names, unreadable))
 }

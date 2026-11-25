@@ -27,6 +27,14 @@ const WINDOWS_RESERVED_NAMES: &[&str] = &[
 pub struct Profile {
     pub name: String,
     pub path: PathBuf,
+    /// The file's full text, as read while listing.
+    ///
+    /// `list_profiles` reads every file anyway (for `missing`/`facts`);
+    /// carrying the text here means the editor's render path never re-reads
+    /// disk on the UI thread. `None` means the file could not be read as
+    /// UTF-8 text when listed, which is exactly the fact the editor's
+    /// "Cannot read <name>" card needs.
+    pub raw: Option<String>,
     /// Fields the user still has to fill in before this can connect.
     ///
     /// Computed from the parsed config, not from scanning the raw text.
@@ -168,6 +176,7 @@ pub fn list_profiles(profiles_dir: &Path) -> std::io::Result<Vec<Profile>> {
         profiles.push(Profile {
             name,
             path,
+            raw,
             missing,
             source_url,
             config_parsed,
@@ -232,11 +241,14 @@ pub fn extract_config_facts_value(val: &Value) -> ConfigFacts {
         .and_then(Value::as_array)
         .and_then(|outbounds| {
             outbounds.iter().find_map(|out| {
-                let kind = out.get("type").and_then(Value::as_str).unwrap_or("");
-                if matches!(kind, "direct" | "block" | "dns") {
+                // Same predicate the guided editor edits with; facts and the
+                // form must agree on what the "primary outbound" is.
+                let obj = out.as_object()?;
+                if !crate::form_model::is_managed_outbound(obj) {
                     return None;
                 }
-                let server = out.get("server").and_then(Value::as_str).unwrap_or("");
+                let kind = obj.get("type").and_then(Value::as_str).unwrap_or("");
+                let server = obj.get("server").and_then(Value::as_str).unwrap_or("");
                 if server.is_empty() {
                     return None;
                 }

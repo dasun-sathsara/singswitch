@@ -1,16 +1,22 @@
+//! Failure-only desktop notifications.
+//!
+//! AGENTS.md's UI feedback rules reserve desktop notifications for failures the
+//! user cannot see while the window is hidden (an unexpected service drop, an
+//! activation failure). Routine state changes are deliberately not notified:
+//! the window, the tray and the tooltip carry them, and the notification rule
+//! has no routine event left to send, so this API takes a title and never a
+//! bare message.
+
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::layout::PlatformKind;
 
-/// Sends lightweight OS desktop notifications on profile switches, stops, and failures.
+/// Sends failure notifications to the OS notification center.
 pub trait Notifier: Send + Sync {
-    fn notify(&self, message: &str);
-
-    fn notify_error(&self, title: &str, message: &str) {
-        self.notify(&format!("{title}: {message}"));
-    }
+    /// Report a failure the user may not be looking at. `title` names it.
+    fn notify_error(&self, title: &str, message: &str);
 }
 
 /// Wraps an inner `Notifier` with a live toggle so Settings can disable desktop notifications.
@@ -26,12 +32,6 @@ impl ToggleableNotifier {
 }
 
 impl Notifier for ToggleableNotifier {
-    fn notify(&self, message: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.inner.notify(message);
-        }
-    }
-
     fn notify_error(&self, title: &str, message: &str) {
         if self.enabled.load(Ordering::Relaxed) {
             self.inner.notify_error(title, message);
@@ -54,10 +54,6 @@ impl AppleScriptNotifier {
 }
 
 impl Notifier for AppleScriptNotifier {
-    fn notify(&self, message: &str) {
-        Self::send_with_title("sing-box", message);
-    }
-
     fn notify_error(&self, title: &str, message: &str) {
         Self::send_with_title(title, message);
     }
@@ -104,10 +100,6 @@ impl WindowsToastNotifier {
 }
 
 impl Notifier for WindowsToastNotifier {
-    fn notify(&self, message: &str) {
-        Self::send_toast("singswitch", message);
-    }
-
     fn notify_error(&self, title: &str, message: &str) {
         Self::send_toast(title, message);
     }
@@ -140,7 +132,7 @@ pub fn sanitize_notification_text(message: &str) -> String {
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Construct the platform notifier for `platform`.
+/// Construct the platform failure notifier for `platform`.
 pub fn default_notifier(platform: PlatformKind) -> Box<dyn Notifier> {
     match platform {
         PlatformKind::Darwin => Box::new(AppleScriptNotifier),

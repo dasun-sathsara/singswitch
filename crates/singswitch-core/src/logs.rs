@@ -225,6 +225,15 @@ pub fn last_lines_offset(file: &mut File, lines: usize) -> std::io::Result<u64> 
     Ok(0)
 }
 
+/// The tail read shares the append chunk's allocation ceiling: `last_lines_offset`
+/// can land at byte 0 for a file with fewer newlines than `max_lines`, and a single
+/// enormous line would otherwise pre-allocate the whole file just to return a
+/// few lines. `read_to_end` grows the buffer geometrically if the estimate was
+/// low, so the cap never truncates a read.
+fn capped_alloc_len(bytes_to_read: u64) -> usize {
+    (bytes_to_read as usize).min(MAX_APPEND_CHUNK_BYTES as usize)
+}
+
 /// Read the last `max_lines` from `path`, returning `(lines, new_byte_offset)`.
 ///
 /// If `path` does not exist yet, returns an empty `Vec` and offset `0`.
@@ -238,7 +247,7 @@ pub fn read_tail_lines(path: &Path, max_lines: usize) -> std::io::Result<(Vec<St
     let start = last_lines_offset(&mut file, max_lines)?;
     file.seek(SeekFrom::Start(start))?;
 
-    let mut raw = Vec::with_capacity((len - start) as usize);
+    let mut raw = Vec::with_capacity(capped_alloc_len(len - start));
     file.read_to_end(&mut raw)?;
     // Drop any unterminated trailing fragment and report the offset of the last
     // complete newline. Reporting `len` would consume that fragment here and
@@ -261,8 +270,6 @@ pub fn read_tail_lines(path: &Path, max_lines: usize) -> std::io::Result<(Vec<St
 pub struct LogFileId {
     /// Inode on Unix; creation stamp on Windows. 0 when unavailable.
     pub inode: u64,
-    /// Creation/change stamp; 0 when unavailable.
-    pub created: u64,
     /// Bytes at the start of the file. A rotation that reuses an identity (or
     /// lands after a failed stat) still shows different leading content, so this
     /// catches what an identity comparison alone cannot.
@@ -293,7 +300,6 @@ pub fn log_file_id(path: &Path) -> Option<LogFileId> {
         use std::os::unix::fs::MetadataExt;
         Some(LogFileId {
             inode: meta.ino(),
-            created: meta.ctime() as u64,
             head,
         })
     }
@@ -304,7 +310,6 @@ pub fn log_file_id(path: &Path) -> Option<LogFileId> {
         // which distinguishes rotation just as well for this purpose.
         Some(LogFileId {
             inode: meta.creation_time(),
-            created: meta.creation_time(),
             head,
         })
     }
@@ -369,7 +374,7 @@ pub fn read_appended_lines(path: &Path, offset: u64) -> std::io::Result<(Vec<Str
     }
 
     file.seek(SeekFrom::Start(start))?;
-    let mut raw = Vec::with_capacity((len - start) as usize);
+    let mut raw = Vec::with_capacity(capped_alloc_len(len - start));
     file.read_to_end(&mut raw)?;
 
     let (consume_len, next_offset) = match raw.iter().rposition(|&b| b == b'\n') {
@@ -446,8 +451,6 @@ impl LogCounts {
             for rec in &records[self.covered..] {
                 self.tally(level(rec));
             }
-        } else if records.is_empty() && self.covered == 0 {
-            // Nothing has ever been counted; both are already zero.
         } else {
             self.errors = 0;
             self.warnings = 0;

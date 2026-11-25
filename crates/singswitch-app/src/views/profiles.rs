@@ -49,10 +49,7 @@ impl ProfilesView {
         let sub = cx.subscribe_in(&search_input, window, move |_, state, event, _, cx| {
             if matches!(event, InputEvent::Change) {
                 let q = state.read(cx).value().to_string();
-                store_sub.update(cx, |s, cx| {
-                    s.profile_search_query = q;
-                    cx.notify();
-                });
+                store_sub.update(cx, |s, cx| s.set_profile_search(q, cx));
             }
         });
 
@@ -139,14 +136,17 @@ impl ProfilesView {
                                         return;
                                     }
                                     let raw_name = input_for_ok.read(cx).value().trim().to_string();
-                                    let res = store_for_ok
-                                        .update(cx, |s, cx| s.create_profile(&raw_name, cx));
-                                    match res {
-                                        Ok(()) => window.close_dialog(cx),
-                                        Err(err) => {
-                                            *error_for_ok.borrow_mut() = Some(err.to_string());
-                                            window.refresh();
-                                        }
+                                    // The create itself runs on a background
+                                    // task (on Windows it can raise a UAC
+                                    // prompt); a failure arrives as a notice
+                                    // on the stage, so the dialog dispatches
+                                    // and closes rather than holding the
+                                    // window open across the await.
+                                    if store_for_ok
+                                        .update(cx, |s, cx| s.create_profile(&raw_name, cx))
+                                        .is_ok()
+                                    {
+                                        window.close_dialog(cx);
                                     }
                                 }),
                         ),
@@ -865,14 +865,12 @@ impl ProfilesView {
         use gpui_kit::{Animation, AnimationExt as _};
         use std::time::Duration;
 
-        let hover = self.disconnect_hover.read(cx).value;
+        let hovered = self.disconnect_hover.read(cx).value > 0.5;
         let busy = self.store.read(cx).is_busy();
-        let _ = hover;
         let disconnect = self.store.clone();
         let hover_spring = self.disconnect_hover.clone();
 
         let base_bg = cx.theme().secondary;
-        let _ = hover;
 
         let mut btn = Button::new("connection-disconnect")
             .secondary()
@@ -895,9 +893,7 @@ impl ProfilesView {
                 });
             })
             .child(btn.with_animation(
-                gpui_kit::ElementId::Name(
-                    format!("disconnect-hover-{}", (hover > 0.5) as u8).into(),
-                ),
+                gpui_kit::ElementId::NamedInteger("disconnect-hover".into(), hovered as u64),
                 Animation::new(Duration::from_millis(140)).with_easing(gpui_kit::ease_in_out),
                 move |this, delta| this.bg(base_bg.opacity(1.0 - 0.25 * delta)),
             ))
@@ -970,7 +966,7 @@ impl ProfilesView {
 
     fn render_library(&self, store: &AppStore, cx: &Context<Self>) -> impl IntoElement {
         let query = store.profile_search_query.trim();
-        let mut profiles = store
+        let profiles = store
             .snapshot
             .profiles
             .iter()
@@ -981,8 +977,8 @@ impl ProfilesView {
                         .as_deref()
                         .is_some_and(|server| contains_ignore_ascii_case(server, query))
             })
-            .peekable();
-        let none = profiles.peek().is_none();
+            .collect::<Vec<_>>();
+        let none = profiles.is_empty();
 
         v_flex()
             .w_full()
@@ -1058,9 +1054,9 @@ impl ProfilesView {
                                         }),
                                 )
                             })
-                            .children(
-                                profiles.map(|profile| self.render_profile(profile, store, cx)),
-                            ),
+                            .children(profiles.iter().enumerate().map(|(row, profile)| {
+                                self.render_profile(profile, row, store, cx)
+                            })),
                     ),
             )
     }
@@ -1068,6 +1064,7 @@ impl ProfilesView {
     fn render_profile(
         &self,
         profile: &Profile,
+        row: usize,
         store: &AppStore,
         cx: &Context<Self>,
     ) -> impl IntoElement {
@@ -1075,6 +1072,10 @@ impl ProfilesView {
         let live = running && store.snapshot.active.as_deref() == Some(profile.name.as_str());
         let selected = store.selected_profile.as_deref() == Some(profile.name.as_str());
         let busy = store.is_busy();
+        // Only this row's button spins: a repeating spinner per row kept the
+        // whole list repainting at display rate for the duration of any
+        // single operation.
+        let row_busy = busy && store.busy_target.as_deref() == Some(profile.name.as_str());
         let ready = profile.ready();
         let expanded = self.expanded_profile.as_deref() == Some(profile.name.as_str());
         let app = self.store.clone();
@@ -1114,10 +1115,10 @@ impl ProfilesView {
                             .items_center()
                             .gap(px(8.0))
                             .child(
-                                Button::new(gpui_kit::SharedString::from(format!(
-                                    "expand-{}",
-                                    profile.name
-                                )))
+                                Button::new(gpui_kit::ElementId::NamedInteger(
+                                    "expand".into(),
+                                    row as u64,
+                                ))
                                 .ghost()
                                 .xsmall()
                                 .icon(if expanded {
@@ -1173,7 +1174,7 @@ impl ProfilesView {
                             .truncate()
                             .child(endpoint.unwrap_or_else(|| "—".into())),
                     )
-                    .child(self.render_latency_cell(profile, store, busy, cx))
+                    .child(self.render_latency_cell(profile, row, store, busy, cx))
                     .child(
                         h_flex()
                             .w(px(110.0))
@@ -1195,17 +1196,17 @@ impl ProfilesView {
                             .flex_none()
                             .justify_end()
                             .gap(px(4.0))
-                            .when(ready && !live, |row| {
-                                row.child(
-                                    Button::new(gpui_kit::SharedString::from(format!(
-                                        "connect-{}",
-                                        profile.name
-                                    )))
+                            .when(ready && !live, |actions| {
+                                actions.child(
+                                    Button::new(gpui_kit::ElementId::NamedInteger(
+                                        "connect".into(),
+                                        row as u64,
+                                    ))
                                     .h(px(26.0))
                                     .when(selected, Button::primary)
                                     .when(!selected, Button::secondary)
                                     .label(if running { "Switch" } else { "Connect" })
-                                    .loading(busy)
+                                    .loading(row_busy)
                                     .disabled(busy)
                                     .on_click(
                                         move |_, _, cx| {
@@ -1221,10 +1222,10 @@ impl ProfilesView {
                                 )
                             })
                             .child(
-                                Button::new(gpui_kit::SharedString::from(format!(
-                                    "edit-{}",
-                                    profile.name
-                                )))
+                                Button::new(gpui_kit::ElementId::NamedInteger(
+                                    "edit".into(),
+                                    row as u64,
+                                ))
                                 .h(px(26.0))
                                 .when(ready, Button::ghost)
                                 .when(!ready, Button::secondary)
@@ -1237,7 +1238,7 @@ impl ProfilesView {
                                     });
                                 }),
                             )
-                            .child(self.render_profile_menu(profile, live, busy)),
+                            .child(self.render_profile_menu(profile, row, live, busy)),
                     ),
             )
             .when(expanded, |row| {
@@ -1252,6 +1253,7 @@ impl ProfilesView {
     fn render_latency_cell(
         &self,
         profile: &Profile,
+        row: usize,
         store: &AppStore,
         busy: bool,
         cx: &Context<Self>,
@@ -1282,10 +1284,10 @@ impl ProfilesView {
             .items_center()
             .gap(px(4.0))
             .child(
-                Button::new(gpui_kit::SharedString::from(format!(
-                    "latency-{}",
-                    profile.name
-                )))
+                Button::new(gpui_kit::ElementId::NamedInteger(
+                    "latency".into(),
+                    row as u64,
+                ))
                 .ghost()
                 .xsmall()
                 .icon(IconName::Gauge)
@@ -1392,6 +1394,7 @@ impl ProfilesView {
     fn render_profile_menu(
         &self,
         profile: &Profile,
+        row: usize,
         is_live: bool,
         busy: bool,
     ) -> impl IntoElement {
@@ -1401,10 +1404,10 @@ impl ProfilesView {
         let path = profile.path.display().to_string();
         let has_source = profile.source_url.is_some();
 
-        Button::new(gpui_kit::SharedString::from(format!(
-            "options-{}",
-            profile.name
-        )))
+        Button::new(gpui_kit::ElementId::NamedInteger(
+            "profile-options".into(),
+            row as u64,
+        ))
         .ghost()
         .h(px(26.0))
         .w(px(26.0))

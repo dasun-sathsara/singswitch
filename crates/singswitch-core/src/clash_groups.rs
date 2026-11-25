@@ -190,10 +190,16 @@ pub fn active_groups_from_disk(active_config: &Path) -> Vec<GroupInfo> {
 /// order the user wrote. The daemon decides members (it drops tags that do not
 /// resolve) and the selection.
 pub fn merge_live(declared: Vec<GroupInfo>, live: &[GroupInfo]) -> Vec<GroupInfo> {
+    // `live` is sorted by tag (see `parse_proxies`), so each lookup is a binary
+    // search instead of a scan; a provider config can carry dozens of groups
+    // and this runs on every reload and window focus.
     declared
         .into_iter()
         .map(|mut group| {
-            if let Some(live_group) = live.iter().find(|candidate| candidate.tag == group.tag) {
+            let live_idx = live.binary_search_by(|candidate| candidate.tag.cmp(&group.tag));
+            if let Ok(idx) = live_idx
+                && let Some(live_group) = live.get(idx)
+            {
                 group.selected = live_group.selected.clone();
                 if !live_group.members.is_empty() {
                     group.members = live_group.members.clone();
@@ -322,6 +328,9 @@ fn api_url(controller: &str, path: &str) -> Result<String> {
         .strip_prefix("http://")
         .or_else(|| trimmed.strip_prefix("https://"))
     {
+        // `https` is not offered on purpose: the authority check below pins the
+        // endpoint to loopback, TLS terminates nowhere on that hop, and a
+        // uniform `http` keeps the caller's URL shape predictable.
         ("http", rest)
     } else {
         ("http", trimmed)
@@ -361,7 +370,7 @@ fn is_loopback_authority(host_port: &str) -> bool {
         return false;
     }
     let host = host.trim_start_matches('[').trim_end_matches(']');
-    matches!(host, "localhost" | "::1") || host == "127.0.0.1" || host.starts_with("127.")
+    matches!(host, "localhost" | "::1") || host.starts_with("127.")
 }
 
 fn api_error(err: ureq::Error, url: &str, action: &str) -> SingSwitchError {

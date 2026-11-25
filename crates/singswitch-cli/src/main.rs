@@ -217,10 +217,20 @@ fn main() {
     }
 
     let code = match Controller::from_system(trace) {
-        Ok(ctrl) => match run(&cli, &ctrl, &theme) {
-            Ok(()) => ExitCode::Ok,
-            Err(err) => report_error(&cli, &theme, &err),
-        },
+        Ok(mut ctrl) => {
+            // Debug diagnostics get their own label so a verbose run can tell
+            // a controller decision ("state before activation: ...") from an
+            // exec trace ("exec: sing-box check -c ...").
+            if verbose {
+                ctrl.debug_hook = Some(Arc::new(|msg: &str| {
+                    eprintln!("[debug] {msg}");
+                }));
+            }
+            match run(&cli, &ctrl, &theme) {
+                Ok(()) => ExitCode::Ok,
+                Err(err) => report_error(&cli, &theme, &err),
+            }
+        }
         Err(err) => report_error(&cli, &theme, &err),
     };
     std::process::exit(code.as_i32());
@@ -235,16 +245,26 @@ fn main() {
 fn exit_clap_error(err: &clap::Error) -> i32 {
     use clap::error::ErrorKind;
 
-    // Help and version are not failures: clap prints them on stdout and its own
-    // code is already 0.
+    // Help and version are not failures: clap prints them on stdout and its
+    // own code is already 0. Every other parse failure is a usage error and
+    // exits 1 per docs/cli-json.md's table - clap's own `2` would collide
+    // with the documented Validation meaning.
+    // `DisplayHelpOnMissingArgumentOrSubcommand` cannot fire here (no
+    // `arg_required_else_help`), but is handled the same way so the exit
+    // code never depends on which arm a future edit removes.
     if matches!(
         err.kind(),
-        ErrorKind::DisplayHelp
-            | ErrorKind::DisplayVersion
-            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
     ) {
         let _ = err.print();
         return err.exit_code();
+    }
+    if matches!(
+        err.kind(),
+        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    ) {
+        let _ = err.print();
+        return ExitCode::General.as_i32();
     }
 
     if wants_json() {

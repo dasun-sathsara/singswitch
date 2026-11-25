@@ -65,23 +65,11 @@ impl NodesStrip {
         });
         strip._subs.push(activation);
 
-        // Window-level dispatch: a popup menu is drawn outside the shell's element
-        // tree, so an element-scoped listener would never see this action.
-        let weak = cx.entity().downgrade();
-        // `Context` derefs to `App` and shadows `on_action` with a window-scoped
-        // variant, so the global registration is named explicitly.
-        App::on_action(cx, move |action: &SwitchGroup, cx: &mut App| {
-            let switched = weak
-                .update(cx, |strip, cx| {
-                    strip.start_switch(action.group.clone(), action.member.clone(), cx);
-                })
-                .is_ok();
-            if !switched {
-                // A handler from a closed window is still in the list; let the
-                // live one take the action instead of dropping it.
-                cx.propagate();
-            }
-        });
+        // Window-level dispatch for this action is registered once in
+        // `main.rs::register_navigation_actions` against the app-global main
+        // view, not here: registering per-strip leaked one permanent global
+        // listener per window open/close cycle (App::on_action has no removal),
+        // and dispatch had to walk every stale closure.
 
         strip.reload(true, cx);
         strip
@@ -157,7 +145,7 @@ impl NodesStrip {
         );
     }
 
-    fn start_switch(&mut self, group: String, member: String, cx: &mut Context<Self>) {
+    pub fn start_switch(&mut self, group: String, member: String, cx: &mut Context<Self>) {
         let Some(endpoint) = self.endpoint.clone() else {
             return;
         };

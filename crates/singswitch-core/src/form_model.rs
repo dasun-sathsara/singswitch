@@ -138,8 +138,16 @@ impl ProfileFormModel {
             "tun_name" | "tun_interface_name" => self.tun_interface_name = value.trim().to_string(),
             "stack" | "tun_stack" => self.tun_stack = value.trim().to_string(),
             "mtu" | "tun_mtu" => self.tun_mtu = parse_u32(value)?,
-            "auto_route" | "tun_auto_route" => self.tun_auto_route = parse_bool(value)?,
-            "strict_route" | "tun_strict_route" => self.tun_strict_route = parse_bool(value)?,
+            "auto_route" | "tun_auto_route" => {
+                self.tun_auto_route = parse_bool(value)?;
+                // An explicit --set is a direct expression of intent, exactly
+                // like the editor's switch: writing the key is now wanted.
+                self.tun_route_keys_present = true;
+            }
+            "strict_route" | "tun_strict_route" => {
+                self.tun_strict_route = parse_bool(value)?;
+                self.tun_route_keys_present = true;
+            }
             "reject_ipv6" => self.reject_ipv6 = parse_bool(value)?,
             "log_level" => self.log_level = value.trim().to_string(),
             other => {
@@ -229,16 +237,22 @@ impl ProfileFormModel {
             if let Some(mtu) = tun.get("mtu").and_then(Value::as_u64) {
                 model.tun_mtu = u32::try_from(mtu).unwrap_or(model.tun_mtu);
             }
-            if let Some(ar) = tun.get("auto_route").and_then(Value::as_bool) {
-                model.tun_auto_route = ar;
-                model.tun_route_keys_present =
-                    tun.get("strict_route").and_then(Value::as_bool).is_some()
-                        || model.tun_route_keys_present;
-            }
-            if let Some(sr) = tun.get("strict_route").and_then(Value::as_bool) {
-                model.tun_strict_route = sr;
-                model.tun_route_keys_present = true;
-            }
+            // Both keys are read before touching the model: the previous
+            // logic looked up `strict_route` from inside the `auto_route` arm
+            // only, so a file declaring `auto_route` alone had its `true`
+            // overwritten with `false` on save, and a file declaring only
+            // `strict_route` kept `tun_auto_route: true` from `Default` and
+            // invented a key the file never had.
+            let file_auto_route = tun.get("auto_route").and_then(Value::as_bool);
+            let file_strict_route = tun.get("strict_route").and_then(Value::as_bool);
+            model.tun_route_keys_present = file_auto_route.is_some() || file_strict_route.is_some();
+            // A present key takes its file value; an absent one falls to
+            // sing-box's runtime default (false), never this model's
+            // `Default` — which is the form's suggestion for a *new* tun
+            // section, not a reading of this file. Writing that suggestion
+            // back silently turned a routing-off file into a routing-on one.
+            model.tun_auto_route = file_auto_route.unwrap_or(false);
+            model.tun_strict_route = file_strict_route.unwrap_or(false);
             // sing-box defaults both to false, so a tun section without the
             // keys routes nothing and must not read as "all on".
             if !model.tun_route_keys_present {
@@ -388,11 +402,18 @@ impl ProfileFormModel {
             );
             tun.insert("stack".to_string(), Value::String(self.tun_stack.clone()));
             tun.insert("mtu".to_string(), json!(self.tun_mtu));
-            tun.insert("auto_route".to_string(), Value::Bool(self.tun_auto_route));
-            tun.insert(
-                "strict_route".to_string(),
-                Value::Bool(self.tun_strict_route),
-            );
+            // A key is written only when the file already had route keys or
+            // the user touched a route switch: a tun section that declared
+            // neither must not gain them from a one-field edit elsewhere in
+            // the document, and an `auto_route`-only file must not gain
+            // `strict_route`.
+            if self.tun_route_keys_present {
+                tun.insert("auto_route".to_string(), Value::Bool(self.tun_auto_route));
+                tun.insert(
+                    "strict_route".to_string(),
+                    Value::Bool(self.tun_strict_route),
+                );
+            }
             true
         } else {
             false
@@ -552,15 +573,22 @@ fn find_tun_inbound_mut(root: &mut Map<String, Value>) -> Option<&mut Map<String
         .find(|m| m.get("type").and_then(Value::as_str) == Some("tun"))
 }
 
+/// The outbound the guided form edits: the first one that is not transport
+/// plumbing. Shared by the mut and immut finders below and by the display
+/// facts in `profile.rs`, so the three copies of this predicate cannot drift.
+/// (`profile.rs` additionally requires a non-empty `server`, so this stays
+/// the wider predicate and that check stays local.)
+pub(crate) fn is_managed_outbound(m: &Map<String, Value>) -> bool {
+    let kind = m.get("type").and_then(Value::as_str).unwrap_or("");
+    !matches!(kind, "direct" | "block" | "dns" | "selector" | "urltest")
+}
+
 fn find_primary_outbound(root: &Value) -> Option<&Map<String, Value>> {
     root.get("outbounds")?
         .as_array()?
         .iter()
         .filter_map(Value::as_object)
-        .find(|m| {
-            let kind = m.get("type").and_then(Value::as_str).unwrap_or("");
-            !matches!(kind, "direct" | "block" | "dns" | "selector" | "urltest")
-        })
+        .find(|m| is_managed_outbound(m))
 }
 
 fn find_primary_outbound_mut(root: &mut Map<String, Value>) -> Option<&mut Map<String, Value>> {
@@ -568,10 +596,7 @@ fn find_primary_outbound_mut(root: &mut Map<String, Value>) -> Option<&mut Map<S
         .as_array_mut()?
         .iter_mut()
         .filter_map(Value::as_object_mut)
-        .find(|m| {
-            let kind = m.get("type").and_then(Value::as_str).unwrap_or("");
-            !matches!(kind, "direct" | "block" | "dns" | "selector" | "urltest")
-        })
+        .find(|m| is_managed_outbound(m))
 }
 
 fn is_ipv6_reject_rule(rule: &Value) -> bool {

@@ -82,7 +82,10 @@ fn outbound_from_link(link: &str) -> Result<Map<String, Value>> {
     if trimmed.is_empty() {
         return Err(share_link_error("the share link is empty"));
     }
-    if trimmed.chars().count() > MAX_LINK_CHARS {
+    // Byte length, not char count: the cap exists to bound the allocation a
+    // hostile paste can demand, so the cheaper and stricter measure is the
+    // right one — a multi-byte link is rejected slightly earlier, never later.
+    if trimmed.len() > MAX_LINK_CHARS {
         return Err(share_link_error(
             "the share link is far longer than any link",
         ));
@@ -114,7 +117,9 @@ fn share_link_error(message: impl Into<String>) -> SingSwitchError {
     ])
 }
 
-// `first_token` echoed pasted credentials in errors; only the scheme is user-safe.
+// Never echo `rest` (or any part after the scheme): it can hold the pasted
+// userinfo, which is a password or a UUID, and the error lands in a banner
+// people screenshot.
 
 /// How a link describes its TLS layer.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -902,6 +907,11 @@ fn decode_base64(input: &str) -> Option<Vec<u8>> {
 
 /// Decode `%XX` escapes, leaving anything malformed as written.
 fn percent_decode(raw: &str) -> String {
+    // Fast path: nothing to decode, so hand the input back untouched rather
+    // than round-tripping it through a byte buffer and a lossy copy.
+    if !raw.as_bytes().contains(&b'%') {
+        return raw.to_string();
+    }
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;

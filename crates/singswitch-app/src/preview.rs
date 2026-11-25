@@ -13,43 +13,33 @@ use crate::state::{AppStore, LogRecord};
 use crate::theme::ThemePreference;
 
 pub fn preview_scene() -> Option<String> {
-    let args: Vec<String> = std::env::args().collect();
-    for (i, arg) in args.iter().enumerate() {
-        if arg == "--preview" && i + 1 < args.len() {
-            return Some(args[i + 1].clone());
-        }
-        if let Some(val) = arg.strip_prefix("--preview=") {
-            return Some(val.to_string());
-        }
-    }
-    std::env::var("SINGSWITCH_PREVIEW").ok()
+    flag_value("--preview").or_else(|| std::env::var("SINGSWITCH_PREVIEW").ok())
 }
 
 pub fn preview_theme() -> Option<ThemePreference> {
-    let args: Vec<String> = std::env::args().collect();
-    for (i, arg) in args.iter().enumerate() {
-        if arg == "--theme" && i + 1 < args.len() {
-            return match args[i + 1].to_lowercase().as_str() {
-                "dark" => Some(ThemePreference::Dark),
-                "light" => Some(ThemePreference::Light),
-                _ => Some(ThemePreference::System),
-            };
-        }
-        if let Some(val) = arg.strip_prefix("--theme=") {
-            return match val.to_lowercase().as_str() {
-                "dark" => Some(ThemePreference::Dark),
-                "light" => Some(ThemePreference::Light),
-                _ => Some(ThemePreference::System),
-            };
-        }
-    }
-    std::env::var("SINGSWITCH_THEME")
-        .ok()
+    flag_value("--theme")
+        .or_else(|| std::env::var("SINGSWITCH_THEME").ok())
         .map(|t| match t.to_lowercase().as_str() {
             "dark" => ThemePreference::Dark,
             "light" => ThemePreference::Light,
             _ => ThemePreference::System,
         })
+}
+
+/// `--<name> value` or `--<name>=value` from the process arguments.
+fn flag_value(name: &str) -> Option<String> {
+    let mut args = std::env::args();
+    while let Some(arg) = args.next() {
+        if let Some(val) = arg.strip_prefix(&format!("{name}=")) {
+            return Some(val.to_string());
+        }
+        if arg == name
+            && let Some(val) = args.next()
+        {
+            return Some(val);
+        }
+    }
+    None
 }
 
 pub fn apply_preview_state(scene: &str, store: &Entity<AppStore>, cx: &mut App) {
@@ -216,6 +206,7 @@ fn setup_populated_snapshot(s: &mut AppStore) {
     let p1 = Profile {
         name: "home-vless".to_string(),
         path: p1_path,
+        raw: Some(p1_content.to_string()),
         missing: Vec::new(),
         source_url: None,
         config_parsed: true,
@@ -230,6 +221,7 @@ fn setup_populated_snapshot(s: &mut AppStore) {
     let p2 = Profile {
         name: "tokyo-node".to_string(),
         path: PathBuf::from("/usr/local/etc/sing-box/profiles/tokyo-node.json"),
+        raw: None,
         missing: Vec::new(),
         source_url: Some("https://nodes.example.com/tokyo.json".into()),
         config_parsed: true,
@@ -244,6 +236,7 @@ fn setup_populated_snapshot(s: &mut AppStore) {
     let p3 = Profile {
         name: "singapore-vless".to_string(),
         path: PathBuf::from("/usr/local/etc/sing-box/profiles/singapore-vless.json"),
+        raw: None,
         missing: Vec::new(),
         source_url: None,
         config_parsed: true,
@@ -258,6 +251,7 @@ fn setup_populated_snapshot(s: &mut AppStore) {
     let p4 = Profile {
         name: "backup-shadowsocks".to_string(),
         path: PathBuf::from("/usr/local/etc/sing-box/profiles/backup-shadowsocks.json"),
+        raw: None,
         missing: vec![Field::Password],
         source_url: None,
         config_parsed: true,

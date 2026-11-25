@@ -194,7 +194,6 @@ fn render_behavior_card(
                 title: "Open at login",
                 description: "Start SingSwitch in the menu bar or tray when you sign in.",
                 checked: settings.launch_at_login,
-                disabled: false,
                 border_top: false,
             },
             move |checked, _, cx| {
@@ -208,7 +207,6 @@ fn render_behavior_card(
                 title: "Refresh the public IP after connect",
                 description: "Look up the public IP at launch and after each switch.",
                 checked: settings.auto_refresh_ip,
-                disabled: false,
                 border_top: true,
             },
             move |checked, _, cx| {
@@ -306,7 +304,6 @@ struct SwitchRowSpec {
     title: &'static str,
     description: &'static str,
     checked: bool,
-    disabled: bool,
     border_top: bool,
 }
 
@@ -315,41 +312,44 @@ fn setting_switch_row(
     on_change: impl Fn(&bool, &mut Window, &mut gpui_kit::App) + 'static,
     cx: &gpui_kit::App,
 ) -> impl IntoElement {
-    // The row is the click target, not just the 36x20 switch: every settings
-    // pane a user has met targets the whole row, and a title that answers a
-    // click that does nothing teaches learned helplessness about the labels.
-    let title_for_row = spec.title;
+    // Title and switch are two disjoint click targets for the same value.
+    // They must not nest: when the whole row was one mouse-down target with
+    // the switch inside it, one click toggled twice — the row's press
+    // handler wrote the new value (and notified), the next frame's switch
+    // re-rendered with the inverted `checked`, and its own release handler
+    // wrote the old value back. The text column keeps its own handler so a
+    // title that answers a click does something; the switch stays the
+    // framework's, so keyboard activation still works.
     let on_change = Rc::new(on_change);
-    let row_on_change = on_change.clone();
+    let text_on_change = on_change.clone();
     let checked_now = spec.checked;
     h_flex()
         .id(SharedString::from(format!("switch-row-{}", spec.id)))
         .w_full()
         .justify_between()
         .items_center()
-        .cursor_pointer()
         .pt(if spec.border_top { px(10.0) } else { px(0.0) })
         .when(spec.border_top, |row| {
             row.border_t_1()
                 .border_color(cx.theme().border.opacity(0.5))
         })
-        .when(!spec.disabled, |row| {
-            row.hover(|style| style.bg(cx.theme().muted.opacity(0.4)))
+        .child(
+            v_flex()
+                .id(SharedString::from(format!("switch-label-{}", spec.id)))
+                .gap(px(2.0))
+                .cursor_pointer()
+                .hover(|style| style.bg(cx.theme().muted.opacity(0.4)))
                 .rounded(px(6.0))
                 .on_mouse_down(gpui_kit::MouseButton::Left, move |_, window, cx| {
                     let next = !checked_now;
-                    row_on_change(&next, window, cx);
+                    text_on_change(&next, window, cx);
                 })
-        })
-        .child(
-            v_flex()
-                .gap(px(2.0))
                 .child(
                     div()
                         .text_sm()
                         .font_medium()
                         .text_color(cx.theme().foreground)
-                        .child(title_for_row),
+                        .child(spec.title),
                 )
                 .child(
                     div()
@@ -361,7 +361,6 @@ fn setting_switch_row(
         .child(
             Switch::new(spec.id)
                 .checked(spec.checked)
-                .disabled(spec.disabled)
                 .accessibility_label(spec.title)
                 .on_change(move |checked, window, cx| on_change(checked, window, cx)),
         )

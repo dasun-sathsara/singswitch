@@ -1,6 +1,6 @@
 //! Native desktop notifications for the app.
 //!
-//! macOS goes through `UNUserNotificationCenter`, so a switch notice appears
+//! macOS goes through `UNUserNotificationCenter`, so a failure notice appears
 //! with the app's own name and icon and respects Notification settings. The
 //! CLI keeps its own notifier; this one never runs outside a signed bundle.
 
@@ -12,10 +12,6 @@ pub struct NativeNotifier;
 
 #[cfg(target_os = "macos")]
 impl Notifier for NativeNotifier {
-    fn notify(&self, message: &str) {
-        post("SingSwitch", message);
-    }
-
     fn notify_error(&self, title: &str, message: &str) {
         post(title, message);
     }
@@ -23,11 +19,6 @@ impl Notifier for NativeNotifier {
 
 #[cfg(not(target_os = "macos"))]
 impl Notifier for NativeNotifier {
-    fn notify(&self, message: &str) {
-        singswitch_core::notify::default_notifier(singswitch_core::layout::PlatformKind::Windows)
-            .notify(message);
-    }
-
     fn notify_error(&self, title: &str, message: &str) {
         singswitch_core::notify::default_notifier(singswitch_core::layout::PlatformKind::Windows)
             .notify_error(title, message);

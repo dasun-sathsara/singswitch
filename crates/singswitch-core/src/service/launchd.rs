@@ -63,21 +63,6 @@ impl LaunchdManager {
         self.ctl_bin.to_string_lossy().into_owned()
     }
 
-    fn is_loaded(&self) -> Result<bool> {
-        let ctl = self.ctl();
-        let out = self.runner.run(&ctl, &["print", &self.label])?;
-        if out.success {
-            return Ok(true);
-        }
-        if launchd_not_loaded(&out.combined) {
-            return Ok(false);
-        }
-        Err(SingSwitchError::service(format!(
-            "could not read the launchd service state: {}",
-            first_line(out.combined.trim())
-        )))
-    }
-
     fn run_ctl(&self, args: &[&str]) -> Result<()> {
         let ctl = self.ctl();
         let out = self.runner.run(&ctl, args)?;
@@ -88,7 +73,8 @@ impl LaunchdManager {
             "launchctl {} failed: {}",
             args.join(" "),
             first_line(out.combined.trim())
-        )))
+        ))
+        .with_hint("repair the scoped sudo rules with: sudo bash scripts/install-macos.sh"))
     }
 
     fn reload(&self) -> Result<()> {
@@ -109,16 +95,19 @@ impl Manager for LaunchdManager {
             return Err(SingSwitchError::service(format!(
                 "could not read the launchd service state: {}",
                 first_line(out.combined.trim())
-            )));
+            ))
+            .with_hint("repair the scoped sudo rules with: sudo bash scripts/install-macos.sh"));
         }
         Ok(parse_launchd_print(&out.combined))
     }
 
     fn restart(&self) -> Result<()> {
-        if !self.is_loaded()? {
-            let plist = self.plist_path.to_string_lossy().into_owned();
-            return self.run_ctl(&["bootstrap", "system", &plist]);
-        }
+        // No pre-check for "is loaded": a `kickstart` against an unloaded
+        // service fails into the `reload()` fallback below, whose `stop()` leg
+        // is a no-op when the service is not loaded — the same outcome as the
+        // old explicit `is_loaded` probe, without spawning `sudo launchctl
+        // print` on every restart. The bootstrap leg stays: it is the only way
+        // to start an unloaded service.
         if let Err(kick_err) = self.run_ctl(&["kickstart", "-k", &self.label])
             && let Err(reload_err) = self.reload()
         {
@@ -138,7 +127,8 @@ impl Manager for LaunchdManager {
         Err(SingSwitchError::service(format!(
             "could not stop the sing-box service: {}",
             first_line(out.combined.trim())
-        )))
+        ))
+        .with_hint("repair the scoped sudo rules with: sudo bash scripts/install-macos.sh"))
     }
 }
 

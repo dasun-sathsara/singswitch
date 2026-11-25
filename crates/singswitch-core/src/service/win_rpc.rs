@@ -244,8 +244,7 @@ where
     use std::os::windows::io::FromRawHandle;
     use std::sync::atomic::Ordering;
     use windows_sys::Win32::Foundation::{
-        CloseHandle, ERROR_IO_PENDING, ERROR_PIPE_CONNECTED, GetLastError, INVALID_HANDLE_VALUE,
-        LocalFree,
+        CloseHandle, ERROR_PIPE_CONNECTED, GetLastError, INVALID_HANDLE_VALUE, LocalFree,
     };
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
@@ -288,7 +287,12 @@ where
 
         let connected = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) };
         let last_err = unsafe { GetLastError() };
-        if connected == 0 && last_err != ERROR_PIPE_CONNECTED && last_err != ERROR_IO_PENDING {
+        // `ERROR_IO_PENDING` is deliberately not accepted: it is an overlapped-I/O
+        // outcome that a synchronous handle never reports, and reading on a
+        // connect that did not complete can only produce a spurious "empty
+        // pipe request". `ERROR_PIPE_CONNECTED` is the one benign race (the
+        // client connected between instance creation and this call).
+        if connected == 0 && last_err != ERROR_PIPE_CONNECTED {
             unsafe { CloseHandle(handle) };
             if stop_signal.load(Ordering::Relaxed) {
                 break;

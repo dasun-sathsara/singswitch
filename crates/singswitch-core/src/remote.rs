@@ -21,24 +21,29 @@ static REMOTE_AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
 });
 
 /// Validate that a profile source URL is an absolute `http://` or `https://` URL with a host.
+///
+/// Returns the trimmed URL unchanged; the check is on a borrowed slice of the
+/// lowercased input, and the one allocation this function can return is the
+/// caller's `String`. Prefix lengths index the *original* only through
+/// `strip_prefix` on the same string, so a multi-byte host can never land on a
+/// slicing boundary.
 pub fn normalise_profile_url(raw_url: &str) -> Result<String> {
     let trimmed = raw_url.trim();
     let lower = trimmed.to_ascii_lowercase();
-    let rest = if let Some(r) = lower.strip_prefix("https://") {
-        let orig = &trimmed[8..];
-        (r, orig)
-    } else if let Some(r) = lower.strip_prefix("http://") {
-        let orig = &trimmed[7..];
-        (r, orig)
-    } else {
+    let after_scheme = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"));
+    let Some(rest) = after_scheme else {
         return Err(SingSwitchError::general(format!(
             "{trimmed:?} is not a valid http(s) profile URL"
         ))
         .with_hint("use the full https:// address of the raw configuration file"));
     };
 
-    let host_part = rest.0.split(['/', '?', '#']).next().unwrap_or("");
-    if host_part.is_empty() || host_part.contains(char::is_whitespace) || rest.1.is_empty() {
+    // The host is everything up to the first path/query/fragment separator. It
+    // is only checked for shape here; the fetch itself is the caller's job.
+    let host_part = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if host_part.is_empty() || host_part.contains(char::is_whitespace) || trimmed.is_empty() {
         return Err(SingSwitchError::general(format!(
             "{trimmed:?} is not a valid http(s) profile URL"
         ))

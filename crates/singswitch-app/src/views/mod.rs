@@ -96,6 +96,15 @@ impl WorkspaceShell {
         }
     }
 
+    /// Forward a group switch to the nodes strip. Used by the one global
+    /// `SwitchGroup` handler registered at startup: popup menus draw outside
+    /// the element tree, so the dispatch must go through `App::on_action`.
+    pub fn switch_group(&mut self, group: String, member: String, cx: &mut Context<Self>) {
+        self.nodes.update(cx, |strip, cx| {
+            strip.start_switch(group, member, cx);
+        });
+    }
+
     /// Stash the editor's unsaved buffer before the window is released.
     pub fn stash_editor_draft(&mut self, cx: &mut Context<Self>) {
         self.profiles.update(cx, |p, cx| p.stash_draft(cx));

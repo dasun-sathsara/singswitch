@@ -149,7 +149,7 @@ impl Controller {
     }
 
     /// Construct a `Controller` with a caller-supplied notifier, used by the app
-    /// so switch notices come from the system notification center instead of a
+    /// so failure notices come from the system notification center instead of a
     /// subprocess.
     pub fn for_layout_with_notifier(
         layout: Layout,
@@ -675,12 +675,23 @@ impl Controller {
             && complete
             && let Err(err) = self.activator.activate(&path)
         {
-            if let Some(old) = &old_bytes {
-                let _ = write_file_atomic(&path, old, 0o644);
-            }
-            // Propagate as-is. Re-wrapping this as a general error replaced the
-            // activator's own message and hint with a directory-ownership one.
-            return Err(err);
+            // Putting the previous bytes back can itself fail; a bare swallow
+            // left the new (unactivatable) content on disk while the message
+            // said nothing about it. The restore note rides the message: the
+            // GUI banners print `message` and `hints` only, never `cause`.
+            let restore_note = match old_bytes.as_deref() {
+                Some(old) => match write_file_atomic(&path, old, 0o644) {
+                    Ok(()) => String::new(),
+                    Err(restore_err) => {
+                        format!("; the previous contents could not be restored: {restore_err}")
+                    }
+                },
+                None => String::new(),
+            };
+            // The activator's message and hint stay primary; re-wrapping this as
+            // a general error replaced them with a directory-ownership one.
+            let message = format!("{}{restore_note}", err.message);
+            return Err(err.with_message(message));
         }
 
         if !running {
@@ -829,7 +840,7 @@ impl Controller {
     /// the active profile updates last through verified activation.
     pub fn sync_all(&self) -> Result<SyncReport> {
         let _lock = self.acquire_lock()?;
-        let names = sourced_profiles(&self.layout.profiles_dir)
+        let (names, unreadable_sidecars) = sourced_profiles(&self.layout.profiles_dir)
             .map_err(|e| store_error(e, &self.layout.profiles_dir, "read"))?;
 
         let active = match self.activator.active_name() {
@@ -843,6 +854,14 @@ impl Controller {
             synced: Vec::new(),
             failed: Vec::new(),
         };
+        // A sidecar that exists but cannot be read means a profile that would
+        // sync went unrefreshed; `sourced_profiles` already refused to guess,
+        // so the failure is named here rather than dropped from the report.
+        for name in unreadable_sidecars {
+            report
+                .failed
+                .push((name, "could not read the recorded source URL".to_string()));
+        }
 
         for name in &names {
             if active.as_deref() == Some(name.as_str()) {
@@ -987,9 +1006,15 @@ impl Controller {
             .map_err(|e| store_error(e, &self.layout.profiles_dir, "delete"))?;
 
         // Clear the active marker too, or it keeps naming a profile that no
-        // longer exists and the UI shows a phantom active profile.
+        // longer exists and the UI shows a phantom active profile. The profile
+        // itself is already gone, so a failed clear is reported, not swallowed:
+        // returning Ok here told the caller the delete fully succeeded while
+        // the UI kept pointing at a deleted file.
         if is_active && let Err(err) = self.activator.clear() {
-            self.debug(format!("could not clear active profile marker: {err}"));
+            return Err(SingSwitchError::general(format!(
+                "deleted {name} but could not clear its active marker: {err}"
+            ))
+            .with_hint("point the service elsewhere with: singswitch use <other-profile>"));
         }
 
         Ok(is_active)

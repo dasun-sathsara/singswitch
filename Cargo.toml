@@ -24,7 +24,12 @@ dirs = "6"
 notify = "8.2"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` everywhere: the app pulls it in transitively but a
+# standalone CLI build does not, so the same `apply_to_json_str_reporting`
+# emitted two different files depending on which binary ran — the app
+# preserved key order and the CLI alphabetised it, turning one-field edits
+# into whole-file diffs on profiles both binaries touch.
+serde_json = { version = "1", features = ["preserve_order"] }
 smol = "2"
 tempfile = "3"
 thiserror = "2"

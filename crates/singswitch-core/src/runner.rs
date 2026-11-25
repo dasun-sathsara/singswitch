@@ -1,3 +1,4 @@
+use std::io::Read as _;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,7 +13,6 @@ pub const DEFAULT_RUNNER_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandOutput {
     pub success: bool,
-    pub exit_code: Option<i32>,
     pub combined: String,
 }
 
@@ -55,55 +55,107 @@ impl Runner for ExecRunner {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let mut child = cmd.spawn().map_err(|err| {
+        let child = cmd.spawn().map_err(|err| {
             SingSwitchError::general(format!("could not run {program}: {err}")).with_cause(err)
         })?;
 
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let out_handle = std::thread::spawn(move || read_pipe(stdout));
-        let err_handle = std::thread::spawn(move || read_pipe(stderr));
-
-        let deadline = Instant::now() + self.timeout;
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break status;
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(SingSwitchError::service(format!(
-                    "{program} timed out after {}s",
-                    self.timeout.as_secs()
-                )));
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        };
-
-        let out_str = out_handle.join().unwrap_or_default();
-        let err_str = err_handle.join().unwrap_or_default();
-        let combined = match (out_str.trim().is_empty(), err_str.trim().is_empty()) {
-            (false, false) => format!("{}\n{}", out_str.trim(), err_str.trim()),
-            (false, true) => out_str,
-            (true, false) => err_str,
-            (true, true) => String::new(),
-        };
+        let program_for_error = program.to_string();
+        let (status, combined) = wait_with_output(child, self.timeout, move || {
+            SingSwitchError::service(format!(
+                "{program_for_error} timed out after {}s",
+                self.timeout.as_secs()
+            ))
+            .with_hint("check the command is not waiting on stdin")
+        })?;
 
         Ok(CommandOutput {
             success: status.success(),
-            exit_code: status.code(),
             combined,
         })
     }
 }
 
+/// Cap on captured pipe output, shared with the checker's own `read_pipe`.
+/// None of the commands run through either capture path legitimately emit
+/// megabytes — this guards a wedged child (e.g. a `launchctl print` over a
+/// huge domain) from holding its whole output in resident memory.
+pub(crate) const MAX_CAPTURE_BYTES: u64 = 64 * 1024;
+
+/// Run `child` to completion under a deadline, capturing stdout and stderr
+/// (bounded by `MAX_CAPTURE_BYTES`) into one combined string.
+///
+/// Shared by `ExecRunner` and `ExecChecker` so the two capture paths cannot
+/// drift apart again — they already had (one capped its reads, only one
+/// drained its reader threads on timeout). On timeout the child is killed,
+/// both reader threads are joined (draining the pipes), and the timed-out
+/// error the caller supplies is augmented with whatever the child printed.
+pub(crate) fn wait_with_output(
+    mut child: std::process::Child,
+    timeout: Duration,
+    timed_out: impl Fn() -> SingSwitchError,
+) -> Result<(std::process::ExitStatus, String)> {
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let out_handle = std::thread::spawn(move || read_pipe(stdout));
+    let err_handle = std::thread::spawn(move || read_pipe(stderr));
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            // Kill closes the pipes; joining here (rather than only on the
+            // success path) drains the reader threads so the timeout does not
+            // leak two join handles holding the captured output.
+            let out = out_handle.join().unwrap_or_default();
+            let err = err_handle.join().unwrap_or_default();
+            let tail = combine_output(out, err);
+            // The tail belongs in the message, not the cause: the GUI banners
+            // print `message` and `hints` only, and the child's last words are
+            // the only clue to a wedge.
+            let mut error = timed_out();
+            if !tail.is_empty() {
+                let mut message = error.to_string();
+                message.push_str(":\n");
+                message.push_str(&tail);
+                error = error.with_message(message);
+            }
+            return Err(error);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    let out = out_handle.join().unwrap_or_default();
+    let err = err_handle.join().unwrap_or_default();
+    Ok((status, combine_output(out, err)))
+}
+
+/// Join captured stdout/stderr into the single string callers print.
+fn combine_output(out: String, err: String) -> String {
+    match (out.trim().is_empty(), err.trim().is_empty()) {
+        (false, false) => format!("{}\n{}", out.trim(), err.trim()),
+        (false, true) => out,
+        (true, false) => err,
+        (true, true) => String::new(),
+    }
+}
+
 fn read_pipe(pipe: Option<impl std::io::Read>) -> String {
-    let Some(mut reader) = pipe else {
+    let Some(reader) = pipe else {
         return String::new();
     };
-    let mut buf = String::new();
-    let _ = reader.read_to_string(&mut buf);
-    buf
+    // Lossy decode, never `read_to_string`: that fails on any invalid UTF-8
+    // and leaves the buffer empty, so one stray byte in a child's diagnostic
+    // turned the whole message into nothing.
+    let mut bytes = Vec::new();
+    let _ = reader.take(MAX_CAPTURE_BYTES).read_to_end(&mut bytes);
+    match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(err) => String::from_utf8_lossy(err.as_bytes()).into_owned(),
+    }
 }
 
 /// Wraps a `Runner` to execute commands via `sudo -n`, translating refusals into

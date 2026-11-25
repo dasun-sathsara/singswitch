@@ -145,6 +145,12 @@ pub fn apply_theme(pref: ThemePreference, window: Option<&mut Window>, cx: &mut 
     Theme::change(mode, window, cx);
     Theme::update(cx, |theme| {
         theme.focus_ring = false;
+        // These set the *vendor widgets'* geometry (input groups, dialogs,
+        // grids read `theme.radius`/`radius_lg`), not an app-side token the
+        // views read: the app's own cards hand-type `.rounded(px(..))`
+        // per-surface. Keeping the two scales visually equal (6/10) is
+        // deliberate so vendor surfaces and app cards agree without every
+        // view carrying a token lookup.
         theme.radius = gpui_kit::px(6.0);
         theme.radius_lg = gpui_kit::px(10.0);
         theme.font_size = gpui_kit::px(14.0);
@@ -233,18 +239,32 @@ pub fn surface(cx: &App) -> gpui_kit::Hsla {
     }
 }
 
-/// Fill for chips and pills that sit on the secondary surface.
+/// Fill for chips, pills, and row hover: a whisper tint, not a boundary.
 ///
-/// The strip background is `secondary` itself, so a pill must be a step
-/// darker than it or it disappears: light `#F1F5F9` was 1.05:1 against
-/// `#F8FAFC`. This keeps the chip visible in both themes (light 1.24:1,
-/// dark 1.55:1 against the strip) while staying quiet.
+/// Measured against the surfaces it actually sits on: light `#EDE9FE` is
+/// 1.04:1 on `secondary` (`#EEEFF5`) and 1.12:1 on `background`
+/// (`#F7F8FA`); dark `#221E33` is 1.02:1 on `secondary` and 1.21:1 on
+/// `background`. The fill alone does not delineate anything, by design:
+/// every pill that needs an edge carries `border_1` in `theme().border`
+/// (nodes chips, log count pills), and the hover usage (log rows) is meant
+/// to be quieter than the selected-row tint. Do not expect contrast news
+/// from this fill.
 pub fn subtle_pill_bg(cx: &App) -> gpui_kit::Hsla {
     if cx.theme().is_dark() {
         rgb(0x221E33).into()
     } else {
         rgb(0xEDE9FE).into()
     }
+}
+
+/// Selection tint for log rows: `theme.selection` itself, with a large accent
+/// edge (`logs.rs` paints `theme.ring` beside it) so a selected row cannot
+/// masquerade as a hovered one even where the fill reads as a subtle tint.
+/// Kept as a named helper so the row and every other selection surface stay
+/// one token: it previously re-defined the same two hex values, and any
+/// palette edit touching only `theme.selection` would desynchronise it.
+pub fn selection_tint(cx: &App) -> gpui_kit::Hsla {
+    cx.theme().selection
 }
 
 /// The success colour at text grade.
@@ -254,16 +274,6 @@ pub fn subtle_pill_bg(cx: &App) -> gpui_kit::Hsla {
 /// status word, the connected state words, the "Valid JSON" footer. Small
 /// text needs 4.5:1, so light theme answers with a deeper green while dark
 /// keeps the fill green, which already clears 7:1 on every surface.
-/// Selection tint with an unmistakable hue shift against `subtle_pill_bg`
-/// hover, so a selected log row cannot masquerade as a hovered one.
-pub fn selection_tint(cx: &App) -> gpui_kit::Hsla {
-    if cx.theme().is_dark() {
-        rgb(0x312750).into()
-    } else {
-        rgb(0xDDD6FE).into()
-    }
-}
-
 pub fn success_text(cx: &App) -> gpui_kit::Hsla {
     if cx.theme().is_dark() {
         cx.theme().success

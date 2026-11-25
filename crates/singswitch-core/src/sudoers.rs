@@ -7,7 +7,6 @@ use crate::layout::Layout;
 /// from `Layout::sudo_commands`, ensuring they cannot drift apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SudoCommand {
-    pub name: &'static str,
     pub argv: Vec<String>,
 }
 
@@ -15,19 +14,6 @@ impl SudoCommand {
     /// Render the command as written in a sudoers rule line.
     pub fn render_rule_command(&self) -> String {
         self.argv.join(" ")
-    }
-
-    /// Check whether a concrete argv would be authorised by this sudoers pattern.
-    ///
-    /// Implements `fnmatch(3)` with `FNM_PATHNAME` semantics so `*` never crosses `/`.
-    pub fn matches(&self, argv: &[String]) -> bool {
-        if argv.len() != self.argv.len() {
-            return false;
-        }
-        self.argv
-            .iter()
-            .zip(argv.iter())
-            .all(|(pattern, candidate)| fnmatch_pathname(pattern, candidate))
     }
 }
 
@@ -45,7 +31,6 @@ impl Layout {
         // `../` traversal to any file on the machine.
         vec![
             SudoCommand {
-                name: "probe",
                 argv: vec![
                     slash_path(&self.ctl_bin),
                     "print".to_string(),
@@ -53,7 +38,6 @@ impl Layout {
                 ],
             },
             SudoCommand {
-                name: "restart",
                 argv: vec![
                     slash_path(&self.ctl_bin),
                     "kickstart".to_string(),
@@ -62,7 +46,6 @@ impl Layout {
                 ],
             },
             SudoCommand {
-                name: "stop",
                 argv: vec![
                     slash_path(&self.ctl_bin),
                     "bootout".to_string(),
@@ -70,7 +53,6 @@ impl Layout {
                 ],
             },
             SudoCommand {
-                name: "bootstrap",
                 argv: vec![
                     slash_path(&self.ctl_bin),
                     "bootstrap".to_string(),
@@ -131,34 +113,4 @@ pub fn validate_sudoers_user(user: &str) -> Result<()> {
 
 fn slash_path(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
-}
-
-/// Match `pattern` against `text` using POSIX `fnmatch(FNM_PATHNAME)` rules:
-/// `*` matches zero or more non-`/` characters, `?` matches one non-`/` character.
-pub fn fnmatch_pathname(pattern: &str, text: &str) -> bool {
-    fn inner(p: &[u8], t: &[u8]) -> bool {
-        match (p.first(), t.first()) {
-            (None, None) => true,
-            (Some(b'*'), _) => {
-                // Skip repeated asterisks.
-                let mut rest = &p[1..];
-                while rest.first() == Some(&b'*') {
-                    rest = &rest[1..];
-                }
-                if inner(rest, t) {
-                    return true;
-                }
-                if let Some(&tc) = t.first()
-                    && tc != b'/'
-                {
-                    return inner(p, &t[1..]);
-                }
-                false
-            }
-            (Some(b'?'), Some(&tc)) if tc != b'/' => inner(&p[1..], &t[1..]),
-            (Some(pc), Some(tc)) if pc == tc => inner(&p[1..], &t[1..]),
-            _ => false,
-        }
-    }
-    inner(pattern.as_bytes(), text.as_bytes())
 }
